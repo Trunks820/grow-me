@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{TITLE}} · 任务记录</title>
+<style>
+:root{--paper:#f6f3ec;--ink:#243730;--muted:#68756c;--line:#d9dacf;--green:#245d48;--accent:#9d4930;--white:#fffef9}*{box-sizing:border-box}html{scroll-padding-top:90px}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.8 "Microsoft YaHei","PingFang SC",sans-serif}main{max-width:1100px;margin:auto;padding:32px 38px 60px}h1{font:clamp(30px,5vw,50px)/1.25 Georgia,"SimSun",serif;margin:24px 0 16px}h2{font-size:23px;margin:0 0 18px}h3{font-size:17px;margin:0 0 10px}p{margin:0 0 12px}a{color:var(--green);text-underline-offset:3px}button,textarea{font:inherit}button{background:var(--white);border:1px solid var(--green);color:var(--green);padding:8px 14px;cursor:pointer}button:hover{background:#e8eee5}button:disabled{opacity:.55;cursor:default}button:focus-visible,a:focus-visible,summary:focus-visible,textarea:focus-visible{outline:3px solid var(--accent);outline-offset:3px}[hidden]{display:none!important}.masthead{display:flex;justify-content:space-between;gap:14px;border-bottom:2px solid var(--ink);padding-bottom:12px;font-size:12px;color:var(--muted)}.lead{font-size:19px}.overview-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:20px 0}.summary-box{background:var(--white);border-left:3px solid var(--green);padding:16px 20px}.label,.small{font-size:13px;color:var(--muted)}.label{display:block;margin-bottom:5px}.tabs{position:sticky;top:0;z-index:2;display:flex;gap:4px;background:var(--paper);padding:12px 0;border-bottom:1px solid var(--line);margin:22px 0}.tabs a{flex:1;text-align:center;text-decoration:none;border:1px solid var(--line);padding:11px 8px;background:var(--white)}.tabs [aria-selected=true]{background:var(--green);color:white;border-color:var(--green)}.section{padding:24px 0;border-bottom:1px solid var(--line)}.requirement,.acceptance,.phase,.work-item,.constraint{padding:18px 21px;margin:16px 0;background:var(--white);border:1px solid var(--line);min-width:0}.phase-heading,.acceptance-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}.status,.badge{font-size:12px;border:1px solid var(--line);padding:3px 8px;display:inline-block}.status.pending,.unverified{color:var(--accent)}.unverified{border-left:3px solid var(--accent);padding-left:15px}.summary-meta{color:var(--muted);font-size:13px}details{border-top:1px solid var(--line);padding:12px 0;margin-top:12px}summary{cursor:pointer;font-weight:600}summary::marker{color:var(--green)}.detail{padding:13px 0 0 15px}code{font: .9em Consolas,monospace;overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#e8ece3;padding:15px}table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:10px;overflow-wrap:anywhere}th{color:var(--muted);background:#e8ece3}.table-wrap{max-width:100%;overflow-x:auto}ul,ol{padding-left:24px}li{margin:7px 0}.tools{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}.derived-summary{font-size:14px;padding:10px 0;color:var(--muted)}#package-text{width:100%;min-height:310px;padding:14px;background:var(--white);color:var(--ink);border:1px solid var(--line);font:13px/1.6 Consolas,"Microsoft YaHei",monospace;resize:vertical}#record-check:not(:empty){padding:12px 15px;border-left:3px solid var(--accent);background:var(--white);white-space:pre-line}footer{font-size:12px;color:var(--muted);margin-top:28px}
+@media(max-width:720px){main{padding:22px 16px 40px}.masthead{display:block}.masthead span{display:block}.overview-grid{grid-template-columns:1fr;gap:12px}.tabs{gap:3px;font-size:14px}.tabs a{padding:9px 5px}.phase,.work-item,.requirement,.acceptance,.constraint{padding:15px}.detail{padding-left:3px}.lead{font-size:17px}}
+@media print{body{background:white}main{padding:0;max-width:none}.tabs,.tools,#package-preview,#record-check{display:none!important}.tab-panel[hidden]{display:block!important}details{break-inside:avoid}a{color:inherit}}
+</style>
+</head>
+<body>
+<!-- Authoritative content is semantic body HTML. See references/html-artifact.md for the small ID/reference format. -->
+<main data-task-record data-revision="{{REVISION}}">
+<header class="masthead"><span>PERSONAL DEVELOPMENT / TASK RECORD</span><span>{{UPDATED}} · {{REVISION}}</span></header>
+<section id="overview" aria-labelledby="task-title">
+<h1 id="task-title">{{TITLE}}</h1><p class="lead">{{SUMMARY}}</p>
+<div class="overview-grid"><div class="summary-box"><span class="label">当前位置与证据</span><p>{{POSITION}}</p></div><div class="summary-box"><span class="label">下一步与待决定</span><p>{{NEXT}}</p></div></div>
+<!-- Keep failures, unresolved choices and the four delivery states visible here; link detailed definitions. -->
+<p class="small" id="task-context">{{CONTEXT}}</p>
+</section>
+<nav class="tabs" aria-label="任务视图"><a id="tab-design" href="#design-view">设计方案</a><a id="tab-plan" href="#plan-view">开发清单</a><a id="tab-acceptance" href="#acceptance-view">验收标准</a></nav>
+<div class="tools"><button type="button" id="toggle-details" hidden>展开当前视图细节</button></div>
+<p id="record-check" role="status" aria-live="polite"></p>
+<section id="design-view" class="tab-panel" aria-labelledby="tab-design">
+<section id="decisions" class="section"><h2>澄清与决定</h2><!-- Separate 用户已确认 / AI建议 / 待确认; pending material choices stay visible. -->{{DECISIONS}}</section>
+<section id="design" class="section"><h2>业务方案与边界</h2>{{DESIGN}}</section>
+<section id="requirements" class="section"><h2>需求定义</h2><!-- Each canonical requirement has data-kind="requirement" and a stable id. -->{{REQUIREMENTS}}</section>
+<section id="constraints" class="section"><h2>共同约束</h2>{{CONSTRAINTS}}</section>
+</section>
+<section id="plan-view" class="tab-panel" aria-labelledby="tab-plan">
+<section id="plan" class="section"><h2>开发清单</h2><!-- Use independently acceptable Phases, or flat work items. Definitions are linked, never copied. -->{{PLAN}}</section>
+<section id="handoff" class="section"><h2>交付与接续</h2>{{HANDOFF}}</section>
+</section>
+<section id="acceptance-view" class="tab-panel" aria-labelledby="tab-acceptance">
+<section id="verification" class="section"><h2>验收标准与实际结果</h2><!-- Definitions and actual run records remain distinct; use data-kind="criterion" entries. -->{{ACCEPTANCE}}</section>
+</section>
+<details id="package-preview" hidden><summary>任务包预览 · 当前源的只读快照</summary><p class="small">开始执行前核对当前源版本及定义；此快照不能获知后续改动。复制或下载不会记录批准。</p><textarea id="package-text" readonly aria-label="生成的任务包"></textarea><div class="tools"><button type="button" id="copy-package">复制任务包</button><button type="button" id="download-package">下载 TXT</button></div><p id="package-status" role="status" aria-live="polite"></p></details>
+<noscript><p>脚本已关闭，三个视图和折叠细节仍可阅读；自动任务包需启用脚本。也可按稳定 ID 读取当前定义。</p></noscript>
+<footer>业务正文与技术细节同处一个 HTML；页签只改变阅读视图。展开、复制和下载不会保存决定或改变验收状态。</footer>
+</main>
+<script>
+(()=>{'use strict';
+const record=document.querySelector('[data-task-record]');
+const split=s=>(s||'').trim().split(/\s+/).filter(Boolean);
+const refs={requirements:'requirement',criteria:'criterion',constraints:'constraint',depends:'dependency'};
+const nodes=()=>[...record.querySelectorAll('[data-kind]')];
+const statusOf=el=>[...el.querySelectorAll('[data-field="status"]')].find(x=>x.closest('[data-kind]')===el)?.textContent.trim()||'';
+function inspect(){
+ const errors=[],index=new Map();
+ for(const el of document.querySelectorAll('[id]')){if(index.has(el.id))errors.push(`重复 ID：${el.id}`);else index.set(el.id,el);}
+ const revision=record.dataset.revision||'';
+ if(!revision.trim()||revision.includes('{{'))errors.push('缺少已填写的需求版本');
+ const items=nodes(),requirements=items.filter(x=>x.dataset.kind==='requirement'),criteria=items.filter(x=>x.dataset.kind==='criterion'),work=items.filter(x=>['phase','work'].includes(x.dataset.kind));
+ for(const el of items){
+  if(!el.id)errors.push(`定义缺少 ID：${el.dataset.kind}`);
+  for(const [attr,type] of Object.entries(refs))for(const id of split(el.dataset[attr])){
+   const target=index.get(id);
+   if(!target)errors.push(`${el.id} 引用不存在：${id}`);
+   else if(type==='dependency'?!['phase','work'].includes(target.dataset.kind):target.dataset.kind!==type)errors.push(`${el.id} 引用类型不符：${id} 应为 ${type}`);
+  }
+  if(el.dataset.kind==='criterion'){
+   if(!split(el.dataset.requirements).length)errors.push(`${el.id} 缺少来源需求关联`);
+   if(!['passed','failed','unverified','blocked','stale'].includes(statusOf(el)))errors.push(`${el.id} 缺少有效验收状态`);
+  }
+ }
+ for(const link of record.querySelectorAll('a[href^="#"]')){const id=decodeURIComponent(link.getAttribute('href').slice(1));if(id&&!index.has(id))errors.push(`失效锚点：${id}`);}
+ for(const req of requirements.filter(x=>x.dataset.important!=='false')){
+  const covered=criteria.filter(x=>split(x.dataset.requirements).includes(req.id));
+  if(!covered.length)errors.push(`${req.id} 缺少验收关联`);
+  if(work.length&&!work.some(x=>split(x.dataset.requirements).includes(req.id)||split(x.dataset.criteria).some(id=>covered.some(c=>c.id===id))))errors.push(`${req.id} 缺少计划关联`);
+ }
+ for(const c of criteria.filter(x=>x.dataset.final!=='true'))if(work.length&&!work.some(w=>split(w.dataset.criteria).includes(c.id)))errors.push(`${c.id} 缺少开发清单关联`);
+ return {errors:[...new Set(errors)],index,revision,requirements,criteria,work};
+}
+// Read collapsed content too; omit generated controls/summaries. No innerText or hidden JSON source.
+function sourceText(el){
+ const clone=el.cloneNode(true);clone.querySelectorAll('button,script,style,[data-derived],[data-package-ui]').forEach(x=>x.remove());
+ const blocks=new Set(['ARTICLE','SECTION','P','DIV','H1','H2','H3','H4','LI','TR','DETAILS','SUMMARY','PRE','DT','DD','BR']);
+ function walk(node){if(node.nodeType===Node.TEXT_NODE)return node.nodeValue;if(node.nodeType!==Node.ELEMENT_NODE)return '';let t=[...node.childNodes].map(walk).join('');if(['TD','TH'].includes(node.tagName))t+=' | ';return blocks.has(node.tagName)?'\n'+t+'\n':t;}
+ return walk(clone).split(/\r?\n/).map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean).join('\n');
+}
+function scopeFor(target,info){
+ const scopes=[target,...target.querySelectorAll('[data-kind="work"]')];
+ const collect=attr=>[...new Set(scopes.flatMap(x=>split(x.dataset[attr])))];
+ const criteria=collect('criteria').map(id=>info.index.get(id));
+ const reqIds=new Set([...collect('requirements'),...criteria.flatMap(x=>split(x.dataset.requirements))]);
+ const finals=info.criteria.filter(x=>x.dataset.final==='true'&&split(x.dataset.requirements).some(id=>reqIds.has(id)));
+ const allCriteria=[...new Map([...criteria,...finals].map(x=>[x.id,x])).values()];
+ for(const c of allCriteria)for(const id of split(c.dataset.requirements))reqIds.add(id);
+ const requirementNodes=[...reqIds].map(id=>info.index.get(id));
+ const constraintIds=new Set([...collect('constraints'),...allCriteria.flatMap(x=>split(x.dataset.constraints)),...requirementNodes.flatMap(x=>split(x.dataset.constraints))]);
+ for(const x of nodes())if(x.dataset.kind==='constraint'&&x.dataset.global==='true')constraintIds.add(x.id);
+ return {requirements:requirementNodes,criteria:allCriteria,constraints:[...constraintIds].map(id=>info.index.get(id)),dependencies:collect('depends').map(id=>info.index.get(id))};
+}
+async function buildPackage(id){
+ const info=inspect();if(info.errors.length)throw new Error(info.errors.join('\n'));
+ const target=info.index.get(id);if(!target||!['phase','work'].includes(target.dataset.kind))throw new Error('找不到 Phase 或工作项：'+id);
+ const scope=scopeFor(target,info);if(!scope.criteria.length)throw new Error(id+' 缺少验收标准，不能生成任务包');
+ const sections=[['任务与工作项',[target]],['需求原文',scope.requirements],['验收原文（含关联最终业务验收）',scope.criteria],['适用约束',scope.constraints]];
+ const body=sections.map(([title,items])=>'## '+title+'\n'+(items.length?items.map(x=>'['+x.id+']\n'+sourceText(x)).join('\n\n'):'无已登记适用项')).join('\n\n');
+ const dependencyText=scope.dependencies.map(x=>x.id+' · '+(statusOf(x)||'状态未登记')+' · '+(x.querySelector('h3,h2')?.textContent.trim()||x.id)).join('\n')||'无已登记依赖';
+ const context=sourceText(document.getElementById('task-context'))+'\n'+sourceText(document.getElementById('handoff'));
+ const fingerprintInput='task-package-v1\n'+info.revision+'\n'+id+'\n'+context+'\n'+dependencyText+'\n'+body;
+ if(!globalThis.crypto?.subtle)throw new Error('当前浏览器无法计算 SHA-256；请用支持安全本地页面的浏览器生成任务包');
+ const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(fingerprintInput));
+ const fingerprint=[...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('');
+ const text=['任务包 · 只读快照（不构成执行授权）','任务：'+document.getElementById('task-title').textContent.trim(),'源：'+location.href.split('#')[0]+'#'+id,'需求版本：'+info.revision,'范围：'+id,'生成时间：'+new Date().toISOString(),'定义指纹：task-package-v1 / SHA-256 / '+fingerprint,'核对：开始前读取当前源，核对版本及本包定义；源更新后重新导出。','正文保留原文词句，规范化空白并包含折叠细节。','\n## 当前候选、权限与接续\n'+context,'\n## 依赖状态\n'+dependencyText,'\n'+body].join('\n');
+ return {text,fingerprint,revision:info.revision,id};
+}
+const tabs=[...document.querySelectorAll('.tabs a')],panels=[...document.querySelectorAll('.tab-panel')];
+document.querySelector('.tabs').setAttribute('role','tablist');
+tabs.forEach(a=>{a.setAttribute('role','tab');a.setAttribute('aria-controls',a.hash.slice(1));});
+panels.forEach(p=>p.setAttribute('role','tabpanel'));
+function refreshSummaries(){
+ const info=inspect();
+ for(const box of record.querySelectorAll('[data-derived-summary]')){
+  const item=box.closest('[data-kind]');box.replaceChildren();
+  for(const id of split(item.dataset.criteria)){const c=info.index.get(id);const p=document.createElement('p');p.textContent=c?id+' · '+(c.querySelector('h3')?.textContent.trim()||id)+' · '+(statusOf(c)||'unverified'):id+' · 引用失效';box.append(p);}
+ }
+ document.getElementById('record-check').textContent=info.errors.length?'任务包暂不可生成：\n'+info.errors.join('\n'):'';
+}
+function activate(panelId,focus=false){panels.forEach(p=>p.hidden=p.id!==panelId);tabs.forEach(a=>{const selected=a.hash==='#'+panelId;a.setAttribute('aria-selected',String(selected));a.tabIndex=selected?0:-1;if(selected&&focus)a.focus();});refreshSummaries();}
+function revealHash(){const id=decodeURIComponent(location.hash.slice(1));const el=document.getElementById(id);if(!el)return false;const panel=el.closest('.tab-panel');if(panel)activate(panel.id);for(let p=el;p;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true;return true;}
+tabs.forEach((a,i)=>{a.addEventListener('click',()=>activate(a.hash.slice(1)));a.addEventListener('keydown',e=>{let n;if(e.key==='ArrowRight')n=(i+1)%tabs.length;else if(e.key==='ArrowLeft')n=(i+tabs.length-1)%tabs.length;else if(e.key==='Home')n=0;else if(e.key==='End')n=tabs.length-1;if(n!==undefined){e.preventDefault();activate(tabs[n].hash.slice(1),true);}});});
+activate('design-view');revealHash();window.addEventListener('hashchange',revealHash);
+document.addEventListener('click',e=>{const a=e.target.closest('a[href^="#"]');if(a){const el=document.getElementById(decodeURIComponent(a.hash.slice(1)));const panel=el?.closest('.tab-panel');if(panel)activate(panel.id);for(let p=el?.parentElement;p;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true;}});
+for(const item of nodes().filter(x=>['phase','work'].includes(x.dataset.kind)&&!x.parentElement.closest('[data-kind="phase"]'))){
+ const box=document.createElement('div');box.dataset.derived='true';box.dataset.packageUi='true';box.className='tools';const button=document.createElement('button');button.type='button';button.textContent='生成 '+item.id+' 任务包';button.dataset.package=item.id;box.append(button);item.append(box);
+ const summary=document.createElement('div');summary.dataset.derived='true';summary.dataset.derivedSummary='true';summary.className='derived-summary';item.append(summary);
+}
+refreshSummaries();
+let lastPackage=null,buildSerial=0;
+document.addEventListener('click',async e=>{const b=e.target.closest('[data-package]');if(!b)return;const serial=++buildSerial;const preview=document.getElementById('package-preview'),status=document.getElementById('package-status');preview.hidden=false;preview.open=true;status.textContent='正在从当前定义生成…';lastPackage=null;document.getElementById('package-text').value='';try{const result=await buildPackage(b.dataset.package);if(serial!==buildSerial)return;lastPackage=result;document.getElementById('package-text').value=result.text;status.textContent='已生成 '+result.id+' · '+result.revision+'；开始前仍需核对当前源。';preview.scrollIntoView({block:'start'});}catch(err){if(serial===buildSerial)status.textContent='未生成：'+err.message;}});
+async function freshPackage(){if(!lastPackage)throw new Error('请先生成任务包');const current=await buildPackage(lastPackage.id);if(current.fingerprint!==lastPackage.fingerprint){lastPackage=current;document.getElementById('package-text').value=current.text;document.getElementById('package-status').textContent='源定义已变化，任务包已重新生成。';}return current;}
+document.getElementById('copy-package').addEventListener('click',async()=>{const status=document.getElementById('package-status');try{const p=await freshPackage();if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(p.text);status.textContent='已复制当前任务包。';}else{const t=document.getElementById('package-text');t.focus();t.select();status.textContent='浏览器未提供剪贴板能力，已选中文本，可直接复制。';}}catch(err){status.textContent='未复制：'+err.message;}});
+document.getElementById('download-package').addEventListener('click',async()=>{try{const p=await freshPackage();const blob=new Blob([p.text],{type:'text/plain;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=(p.id+'-'+p.revision).replace(/[^\w.\-]/g,'_')+'.txt';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);document.getElementById('package-status').textContent='已下载当前任务包。';}catch(err){document.getElementById('package-status').textContent='未下载：'+err.message;}});
+const toggle=document.getElementById('toggle-details');toggle.hidden=false;toggle.addEventListener('click',()=>{const panel=panels.find(p=>!p.hidden),details=[...panel.querySelectorAll('details')],open=details.some(x=>!x.open);details.forEach(x=>x.open=open);toggle.textContent=open?'收起当前视图细节':'展开当前视图细节';});
+let printState=[];window.addEventListener('beforeprint',()=>{printState=[...record.querySelectorAll('details')].map(x=>[x,x.open]);printState.forEach(([x])=>x.open=true);});window.addEventListener('afterprint',()=>{printState.forEach(([x,open])=>x.open=open);printState=[];});
+window.taskRecord=Object.freeze({inspect,buildPackage,refresh:refreshSummaries});
+})();
+</script>
+</body>
+</html>

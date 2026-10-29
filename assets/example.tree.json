@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "session_id": "replace-with-interview-id",
+  "topic": "最小往返测试",
+  "revision": 0,
+  "current_round": 1,
+  "status": "active",
+  "nodes": [
+    {"id":"platform","question":"先验证哪个入口？","input":"single_choice","options":[{"id":"web","label":"先做网页版"},{"id":"terminal","label":"先做终端版"}],"answer":null,"depends_on":[],"status":"pending","round":1},
+    {"id":"budget","question":"预算和补充说明","input":"text","options":[],"answer":null,"depends_on":[],"status":"pending","round":1}
+  ]
+}

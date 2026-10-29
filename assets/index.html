@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>grow-me · 需求生长树</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<svg class="paper-grain" aria-hidden="true"><filter id="paper"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="3" seed="3"/><feColorMatrix values="0 0 0 0 .4 0 0 0 0 .36 0 0 0 0 .3 0 0 0 .09 0"/></filter><rect width="100%" height="100%" filter="url(#paper)"/></svg>
+<header class="cap"><h1>需求生长树</h1><p>一个问题落下，树就安静地长高一点。</p><p id="connection" role="status">连接中…</p></header>
+<div id="meta" class="meta" aria-live="polite"></div>
+<main>
+<section id="decision-tree" aria-label="需求生长树"><div class="tree-viewport"><svg id="tree-canvas" viewBox="0 0 1000 900" preserveAspectRatio="xMidYMid meet" role="group" aria-label="问题依赖关系，芽、花、黄叶与文档果子"></svg></div><div class="tree-controls" aria-label="树的显示比例"><button type="button" data-tree-replay hidden>重看生长</button><button type="button" data-tree-zoom="out" aria-label="缩小需求树">−</button><button type="button" data-tree-zoom="fit">看全树</button><button type="button" data-tree-zoom="in" aria-label="放大需求树">＋</button></div></section>
+<section id="card" aria-live="polite"><h2 class="q">正在读取需求树…</h2><p class="growth-status">生长中</p><p class="w">正在连接本机服务，将自动重连。</p></section>
+</main>
+<div id="tip" role="tooltip" hidden></div><dialog id="node-dialog" aria-labelledby="node-question"><div id="node-body"></div><div id="node-actions" class="actions"></div><button type="button" id="close-node">关闭</button></dialog>
+<p id="message" role="status" aria-live="polite"></p>
+<noscript>答题需要启用 JavaScript；答案保存在本机 tree.json。</noscript>
+<script type="module" src="/app.mjs"></script></body></html>
