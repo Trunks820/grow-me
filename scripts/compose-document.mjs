@@ -42,7 +42,7 @@ async function main(){
   const parts=readdirSync(value('--parts')).filter(n=>n.endsWith('.json')).map(n=>JSON.parse(readFileSync(resolve(value('--parts'),n),'utf8'))),result=composeDocument(status,parts,{preview});
   const file=status.source.document_file+(preview?'.preview.html':''),temp=file+'.'+process.pid+'.tmp';mkdirSync(dirname(file),{recursive:true});writeFileSync(temp,result.html,'utf8');
   try{if(preview){for(const id of result.ready_chapters)validateDocument(temp,tree,status.job_id,{partial:true,chapterId:id});}else validateDocument(temp,tree,status.job_id);renameSync(temp,file);}catch(error){throw Error('组装校验失败：'+error.message);}
-  if(args.includes('--url'))for(const id of preview?result.ready_chapters:[]){const response=await fetch(value('--url')+'/document/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'chapter',expected_revision:status.source.revision,job_id:status.job_id,chapter_id:id})});if(!response.ok)throw Error('章节发布失败：'+response.status);}
+  if(args.includes('--url'))for(const id of preview?result.ready_chapters:[]){const response=await fetch(value('--url')+'/document/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'chapter',expected_session_id:status.source.session_id,expected_revision:status.source.revision,job_id:status.job_id,chapter_id:id})});if(!response.ok)throw Error('章节发布失败：'+response.status);}
   console.log(JSON.stringify({file,preview,views:result.views,ready_chapters:result.ready_chapters,parts:parts.length,assembly_ms:Math.round(performance.now()-started)}));
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(error=>{console.error(error.message);process.exitCode=1;});

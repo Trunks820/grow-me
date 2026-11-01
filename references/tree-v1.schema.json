@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "grill-me-web decision tree v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "session_id", "topic", "revision", "current_round", "status", "nodes"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "session_id": {"type":"string","minLength":1},
+    "topic": {"type":"string","minLength":1},
+    "revision": {"type":"integer","minimum":0},
+    "current_round": {"type":"integer","minimum":1},
+    "status": {"enum":["active","complete"]},
+    "nodes": {"type":"array","minItems":1,"items":{"$ref":"#/$defs/node"}}
+  },
+  "$defs": {
+    "option": {
+      "type":"object","additionalProperties":false,"required":["id","label"],
+      "properties":{"id":{"type":"string","minLength":1},"label":{"type":"string","minLength":1}}
+    },
+    "answer": {
+      "type":"object","additionalProperties":false,"required":["option_ids","text"],
+      "properties":{"option_ids":{"type":"array","uniqueItems":true,"maxItems":1,"items":{"type":"string","minLength":1}},"text":{"type":"string"}}
+    },
+    "node": {
+      "type":"object","additionalProperties":false,
+      "required":["id","question","input","options","answer","depends_on","status","round"],
+      "properties":{
+        "id":{"type":"string","minLength":1},
+        "question":{"type":"string","minLength":1},
+        "input":{"enum":["single_choice","text"]},
+        "options":{"type":"array","items":{"$ref":"#/$defs/option"}},
+        "answer":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/answer"}]},
+        "depends_on":{"type":"array","uniqueItems":true,"items":{"type":"string","minLength":1}},
+        "status":{"enum":["pending","answered","needs_review"]},
+        "round":{"type":"integer","minimum":1}
+      },
+      "allOf":[
+        {"if":{"properties":{"input":{"const":"text"}}},"then":{"properties":{"options":{"maxItems":0},"answer":{"oneOf":[{"type":"null"},{"allOf":[{"$ref":"#/$defs/answer"},{"properties":{"option_ids":{"maxItems":0},"text":{"minLength":1}}}]}]}}},"else":{"properties":{"options":{"minItems":1},"answer":{"oneOf":[{"type":"null"},{"allOf":[{"$ref":"#/$defs/answer"},{"properties":{"option_ids":{"minItems":1,"maxItems":1}}}]}]}}}},
+        {"if":{"properties":{"status":{"const":"pending"}}},"then":{"properties":{"answer":{"type":"null"}}}},
+        {"if":{"properties":{"status":{"const":"answered"}}},"then":{"properties":{"answer":{"$ref":"#/$defs/answer"}}}}
+      ]
+    }
+  }
+}

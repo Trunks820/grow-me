@@ -4,9 +4,9 @@ import{mkdtempSync,writeFileSync,readFileSync,mkdirSync,rmSync,realpathSync}from
 import{tmpdir}from'node:os';import{join,dirname,basename}from'node:path';import{fileURLToPath}from'node:url';
 import{createServer}from'node:net';import{fingerprint}from'../scripts/document.mjs';import{chapters}from'../assets/topics.mjs';
 const server=fileURLToPath(new URL('../scripts/server.mjs',import.meta.url));
-const answer=(id,deps=[])=>({id,question:id+' 的真实问题',input:'text',options:[],answer:{option_ids:[],text:'原答案'},depends_on:deps,status:'answered',round:1});
-const tree=()=>({schema_version:1,session_id:'document-fixture',topic:'文档交接测试',revision:0,current_round:1,status:'active',nodes:[answer('a'),answer('b'),answer('joint',['a','b'])]});
-const post=(url,route,data,extra={})=>fetch(url+route,{method:'POST',headers:{'content-type':'application/json',...extra},body:JSON.stringify(data)});
+const answer=(id,deps=[])=>({id,question:id+' 的真实问题',rationale:'受控测试：核对文档来源和复核边界。',input:'text',options:[],answer:{option_ids:[],text:'原答案'},depends_on:deps,status:'answered',round:1});
+const tree=()=>({schema_version:2,session_id:'document-fixture',topic:'文档交接测试',revision:0,current_round:1,status:'active',nodes:[answer('a'),answer('b'),answer('joint',['a','b'])]});
+const post=async(url,route,data,extra={})=>{const tree=await(await fetch(url+'/state')).json();return fetch(url+route,{method:'POST',headers:{'content-type':'application/json',...extra},body:JSON.stringify({expected_session_id:tree.session_id,...data})});};
 async function start(t,seed=tree(),root=null,port=0){
  const own=!root;root??=mkdtempSync(join(tmpdir(),'grill-document-test-'));if(own)writeFileSync(join(root,'tree.json'),JSON.stringify(seed));
  const child=spawn(process.execPath,[server,'--state',join(root,'tree.json'),'--port',String(port),'--wait-ms','120']);let error='';child.stderr.on('data',x=>error+=x);

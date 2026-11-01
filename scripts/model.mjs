@@ -1,35 +1,51 @@
+import {selectionValid} from '../assets/answers.mjs';
+import {bindRecommendations} from './recommendations.mjs';
+
 export class InputError extends Error {
   constructor(message, code = 400) { super(message); this.code = code; }
 }
 const requireValue = (ok, message, code = 400) => { if (!ok) throw new InputError(message, code); };
 const nonempty = value => typeof value === 'string' && value.trim().length > 0;
 const unique = list => new Set(list).size === list.length;
+const keys = (value, allowed) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => allowed.includes(key));
+export function assertWritable(tree) {
+  requireValue(tree.schema_version === 2, 'v1 is read-only; finish active legacy interviews with the previous version', 409);
+}
 export function validateAnswer(node, answer) {
-  requireValue(answer && Array.isArray(answer.option_ids) && typeof answer.text === 'string', 'answer needs option_ids[] and text');
-  requireValue(answer.option_ids.every(id => typeof id === 'string') && unique(answer.option_ids), 'invalid option ids');
-  if (node.input === 'single_choice') {
-    requireValue(answer.option_ids.length === 1 && node.options.some(o => o.id === answer.option_ids[0]), 'choose exactly one listed option');
-  } else {
-    requireValue(answer.option_ids.length === 0 && nonempty(answer.text), 'text answer must not be blank');
-  }
+  requireValue(keys(answer, ['option_ids','text']) && selectionValid(node, answer),
+    node.input === 'multi_choice' ? 'choose listed options; an exclusive option must be selected alone' :
+      node.input === 'single_choice' ? 'choose exactly one listed option' : 'text answer must not be blank');
 }
 export function validateTree(tree) {
-  requireValue(tree?.schema_version === 1 && nonempty(tree.session_id) && nonempty(tree.topic), 'invalid tree header');
+  requireValue([1,2].includes(tree?.schema_version) && nonempty(tree.session_id) && nonempty(tree.topic), 'invalid tree header');
+  requireValue(keys(tree, ['schema_version','session_id','topic','revision','current_round','status','nodes']), 'unknown tree field');
+  const modern = tree.schema_version === 2;
   requireValue(Number.isInteger(tree.revision) && tree.revision >= 0, 'invalid revision');
   requireValue(Number.isInteger(tree.current_round) && tree.current_round > 0, 'invalid current round');
   requireValue(['active', 'complete'].includes(tree.status) && Array.isArray(tree.nodes) && tree.nodes.length > 0, 'invalid tree status/nodes');
-  requireValue(unique(tree.nodes.map(n => n.id)), 'duplicate node id');
+  requireValue(tree.nodes.every(n => n && typeof n === 'object') && unique(tree.nodes.map(n => n.id)), 'duplicate/invalid node id');
   const nodes = new Map(tree.nodes.map(n => [n.id, n]));
   for (const n of tree.nodes) {
-    requireValue(nonempty(n.id) && nonempty(n.question) && ['text', 'single_choice'].includes(n.input), 'invalid node');
+    requireValue(keys(n, ['id','question','input','options','answer','depends_on','status','round',...(modern?['rationale','recommendation']:[])]), 'unknown node field');
+    requireValue(nonempty(n.id) && nonempty(n.question) && (modern?['text','single_choice','multi_choice']:['text','single_choice']).includes(n.input), 'invalid node');
+    if (modern) requireValue(nonempty(n.rationale), 'every question needs a nonblank rationale explaining its decision');
     requireValue(Number.isInteger(n.round) && n.round > 0 && n.round <= tree.current_round, 'invalid node round');
-    requireValue(Array.isArray(n.options) && unique(n.options.map(o => o.id)) && n.options.every(o => nonempty(o.id) && nonempty(o.label)), 'invalid options');
+    requireValue(Array.isArray(n.options) && n.options.every(o => keys(o, ['id','label',...(modern?['exclusive']:[])]) && nonempty(o.id) && nonempty(o.label)) && unique(n.options.map(o => o.id)), 'invalid options');
+    requireValue(n.options.every(o => o.exclusive === undefined || typeof o.exclusive === 'boolean') && n.options.filter(o => o.exclusive).length <= 1, 'only one exclusive option is allowed');
+    requireValue(n.input === 'multi_choice' || n.options.every(o => o.exclusive === undefined), 'exclusive applies only to multi_choice');
     requireValue(n.input === 'text' ? n.options.length === 0 : n.options.length > 0, 'options do not match input');
     requireValue(Array.isArray(n.depends_on) && unique(n.depends_on) && n.depends_on.every(id => id !== n.id && nodes.has(id)), 'unknown/self dependency');
     requireValue(['pending', 'answered', 'needs_review'].includes(n.status), 'invalid node status');
     requireValue(n.status !== 'pending' || n.answer === null, 'pending node must have null answer');
     requireValue(n.status !== 'answered' || n.answer !== null, 'answered node needs an answer');
     if (n.answer !== null) validateAnswer(n, n.answer);
+    if (modern && n.recommendation != null) {
+      const r = n.recommendation;
+      requireValue(keys(r, ['option_ids','reason','source_ids','source_digest']) && nonempty(r.reason), 'recommendation needs a reason');
+      requireValue(n.input !== 'text' && selectionValid(n, {option_ids:r.option_ids,text:''}), 'recommendation must name valid options');
+      requireValue(Array.isArray(r.source_ids) && unique(r.source_ids) && r.source_ids.every(id => typeof id === 'string' && id !== n.id && nodes.has(id) && nodes.get(id).answer !== null && nodes.get(id).round < n.round), 'recommendation sources must be earlier submitted answers');
+      requireValue(r.source_digest === undefined ? r.source_ids.length === 0 : /^[a-f0-9]{64}$/.test(r.source_digest), 'recommendation source digest missing/invalid');
+    }
   }
   const active = new Set(), visited = new Set();
   function visit(id) {
@@ -43,11 +59,13 @@ export function validateTree(tree) {
   return tree;
 }
 function prepare(tree, revision) {
+  assertWritable(tree);
   requireValue(tree.status === 'active', 'session already complete', 409);
   requireValue(revision === tree.revision, 'revision changed; reload state and try again', 409);
   return structuredClone(tree);
 }
 function ready(tree, node) {
+  requireValue(Array.isArray(node.depends_on), 'depends_on must be an array');
   requireValue(node.depends_on.every(id => tree.nodes.find(n => n.id === id)?.status === 'answered'), 'confirm prerequisites first', 409);
 }
 function markDownstream(tree, id) {
@@ -93,11 +111,14 @@ export function publishRound(tree, body) {
   requireValue(!next.nodes.some(n => n.status === 'needs_review'), 'confirm reviewed decisions first', 409);
   requireValue(next.nodes.filter(n => n.round === next.current_round).every(n => n.status === 'answered'), 'current round is not answered', 409);
   requireValue(Array.isArray(body.nodes) && body.nodes.length > 0, 'round needs nodes');
-  for (const n of body.nodes) {
+  const candidates = structuredClone(body.nodes);
+  for (const n of candidates) requireValue(n && typeof n === 'object' && (!n.recommendation || Array.isArray(n.recommendation.source_ids)), 'recommendation needs source_ids');
+  bindRecommendations(next, candidates);
+  for (const n of candidates) {
     requireValue(n.round === body.round && n.status === 'pending' && n.answer === null, 'new questions must be pending in the new round');
     ready(tree, n);
   }
-  next.nodes.push(...structuredClone(body.nodes)); next.current_round = body.round; next.revision++;
+  next.nodes.push(...candidates); next.current_round = body.round; next.revision++;
   return validateTree(next);
 }
 export function finish(tree, body) {

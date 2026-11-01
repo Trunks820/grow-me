@@ -6,6 +6,9 @@ sys.stdout.reconfigure(encoding='utf-8')
 BASE=Path(__file__).resolve().parents[1]
 
 def request(url,path,body=None):
+    if body is not None:
+        with urllib.request.urlopen(url+'/state',timeout=3) as response:identity=json.loads(response.read())['session_id']
+        body={'expected_session_id':identity,**body}
     data=None if body is None else json.dumps(body,ensure_ascii=False).encode('utf-8')
     req=urllib.request.Request(url+path,data=data,headers={} if body is None else {'content-type':'application/json'})
     try:
@@ -13,10 +16,10 @@ def request(url,path,body=None):
     except urllib.error.HTTPError as error:return error.code,json.loads(error.read())
 
 def node(id,question=None,deps=None,round=1,answered=False,options=None):
-    return {'id':id,'question':question or id+' 的问题','input':'single_choice' if options else 'text','options':options or [],'answer':{'option_ids':[],'text':id+' 原答案'} if answered else None,'depends_on':deps or [],'status':'answered' if answered else 'pending','round':round}
+    return {'id':id,'question':question or id+' 的问题','rationale':'受控测试：验证此问题对应的决定及交互边界。','input':'single_choice' if options else 'text','options':options or [],'answer':{'option_ids':[],'text':id+' 原答案'} if answered else None,'depends_on':deps or [],'status':'answered' if answered else 'pending','round':round}
 
 def seed(nodes,round=1):
-    return {'schema_version':1,'session_id':'controlled-browser-'+uuid.uuid4().hex[:8],'topic':'受控页面验收','revision':0,'current_round':round,'status':'active','nodes':nodes}
+    return {'schema_version':2,'session_id':'controlled-browser-'+uuid.uuid4().hex[:8],'topic':'受控页面验收','revision':0,'current_round':round,'status':'active','nodes':nodes}
 
 class Service:
     def __init__(self,work,tree):

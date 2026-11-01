@@ -12,8 +12,8 @@ import {chapters} from '../assets/topics.mjs';
 const args=process.argv.slice(2);
 if(args.includes('--help')){console.log('node scripts/demo.mjs [--port 0]\nRead-only synthetic reading-club example. No model or real interview data.');process.exit(0);}
 const root=mkdtempSync(join(tmpdir(),'grow-me-demo-')),stateFile=join(root,'tree.json'),documentFile=join(root,'reading-club.html');
-const question=(id,text,answer,round=1,depends_on=[])=>({id,question:text,input:'text',options:[],answer:{option_ids:[],text:answer},depends_on,status:'answered',round});
-const tree={schema_version:1,session_id:'synthetic-reading-club-'+randomUUID(),topic:'示例 · 周末读书会报名（合成数据）',revision:0,current_round:3,status:'complete',nodes:[
+const question=(id,text,answer,round=1,depends_on=[])=>({id,question:text,rationale:"合成示例：这项决定用于界定对应话题的范围。",input:'text',options:[],answer:{option_ids:[],text:answer},depends_on,status:'answered',round});
+const tree={schema_version:2,session_id:'synthetic-reading-club-'+randomUUID(),topic:'示例 · 周末读书会报名（合成数据）',revision:0,current_round:3,status:'complete',nodes:[
   question('purpose','这次报名页要解决什么？','组织一场周末读书会，让参与者在同一处了解活动、报名与取消。'),
   question('people','谁会使用报名页？','参与者从手机报名，组织者查看名单。'),
   question('capacity','活动的名额怎么管理？','每场 12 个名额，满员后进入候补。'),
@@ -33,7 +33,7 @@ const child=spawn(process.execPath,[fileURLToPath(new URL('./server.mjs',import.
 process.on('SIGINT',()=>child.kill('SIGTERM'));process.on('SIGTERM',()=>child.kill('SIGTERM'));
 try{
   const started=await Promise.race([once(child.stdout,'data').then(([value])=>JSON.parse(String(value))),once(child,'exit').then(([code])=>{throw Error('Demo server did not start: '+code);})]);
-  const control=async(action,extra={})=>{const response=await fetch(started.url+'/document/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,expected_revision:0,...extra})});const body=await response.json();if(!response.ok)throw Error(body.error);return body;};
+  const control=async(action,extra={})=>{const response=await fetch(started.url+'/document/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,expected_session_id:tree.session_id,expected_revision:0,...extra})});const body=await response.json();if(!response.ok)throw Error(body.error);return body;};
   let status=await control('retry');status=await control('claim',{job_id:status.job_id});
   const esc=text=>text.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),source={session_id:status.source.session_id,revision:0,digest:status.source.digest,job_id:status.job_id};
   const roots=chapters(tree),titles=['报名与取消','参与者与组织者','名额与候补','隐私与清理'];

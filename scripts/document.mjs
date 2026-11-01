@@ -83,7 +83,7 @@ export class DocumentBridge{
         requireValue(tree.status==='complete'&&this.phase==='generating'&&body.job_id===this.jobId,'生成请求已过期');
         this.phase='failed';this.error=publicError(body.error,'文档生成遇到问题，请重试。');break;
       case'close':
-        requireValue(tree.status==='complete','请先保存访谈');this.phase='closed';setImmediate(this.stop);break;
+        requireValue(tree.status==='complete'||tree.schema_version===1,'请先保存访谈');this.phase='closed';setImmediate(this.stop);break;
       default:throw new InputError('unknown document action',400);
     }
     this.changed();return this.status();

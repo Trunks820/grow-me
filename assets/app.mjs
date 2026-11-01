@@ -1,23 +1,26 @@
 import {createDecisionTree} from './tree.mjs';
 import {primaryGraph,chapters,answerText} from './topics.mjs';
 import {publicError} from './presentation.mjs';
+import {selectionValid} from './answers.mjs';
 
 const card=document.querySelector('#card'),dialog=document.querySelector('#node-dialog');
 const drafts=new Map(),working=new Map();
+let guidance={};
 let state,documentState={phase:'idle'},currentId=null,busy=false,waitingSince=null,documentSince=null,documentKey=null,stopped=false,returnFocus=null,rendering=false,renderFailed=false,refreshSequence=0,appliedRefresh=0,messageTimer;
 const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
 const message=(text,error=false)=>{const n=document.querySelector('#message');clearTimeout(messageTimer);n.textContent=text?publicError(text):'';n.setAttribute('role',error?'alert':'status');if(text)messageTimer=setTimeout(()=>{n.textContent='';},8000);};
 const view=createDecisionTree(document.querySelector('#decision-tree'),{onNode:openNode,onFruit:openFruit});
 const ready=n=>n.depends_on.every(id=>state.nodes.find(n=>n.id===id)?.status==='answered');
-const valid=(n,a)=>Boolean(a)&&ready(n)&&(n.input==='text'?a.option_ids.length===0&&a.text.trim().length>0:a.option_ids.length===1&&n.options.some(o=>o.id===a.option_ids[0]));
+const valid=(n,a)=>ready(n)&&selectionValid(n,a);
 const openQuestions=()=>state.nodes.filter(n=>n.round===state.current_round&&n.status==='pending');
 const reviews=()=>state.nodes.filter(n=>n.status==='needs_review');
-const isWaiting=()=>state?.status==='active'&&state.nodes.every(n=>n.status==='answered');
+const isWaiting=()=>state?.schema_version===2&&state.status==='active'&&state.nodes.every(n=>n.status==='answered');
 const allConfirmed=()=>Boolean(state?.nodes.length)&&state.nodes.every(n=>n.status==='answered'&&n.answer!==null);
 const documentMatches=()=>documentState.source?.session_id===state.session_id&&documentState.source?.revision===state.revision;
 
 async function post(path,body){
-  const response=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  if(stopped)throw Error('请先恢复原访谈，再继续操作。');
+  const response=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...body,expected_session_id:state.session_id})});
   if(!response.headers.get('content-type')?.includes('application/json'))throw Error('本机服务返回格式异常，请重试。');
   let result;try{result=await response.json();}catch{throw Error('本机服务返回格式异常，请重试。');}
   if(!response.ok)throw Error(publicError(result.error,'提交暂时失败，请重试。'));return result;
@@ -52,9 +55,24 @@ function sourceLine(n){
 function inputs(n){
   const value=working.get(n.id)??drafts.get(n.id)??n.answer??{option_ids:[],text:''};
   const form=el('form',undefined,'question-form');let read;
-  if(n.input==='single_choice'){
-    const group=el('fieldset',undefined,'choice-group'),legend=el('legend','选择一项','sr-only');group.append(legend);
-    n.options.forEach((o,i)=>{const label=el('label',undefined,'option'),radio=document.createElement('input');radio.type='radio';radio.name='answer';radio.value=o.id;radio.checked=value.option_ids.includes(o.id);label.append(radio,el('span',o.label));group.append(label);radio.dataset.shortcut=String(i+1);});
+  if(n.input!=='text'){
+    const multiple=n.input==='multi_choice',advice=guidance[n.id];
+    if(advice){
+      const info=el('div',undefined,'recommendation-info');
+      if(advice.stale)info.append(el('p','推荐依据已变／待复核，旧推荐已隐藏。','w'));
+      else{
+        info.append(el('p','AI 建议：'+advice.reason,'w'));
+        for(const source of advice.sources){const line=el('p',undefined,'recommendation-source');line.append(el('span',`根据你第 ${source.round} 轮说的“${source.answer}”，不对请改。`),button('回看依据',event=>openNode(source.id,event?.currentTarget)));info.append(line);}
+      }
+      form.append(info);
+    }
+    const group=el('fieldset',undefined,'choice-group'),legend=el('legend',multiple?'选择一项或多项':'选择一项','sr-only');group.append(legend);
+    n.options.forEach((o,i)=>{const label=el('label',undefined,'option'),input=document.createElement('input');input.type=multiple?'checkbox':'radio';input.name='answer';input.value=o.id;input.checked=value.option_ids.includes(o.id);input.dataset.exclusive=String(Boolean(o.exclusive));const copy=el('span',o.label,'option-copy');
+      if(advice&&!advice.stale&&advice.option_ids.includes(o.id))copy.append(el('span','推荐','recommendation-badge'));
+      if(o.exclusive)copy.append(el('span','与其他选项互斥','exclusive-hint'));
+      label.append(input,copy);group.append(label);input.dataset.shortcut=String(i+1);
+    });
+    group.addEventListener('change',event=>{const input=event.target;if(!multiple||!input.checked)return;for(const other of group.querySelectorAll('input'))if(other!==input&&(input.dataset.exclusive==='true'||other.dataset.exclusive==='true'))other.checked=false;});
     const notes=el('details',undefined,'notes'),summary=el('summary','补充说明（可选）'),label=el('label','补充说明（可选）','sr-only'),area=el('textarea',undefined,'field');area.id='answer-note';label.htmlFor=area.id;area.value=value.text;notes.open=Boolean(value.text);notes.append(summary,label,area);form.append(group,notes);
     read=()=>({option_ids:[...group.querySelectorAll('input:checked')].map(n=>n.value),text:area.value});
   }else{
@@ -70,7 +88,7 @@ function inputs(n){
   });
   card.append(form);
   if(n.status==='needs_review'&&n.answer!==null){const keep=button('仍然有效',()=>act(async()=>{await post('/decision',{id:n.id,expected_revision:state.revision,answer:n.answer});currentId=null;}));keep.disabled=busy||!ready(n);card.append(keep);}
-  card.append(el('p',n.input==='text'?'Ctrl + Enter 确认':'按数字键选择，Enter 确认','help'));
+  card.append(el('p',n.input==='text'?'Ctrl + Enter 确认':n.input==='multi_choice'?'按数字键勾选或取消，Enter 确认；互斥项单独选择。':'按数字键选择，Enter 确认','help'));
   if(n.status!=='needs_review')card.append(el('p','花已开在本页；提交整轮后才保存。','draft-hint'));
 }
 function renderSummary(){
@@ -116,10 +134,12 @@ function renderDocument(){
 function render(){
   if(!state)return;rendering=true;renderFailed=false;try{const hadText=document.activeElement?.matches('textarea,input');
   card.replaceChildren();
-  if(state.status==='complete'){currentId=null;if(allConfirmed())renderDocument();else card.append(el('p','状态待核对','k'),el('h2','保存状态与答案不一致。','q'),el('p',`当前只有 ${state.nodes.filter(n=>n.status==='answered').length} / ${state.nodes.length} 个问题已确认；请回到原对话核对 tree.json。`,'w'));}
+  if(state.schema_version===1){currentId=null;card.append(el('p','v1 历史访谈 · 只读','k'),el('h2','原来的回答，仍在这棵树上。','q'),el('p','可以点击花朵回看；未完成的旧访谈请用原 alpha 版本继续。不会自动迁移或补写历史理由。','w'));if(documentState.phase==='ready'){const a=el('a','打开原任务文档','doc-link');a.href='/document';a.target='_blank';a.rel='noopener';card.append(a);}card.append(button('结束预览',()=>act(async()=>{await post('/document/control',{action:'close',expected_revision:state.revision});stopped=true;document.querySelector('#connection').textContent='只读预览已结束；原访谈文件保持不变。';})));}
+  else if(state.status==='complete'){currentId=null;if(allConfirmed())renderDocument();else card.append(el('p','状态待核对','k'),el('h2','保存状态与答案不一致。','q'),el('p',`当前只有 ${state.nodes.filter(n=>n.status==='answered').length} / ${state.nodes.length} 个问题已确认；请回到原对话核对 tree.json。`,'w'));}
   else{
     const n=chooseCurrent();
     if(n){const roundNodes=state.nodes.filter(x=>x.round===n.round);card.append(el('p',`第 ${n.round} 轮 · 本轮第 ${roundNodes.indexOf(n)+1} 题，共 ${roundNodes.length} 题${n.status==='needs_review'?' · 需复核':''}`,'k'));sourceLine(n);card.append(el('h2',n.question,'q'));
+      card.append(el('p','为什么问：'+n.rationale,'why'));
       if(n.status==='needs_review')card.append(el('p','本题或其上游已重新打开。请确认旧答案是否仍然有效。','review-note'));
       inputs(n);
     }else if(openQuestions().length)renderSummary();
@@ -134,14 +154,14 @@ function openNode(id,trigger){
   const body=document.querySelector('#node-body'),actions=document.querySelector('#node-actions');body.replaceChildren();actions.replaceChildren();
   const rootId=primaryGraph(state).find(e=>e.node.id===id).rootId,root=state.nodes.find(n=>n.id===rootId);
   body.append(el('p',`第 ${n.round} 轮 · ${root.question}${n.status==='needs_review'?' · 需复核':''}`,'k'));
-  const heading=el('h2',n.question);heading.id='node-question';body.append(heading,el('p',answerText(n,drafts.get(id)??n.answer),'answer'));
+  const heading=el('h2',n.question);heading.id='node-question';body.append(heading,el('p',n.rationale?'为什么问：'+n.rationale:'旧 v1 题未记录理由。','why'),el('p',answerText(n,drafts.get(id)??n.answer),'answer'));
   if(drafts.has(id))body.append(el('p','本轮未提交','draft-hint'));
   if(n.depends_on.length)body.append(el('p','依据：'+n.depends_on.map(id=>state.nodes.find(n=>n.id===id).question).join('；'),'w'));
-  if(state.status==='active'&&(n.answer!==null||drafts.has(id)||n.status==='needs_review'))actions.append(button('修改回答',()=>{
+  if(state.schema_version===2&&state.status==='active'&&(n.answer!==null||drafts.has(id)||n.status==='needs_review'))actions.append(button('修改回答',()=>{
     if(drafts.has(id))return editDraft(id);
     dialog.close();act(async()=>{if(n.status!=='needs_review')await post('/reopen',{id,expected_revision:state.revision});currentId=id;});
   }));
-  if(state.status==='active'&&n.status==='needs_review'&&n.answer!==null){const keep=button('仍然有效',()=>{dialog.close();act(async()=>{await post('/decision',{id,expected_revision:state.revision,answer:n.answer});currentId=null;});});keep.disabled=!ready(n);actions.append(keep);}
+  if(state.schema_version===2&&state.status==='active'&&n.status==='needs_review'&&n.answer!==null){const keep=button('仍然有效',()=>{dialog.close();act(async()=>{await post('/decision',{id,expected_revision:state.revision,answer:n.answer});currentId=null;});});keep.disabled=busy||!ready(n);actions.append(keep);}
   if(!dialog.open)dialog.showModal();
 }
 function openFruit(fruit){const ready=documentMatches()&&(documentState.phase==='ready'||documentState.chapters?.some(c=>c.id===fruit.id&&c.status==='ready'));if(!allConfirmed()||!ready){message('这个章节还在生成，完成后果子会成熟。');return;}window.open('/document'+(documentState.phase==='ready'?'':'?chapter='+encodeURIComponent(fruit.id))+'#'+fruit.anchor,'_blank','noopener');}
@@ -152,16 +172,18 @@ window.addEventListener('beforeunload',event=>{if(state?.status==='active'&&(dra
 document.addEventListener('keydown',event=>{
   if(dialog.open||!state||busy)return;const inText=event.target.matches('textarea,input[type=text]');
   if(inText){if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();card.querySelector('#confirm-answer')?.click();}return;}
-  if(/^[1-9]$/.test(event.key)){const radio=card.querySelector(`[data-shortcut="${event.key}"]`);if(radio&&!radio.disabled){event.preventDefault();radio.checked=true;radio.dispatchEvent(new Event('change',{bubbles:true}));radio.focus();}}
-  else if(event.key==='Enter'&&event.target.matches('input[type=radio]')){event.preventDefault();card.querySelector('#confirm-answer')?.click();}
+  if(/^[1-9]$/.test(event.key)){const input=card.querySelector(`[data-shortcut="${event.key}"]`);if(input&&!input.disabled){event.preventDefault();input.checked=input.type==='checkbox'?!input.checked:true;input.dispatchEvent(new Event('change',{bubbles:true}));input.focus();}}
+  else if(event.key==='Enter'&&event.target.matches('input[type=radio],input[type=checkbox]')){event.preventDefault();card.querySelector('#confirm-answer')?.click();}
 });
 
 async function refresh(force=false){
   const sequence=++refreshSequence;
-  const [response,docResponse,progressResponse]=await Promise.all([fetch('/state',{cache:'no-store'}),fetch('/document/status',{cache:'no-store'}),fetch('/progress',{cache:'no-store'})]);
-  if(!response.ok||!docResponse.ok)throw Error('读取本机状态失败');
-  const next=await response.json(),doc=await docResponse.json(),progress=progressResponse.ok?await progressResponse.json():null;
+  const [response,docResponse,progressResponse,adviceResponse]=await Promise.all([fetch('/state',{cache:'no-store'}),fetch('/document/status',{cache:'no-store'}),fetch('/progress',{cache:'no-store'}),fetch('/guidance',{cache:'no-store'})]);
+  if(!response.ok||!docResponse.ok||!adviceResponse.ok)throw Error('读取本机状态失败');
+  const next=await response.json(),doc=await docResponse.json(),progress=progressResponse.ok?await progressResponse.json():null,advice=await adviceResponse.json();
   if(stopped)return;
+  if(state&&next.session_id!==state.session_id){stopped=true;card.querySelectorAll('input,button,textarea').forEach(n=>n.disabled=true);document.querySelector('#connection').textContent='此地址已换成另一个访谈。请复制提醒，恢复原会话后继续。';return;}
+  if(advice.session_id!==next.session_id||advice.revision!==next.revision||doc.source?.session_id!==next.session_id||doc.source?.revision!==next.revision)throw Error('状态正在变更，稍后重读');
   if(sequence<appliedRefresh||(state&&next.revision<state.revision))return;
   appliedRefresh=sequence;
   const changed=!state||next.revision!==state.revision,docChanged=JSON.stringify({...doc,server_now:0})!==JSON.stringify({...documentState,server_now:0});
@@ -174,13 +196,19 @@ async function refresh(force=false){
     if(old&&old.current_round!==next.current_round){currentId=null;waitingSince=null;}
     state=next;
   }
-  documentState=doc;
+  documentState=doc;guidance=advice.recommendations;document.querySelector('#copy-reminder').disabled=false;
   if(isWaiting()){if(waitingSince===null)waitingSince=performance.now()-(progress?.session_id===state.session_id&&progress.revision===state.revision&&progress.started_at!==null?Math.max(0,progress.server_now-progress.started_at):0);}else waitingSince=null;
   const key=['requested','generating'].includes(doc.phase)?state.session_id+'/'+doc.job_id:null;
   if(key!==documentKey){documentKey=key;documentSince=key?performance.now()-Math.max(0,(doc.server_now??Date.now())-(doc.started_at??Date.now())):null;}
-  document.querySelector('#connection').textContent=state.status==='complete'?(allConfirmed()?'已保存 · 本机文档预览':'保存状态与答案待核对'):'已连接本机';
+  document.querySelector('#connection').textContent=state.schema_version===1?'v1 历史访谈 · 只读':state.status==='complete'?(allConfirmed()?'已保存 · 本机文档预览':'保存状态与答案待核对'):'已连接本机';
   if(changed||docChanged||force||renderFailed)render();
 }
 async function poll(){if(stopped)return;try{await refresh();}catch(error){if(!stopped){document.querySelector('#connection').textContent='连接已断开，正在重连；已提交答案仍在本机。';if(!state)message('暂时读不到问题，将自动重连。',true);}}if(!stopped)setTimeout(poll,1000);}
+document.querySelector('#copy-reminder').addEventListener('click',async()=>{
+  if(!state)return;
+  const text='请继续 grow-me。先读取 /state，核对会话身份与当前 revision 后再继续。\n'+JSON.stringify({session_id:state.session_id,current_round:state.current_round,url:location.origin});
+  try{await navigator.clipboard.writeText(text);message('提醒已复制，粘回原对话即可继续。');}
+  catch{const body=document.querySelector('#node-body'),actions=document.querySelector('#node-actions'),heading=el('h2','复制续接提醒');heading.id='node-question';returnFocus=document.querySelector('#copy-reminder');body.replaceChildren(heading);actions.replaceChildren();const field=el('textarea',undefined,'field');field.readOnly=true;field.value=text;field.setAttribute('aria-label','续接提醒');body.append(el('p','复制下面的文字，粘回原对话。','w'),field);if(!dialog.open)dialog.showModal();field.select();}
+});
 setInterval(()=>{const late=document.querySelector('#long-wait');if(late)late.hidden=waitingSince===null||performance.now()-waitingSince<=60000;const elapsed=document.querySelector('#wait-elapsed');if(elapsed)elapsed.textContent=`已等待 ${Math.max(0,Math.floor((performance.now()-Number(elapsed.dataset.since))/1000))} 秒`;},500);
 poll();

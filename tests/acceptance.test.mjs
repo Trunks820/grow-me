@@ -8,12 +8,12 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const serverPath = fileURLToPath(new URL('../scripts/server.mjs', import.meta.url));
-const answered = (id, deps = []) => ({ id, question: `${id} 的问题`, input: 'text', options: [],
+const answered = (id, deps = []) => ({ id, question: `${id} 的问题`, rationale: "受控测试：验证该决定的提交与复核边界。", input: 'text', options: [],
   answer: { option_ids: [], text: `${id} 原答案` }, depends_on: deps, status: 'answered', round: 1 });
 const pending = (id, input = 'text', options = [], deps = [], round = 1) => ({ id,
-  question: `${id} 的问题`, input, options, answer: null, depends_on: deps, status: 'pending', round });
+  question: `${id} 的问题`, rationale: "受控测试：验证该决定的提交与复核边界。", input, options, answer: null, depends_on: deps, status: 'pending', round });
 function seed(nodes = [pending('platform', 'single_choice', [{ id: 'web', label: '先做网页版' }]), pending('budget')]) {
-  return { schema_version: 1, session_id: 'acceptance-fixture', topic: '最小往返', revision: 0,
+  return { schema_version: 2, session_id: 'acceptance-fixture', topic: '最小往返', revision: 0,
     current_round: 1, status: 'active', nodes };
 }
 async function start(t, tree = seed(), port = 0, dir = null) {
@@ -38,7 +38,8 @@ async function start(t, tree = seed(), port = 0, dir = null) {
   return { child, root, url: ready.url, port: ready.port };
 }
 async function post(url, route, data) {
-  return fetch(url + route, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
+  const tree=await(await fetch(url+'/state')).json();
+  return fetch(url + route, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({expected_session_id:tree.session_id,...data}) });
 }
 async function curl(url, maxTime = '3') {
   const child = spawn(process.platform === 'win32' ? 'curl.exe' : 'curl', ['--silent', '--show-error', '--max-time', maxTime, url]);

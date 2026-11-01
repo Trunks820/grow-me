@@ -33,7 +33,7 @@ node <skill>/scripts/compose-document.mjs --context <status.json> --tree <tree.j
 
 This atomically writes `<document_file>.preview.html`, validates the completed chapters against source/revision/digest/job and publishes each one. Missing views/links are visibly pending in the preview, never passing acceptance. A corresponding fruit becomes readable immediately; other fruit stays labeled “生成中”. Source-stale or duplicate parts fail without replacing the final HTML. File names are arbitrary; use distinct names on case-insensitive filesystems.
 
-Use `/document/control` action `progress` with the current expected_revision/job_id and stage `drafting`, `design`, `plan`, `acceptance` or `checking` as real work starts. The timer is elapsed time, not an estimated percentage. Avoid repeated stage-only calls while nothing changes.
+Use `/document/control` action `progress` with the current expected_session_id/expected_revision/job_id and stage `drafting`, `design`, `plan`, `acceptance` or `checking` as real work starts. The timer is elapsed time, not an estimated percentage. Avoid repeated stage-only calls while nothing changes.
 
 Once all pieces are ready:
 
@@ -41,6 +41,6 @@ Once all pieces are ready:
 node <skill>/scripts/compose-document.mjs --context <status.json> --tree <tree.json> --parts <parts-dir>
 ```
 
-The assembler checks source binding, unique IDs, three views, all chapters and local links and atomically replaces the configured final HTML. It does **not** post ready: run the bundled `scripts/validate_task.py`, `scripts/read_task.py` and applicable display checks, then post ready with the current revision/job_id. HTML validation confirms structure/source, not user acceptance or implementation approval. On failure, retain frozen answers, post failed with a concise human-readable error, and retry under the new job. Never put raw SSE events, JSON payloads or traces into a status/error field.
+The assembler checks source binding, unique IDs, three views, all chapters and local links and atomically replaces the configured final HTML. It does **not** post ready: run the bundled `scripts/validate_task.py`, `scripts/read_task.py` and applicable display checks, then post ready with the current expected_session_id/expected_revision/job_id. HTML validation confirms structure/source, not user acceptance or implementation approval. On failure, retain frozen answers, post failed with a concise human-readable error, and retry under the new job. Never put raw SSE events, JSON payloads or traces into a status/error field.
 
 Record real submit-to-next-question and save-to-document timings in test evidence. Controlled 168/420-second UI waits and assembly milliseconds are not real model-generation speed.

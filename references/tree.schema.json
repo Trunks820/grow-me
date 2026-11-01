@@ -1,44 +1,449 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "grill-me-web decision tree v1",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["schema_version", "session_id", "topic", "revision", "current_round", "status", "nodes"],
-  "properties": {
-    "schema_version": {"const": 1},
-    "session_id": {"type":"string","minLength":1},
-    "topic": {"type":"string","minLength":1},
-    "revision": {"type":"integer","minimum":0},
-    "current_round": {"type":"integer","minimum":1},
-    "status": {"enum":["active","complete"]},
-    "nodes": {"type":"array","minItems":1,"items":{"$ref":"#/$defs/node"}}
-  },
+  "title": "grow-me v2 (v1 read-only compatibility)",
+  "description": "Runtime additionally verifies IDs, dependencies, exclusive selections and recommendation source binding.",
+  "oneOf": [
+    {
+      "$ref": "tree-v1.schema.json"
+    },
+    {
+      "$ref": "#/$defs/treeV2"
+    }
+  ],
   "$defs": {
+    "treeV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "session_id",
+        "topic",
+        "revision",
+        "current_round",
+        "status",
+        "nodes"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "topic": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "current_round": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "enum": [
+            "active",
+            "complete"
+          ]
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/node"
+          }
+        }
+      }
+    },
     "option": {
-      "type":"object","additionalProperties":false,"required":["id","label"],
-      "properties":{"id":{"type":"string","minLength":1},"label":{"type":"string","minLength":1}}
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "exclusive": {
+          "type": "boolean"
+        }
+      }
     },
     "answer": {
-      "type":"object","additionalProperties":false,"required":["option_ids","text"],
-      "properties":{"option_ids":{"type":"array","uniqueItems":true,"maxItems":1,"items":{"type":"string","minLength":1}},"text":{"type":"string"}}
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "option_ids",
+        "text"
+      ],
+      "properties": {
+        "option_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "recommendation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "option_ids",
+        "reason",
+        "source_ids"
+      ],
+      "properties": {
+        "option_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "minItems": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "source_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "source_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source_ids": {
+                "minItems": 1
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "source_digest"
+            ]
+          }
+        }
+      ]
     },
     "node": {
-      "type":"object","additionalProperties":false,
-      "required":["id","question","input","options","answer","depends_on","status","round"],
-      "properties":{
-        "id":{"type":"string","minLength":1},
-        "question":{"type":"string","minLength":1},
-        "input":{"enum":["single_choice","text"]},
-        "options":{"type":"array","items":{"$ref":"#/$defs/option"}},
-        "answer":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/answer"}]},
-        "depends_on":{"type":"array","uniqueItems":true,"items":{"type":"string","minLength":1}},
-        "status":{"enum":["pending","answered","needs_review"]},
-        "round":{"type":"integer","minimum":1}
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "question",
+        "rationale",
+        "input",
+        "options",
+        "answer",
+        "depends_on",
+        "status",
+        "round"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "input": {
+          "enum": [
+            "single_choice",
+            "multi_choice",
+            "text"
+          ]
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/option"
+          },
+          "contains": {
+            "required": [
+              "exclusive"
+            ],
+            "properties": {
+              "exclusive": {
+                "const": true
+              }
+            }
+          },
+          "minContains": 0,
+          "maxContains": 1
+        },
+        "answer": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/answer"
+            }
+          ]
+        },
+        "recommendation": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/recommendation"
+            }
+          ]
+        },
+        "depends_on": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "answered",
+            "needs_review"
+          ]
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1
+        }
       },
-      "allOf":[
-        {"if":{"properties":{"input":{"const":"text"}}},"then":{"properties":{"options":{"maxItems":0},"answer":{"oneOf":[{"type":"null"},{"allOf":[{"$ref":"#/$defs/answer"},{"properties":{"option_ids":{"maxItems":0},"text":{"minLength":1}}}]}]}}},"else":{"properties":{"options":{"minItems":1},"answer":{"oneOf":[{"type":"null"},{"allOf":[{"$ref":"#/$defs/answer"},{"properties":{"option_ids":{"minItems":1,"maxItems":1}}}]}]}}}},
-        {"if":{"properties":{"status":{"const":"pending"}}},"then":{"properties":{"answer":{"type":"null"}}}},
-        {"if":{"properties":{"status":{"const":"answered"}}},"then":{"properties":{"answer":{"$ref":"#/$defs/answer"}}}}
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "input": {
+                "const": "text"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "answer": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/$defs/answer"
+                      },
+                      {
+                        "properties": {
+                          "option_ids": {
+                            "maxItems": 0
+                          },
+                          "text": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              "options": {
+                "maxItems": 0,
+                "items": {
+                  "not": {
+                    "required": [
+                      "exclusive"
+                    ]
+                  }
+                }
+              },
+              "recommendation": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "input": {
+                "const": "single_choice"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "answer": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/$defs/answer"
+                      },
+                      {
+                        "properties": {
+                          "option_ids": {
+                            "minItems": 1,
+                            "maxItems": 1
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              "options": {
+                "minItems": 1,
+                "items": {
+                  "not": {
+                    "required": [
+                      "exclusive"
+                    ]
+                  }
+                }
+              },
+              "recommendation": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/$defs/recommendation"
+                      },
+                      {
+                        "properties": {
+                          "option_ids": {
+                            "maxItems": 1
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "input": {
+                "const": "multi_choice"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "answer": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "allOf": [
+                      {
+                        "$ref": "#/$defs/answer"
+                      },
+                      {
+                        "properties": {
+                          "option_ids": {
+                            "minItems": 1
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              "options": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "pending"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "answer": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "answered"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "answer": {
+                "$ref": "#/$defs/answer"
+              }
+            }
+          }
+        }
       ]
     }
   }

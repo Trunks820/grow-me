@@ -32,3 +32,5 @@ jobs:
       - run: python tests/browser_acceptance.py --work outputs/qa/browser
       - run: python tests/wait_flow_browser.py --work outputs/qa/waiting
       - run: python tests/seeded_growth.py --work outputs/qa/seeded
+      - run: python tests/choices_browser.py --work outputs/qa/choices
+      - run: python tests/schema_acceptance.py

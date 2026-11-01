@@ -1,8 +1,8 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import {mkdtempSync,writeFileSync,readFileSync,mkdirSync,rmSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';
 import {DocumentBridge,validateDocument} from '../scripts/document.mjs';import {composeDocument} from '../scripts/compose-document.mjs';import {InterviewProgress} from '../scripts/progress.mjs';import {interviewContext} from '../scripts/context.mjs';import {publicError} from '../assets/presentation.mjs';import {publishRound,reopenDecision,editDecision} from '../scripts/model.mjs';
-const node=(id,deps=[],round=1)=>({id,question:id+' 的问题',input:'text',options:[],answer:{option_ids:[],text:'原文\n <>& event: message data: {}'},depends_on:deps,status:'answered',round});
-const seed=()=>({schema_version:1,session_id:'wait-flow-fixture',topic:'等待与章节',revision:0,current_round:2,status:'active',nodes:[node('a'),node('b'),node('c',['a'],2)]});
+const node=(id,deps=[],round=1)=>({id,question:id+' 的问题',rationale:'受控测试：验证章节与等待边界。',input:'text',options:[],answer:{option_ids:[],text:'原文\n <>& event: message data: {}'},depends_on:deps,status:'answered',round});
+const seed=()=>({schema_version:2,session_id:'wait-flow-fixture',topic:'等待与章节',revision:0,current_round:2,status:'active',nodes:[node('a'),node('b'),node('c',['a'],2)]});
 function setup(t){const root=mkdtempSync(join(tmpdir(),'grow-wait-'));t.after(()=>rmSync(root,{recursive:true,force:true}));let tree=seed();const bridge=new DocumentBridge({getTree:()=>tree,save:next=>{tree=next;bridge.onMutation();},file:join(root,'task.html'),stop:()=>{}});const control=body=>bridge.control({expected_revision:tree.revision,job_id:bridge.jobId,...body});control({action:'offer'});control({action:'save'});control({action:'claim'});return{bridge,control,tree:()=>tree,root};}
 const part=(status,view,html,extra={})=>({source:{session_id:status.source.session_id,revision:status.source.revision,digest:status.source.digest,job_id:status.job_id},view,html,...extra});
 

@@ -4,7 +4,7 @@ Use this guide when `project-requirement-writer` is not installed. If it is avai
 
 ## Write from confirmed decisions
 
-- Keep user decisions, AI proposals and unresolved questions visibly distinct. Preserve original answers in their primary-root chapter once and link cross-topic dependencies.
+- Keep user decisions, AI proposals and unresolved questions visibly distinct. Read all selected option labels, including an exclusive “都不需要”, and preserve notes exactly. Rationale explains why a question was asked; recommendation is AI metadata. An unselected recommendation is never a confirmed requirement. Mark source-stale advice as expired rather than restoring it as a decision. Preserve original answers in their primary-root chapter once and link cross-topic dependencies.
 - Each root from `/document/status.source.chapters` gets the supplied anchor in design-view. A readable chapter title may summarize the question; IDs and source bindings must remain exact.
 - The overview states the goal, current position, next action and meaningful pending choices. Do not present a generated plan as human approval.
 - Use stable requirement IDs (`R1`…), work IDs (`W1`…) and criterion IDs (`AC1`…). Agree these IDs before writing independent views, so links do not drift.
@@ -30,4 +30,4 @@ python <skill>/scripts/read_task.py <task.html>
 
 The validator checks unique IDs, local links, requirement → criterion → work associations and status values. The extractor confirms collapsed/static body text is present. They do not establish business completeness or execute the proposed acceptance. When a browser is available, check narrow layout, tab switching, deep chapter anchors and offline reading. Preserve genuine pending decisions and report any unperformed display checks.
 
-Only after these checks succeed, post `ready` with the current revision/job. On failure, post a short actionable error and retain frozen answers for retry. An existing task page must be updated in place with its IDs and history preserved; do not replace it with a fresh template just to simplify assembly.
+Only after these checks succeed, post `ready` with the current expected_session_id, expected_revision and job_id. On failure, post a short actionable error and retain frozen answers for retry. An existing task page must be updated in place with its IDs and history preserved; do not replace it with a fresh template just to simplify assembly.
