@@ -58,6 +58,20 @@ test('missing follow-up rationale is rejected by the HTTP publish path without c
   assert.equal(response.status,400);assert.deepEqual(readFileSync(s.file),before);
 });
 
+test('optional chapter_id validates dependency roots and survives HTTP publication without altering answers',async t=>{
+ const roots=['a','b'].map(id=>node(id,{input:'text',options:[],status:'answered',answer:{option_ids:[],text:id+' 原答案'},chapter_id:id})),s=await service(t,tree(roots)),before=readFileSync(s.file);
+ for(const chapter_id of [null,'',' ','missing','follow','b']){
+  const response=await s.post('/round',{expected_revision:0,round:2,nodes:[node('follow',{round:2,depends_on:['a'],chapter_id})]});assert.equal(response.status,400);assert.deepEqual(readFileSync(s.file),before);
+ }
+ assert.throws(()=>validateTree(tree([node('a',{chapter_id:'b'}),node('b',{chapter_id:'b'})])),/chapter_id/,'a root must identify itself');
+ const legacy=tree([node('a',{input:'text',options:[],chapter_id:'a'})]);legacy.schema_version=1;delete legacy.nodes[0].rationale;assert.throws(()=>validateTree(legacy),/unknown node field/,'v1 has no new field');
+ assert.equal((await s.post('/round',{expected_revision:0,round:2,nodes:[node('follow',{round:2,depends_on:['a','b'],chapter_id:'a'})]})).status,200);
+ const current=await s.state();assert.equal(current.nodes[2].chapter_id,'a');assert.equal(current.nodes[2].answer,null);assert.deepEqual(current.nodes.slice(0,2),roots);
+ const context=await(await fetch(s.url+'/context')).json();assert.equal(context.decision_index[2].chapter_id,'a');
+ const doc=await(await fetch(s.url+'/document/status')).json();assert.deepEqual(doc.source.chapters.map(c=>c.node_ids),[['a','follow'],['b']]);
+ const beforeConflict=readFileSync(s.file);assert.equal((await s.post('/round',{expected_revision:0,round:3,nodes:[node('late',{round:3,depends_on:['a'],chapter_id:'a'})]})).status,409);assert.deepEqual(readFileSync(s.file),beforeConflict);
+});
+
 test('recommendation is source-bound by the service, never an answer, and expires after source changes or review',async t=>{
   const source=node('source',{input:'text',options:[],answer:{option_ids:[],text:'只能站内用，不发邮件。'},status:'answered'}),s=await service(t,tree([source]));
   const follow=node('follow',{round:2,depends_on:['source'],recommendation:{option_ids:['b'],reason:'根据已提交的站内使用边界建议站内通知。',source_ids:['source'],source_digest:'0'.repeat(64)}});
@@ -93,6 +107,23 @@ test('one-shot request has a bounded timeout and rejects nonlocal origins',async
   await assert.rejects(checkOnce({url:'https://example.com',sessionId:'id'}),/exact http/);
   const hung=createServer(()=>{});await new Promise(resolve=>hung.listen(0,'127.0.0.1',resolve));t.after(()=>{hung.closeAllConnections();hung.close();});
   const start=performance.now();await assert.rejects(checkOnce({url:'http://127.0.0.1:'+hung.address().port,sessionId:'id',timeoutMs:80}),/不可达/);assert.ok(performance.now()-start<700,'a nonresponsive server cannot leave a long command hanging');
+});
+
+test('only an identity-checked AI query renews liveness; GET polling and rejected receipts do not; restart clears it',async t=>{
+ const s=await service(t),bytes=readFileSync(s.file),progress=async url=>(await(await fetch(url+'/progress')).json()).ai;
+ for(const path of ['/state','/progress','/recovery','/document/status'])assert.equal((await fetch(s.url+path)).status,200);
+ assert.equal((await progress(s.url)).last_check_at,null);
+ await assert.rejects(checkOnce({url:s.url,sessionId:'wrong'}),/另一个访谈/);
+ for(const override of [{expected_session_id:'wrong'},{expected_revision:99},{expected_instance_id:'old'}]){
+  assert.equal((await s.post('/ai/check',{expected_revision:0,expected_instance_id:s.instance_id,...override})).status,409);assert.equal((await progress(s.url)).last_check_at,null);
+ }
+ const foreign=await fetch(s.url+'/ai/check',{method:'POST',headers:{'content-type':'application/json',origin:'https://foreign.invalid'},body:JSON.stringify({expected_session_id:'v2-regression',expected_revision:0,expected_instance_id:s.instance_id})});assert.equal(foreign.status,403);assert.equal((await progress(s.url)).last_check_at,null);
+ await checkOnce({url:s.url,sessionId:'v2-regression'});const first=await progress(s.url);assert.ok(first.last_check_at>0);assert.ok(first.seconds_since_last_check>=0);assert.equal(first.timeout_ms,30000);
+ await new Promise(resolve=>setTimeout(resolve,10));for(const path of ['/state','/progress','/document/status'])await fetch(s.url+path);assert.equal((await progress(s.url)).last_check_at,first.last_check_at);
+ await checkOnce({url:s.url,sessionId:'v2-regression'});assert.ok((await progress(s.url)).last_check_at>first.last_check_at);assert.deepEqual(readFileSync(s.file),bytes);
+ s.child.kill();await once(s.child,'exit');const restored=await s.start();assert.equal((await progress(restored.url)).last_check_at,null);assert.equal((await progress(restored.url)).seconds_since_last_check,null);assert.deepEqual(readFileSync(s.file),bytes);
+ assert.equal((await fetch(restored.url+'/ai/check',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expected_session_id:'v2-regression',expected_revision:0,expected_instance_id:s.instance_id})})).status,409);
+ await checkOnce({url:restored.url,sessionId:'v2-regression'});assert.ok((await progress(restored.url)).last_check_at>0);assert.deepEqual(readFileSync(s.file),bytes);
 });
 
 test('service loss recovers from the same tree through a detached short command; no new interview or answers',async t=>{

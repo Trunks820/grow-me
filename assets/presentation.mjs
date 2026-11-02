@@ -1,4 +1,8 @@
 // Only operational messages pass here. Interview answers always retain their original text.
+export function assistantConnection(ai,openedForMs){
+  if(!ai||ai.last_check_at===null||ai.seconds_since_last_check===null)return 'connecting';
+  return ai.seconds_since_last_check*1000>ai.timeout_ms&&openedForMs>ai.timeout_ms?'paused':'connected';
+}
 export function publicError(value,fallback='连接或生成暂时遇到问题，请重试。'){
   if(typeof value!=='string')return fallback;
   const text=value.trim();

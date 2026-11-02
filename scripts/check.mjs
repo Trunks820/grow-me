@@ -13,8 +13,9 @@ export async function checkOnce({url,sessionId,afterRevision,afterSequence,after
   url=localUrl(url);
   if(!sessionId)throw new CheckError('identity','--session is required; a port is not a session identity.');
   const signal=AbortSignal.timeout(timeoutMs),instances=[];
-  async function get(path){
-    let response;try{response=await fetch(url+path,{signal});}catch{throw new CheckError('offline','本机服务不可达；保留原文件，按原路径恢复服务。');}
+  async function get(path,options={}){
+    let response;try{response=await fetch(url+path,{...options,signal});}catch{throw new CheckError('offline','本机服务不可达；保留原文件，按原路径恢复服务。');}
+    if(response.status===409)throw new CheckError('changed','查询期间状态已变，请重新短查询。');
     if(!response.ok||!response.headers.get('content-type')?.includes('application/json'))throw new CheckError('protocol','服务响应异常；先核对地址，未继续写入。');
     instances.push(response.headers.get('x-grow-me-instance'));
     try{return await response.json();}catch{throw new CheckError('protocol','服务响应异常；未继续写入。');}
@@ -27,6 +28,9 @@ export async function checkOnce({url,sessionId,afterRevision,afterSequence,after
       doc.source.revision!==state.revision||progress.revision!==state.revision||recovery.revision!==state.revision||
       instances.some(id=>!id||id!==recovery.instance_id))throw new CheckError('changed','查询期间状态已变，请重新短查询。');
   const observed=Date.now(),submission=progress.last_submission?.revision===state.revision?progress.last_submission:null;
+  // Browser GET polling must never impersonate a live assistant. This receipt is memory-only.
+  const activity=await get('/ai/check',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expected_session_id:sessionId,expected_revision:state.revision,expected_instance_id:recovery.instance_id})});
+  if(activity.session_id!==sessionId||activity.revision!==state.revision||instances.at(-1)!==recovery.instance_id)throw new CheckError('changed','查询期间状态已变，请重新短查询。');
   return{status:state.schema_version===1?'legacy_read_only':state.status==='complete'?'document':progress.stage==='thinking'?'ready_for_ai':progress.stage==='review'?'review':'waiting_for_user',
     changed:afterRevision!==state.revision||afterSequence!==doc.sequence||afterInstance!==recovery.instance_id,
     session_id:sessionId,schema_version:state.schema_version,revision:state.revision,current_round:state.current_round,url,instance_id:recovery.instance_id,

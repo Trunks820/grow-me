@@ -38,11 +38,17 @@ async function main(){
   const args=process.argv.slice(2),value=name=>args[args.indexOf(name)+1];
   if(args.includes('--help')||!args.includes('--context')){console.log('node compose-document.mjs --context status.json --tree tree.json --parts <dir> [--preview] [--url http://127.0.0.1:PORT]\nEach JSON part: {source:{session_id,revision,digest,job_id},view:design|plan|acceptance|chapter,html,...}. Chapter parts also carry chapter_id and optional title. Outputs are atomic; --preview publishes readable chapters when --url is given. Final output still needs writer validation then action ready.');return;}
   const started=performance.now(),status=JSON.parse(readFileSync(value('--context'),'utf8')),tree=JSON.parse(readFileSync(value('--tree'),'utf8')),preview=args.includes('--preview');
-  if(args.includes('--url')){const response=await fetch(value('--url')+'/document/status');if(!response.ok)throw Error('无法核对当前生成任务');const current=await response.json();if(current.job_id!==status.job_id||current.phase!=='generating'||current.source.digest!==status.source.digest)throw Error('生成任务已过期，未写入文件');}
+  let current=null;
+  if(args.includes('--url')){const response=await fetch(value('--url')+'/document/status');if(!response.ok)throw Error('无法核对当前生成任务');current=await response.json();if(current.job_id!==status.job_id||current.phase!=='generating'||current.source.digest!==status.source.digest)throw Error('生成任务已过期，未写入文件');}
   const parts=readdirSync(value('--parts')).filter(n=>n.endsWith('.json')).map(n=>JSON.parse(readFileSync(resolve(value('--parts'),n),'utf8'))),result=composeDocument(status,parts,{preview});
   const file=status.source.document_file+(preview?'.preview.html':''),temp=file+'.'+process.pid+'.tmp';mkdirSync(dirname(file),{recursive:true});writeFileSync(temp,result.html,'utf8');
   try{if(preview){for(const id of result.ready_chapters)validateDocument(temp,tree,status.job_id,{partial:true,chapterId:id});}else validateDocument(temp,tree,status.job_id);renameSync(temp,file);}catch(error){throw Error('组装校验失败：'+error.message);}
-  if(args.includes('--url'))for(const id of preview?result.ready_chapters:[]){const response=await fetch(value('--url')+'/document/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'chapter',expected_session_id:status.source.session_id,expected_revision:status.source.revision,job_id:status.job_id,chapter_id:id})});if(!response.ok)throw Error('章节发布失败：'+response.status);}
-  console.log(JSON.stringify({file,preview,views:result.views,ready_chapters:result.ready_chapters,parts:parts.length,assembly_ms:Math.round(performance.now()-started)}));
+  const publishedBefore=new Set(current?.chapters.filter(c=>c.status==='ready').map(c=>c.id)),newlyPublished=[],warnings=[];
+  try{
+    if(args.includes('--url'))for(const id of preview?result.ready_chapters:[]){const response=await fetch(value('--url')+'/document/control',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'chapter',expected_session_id:status.source.session_id,expected_revision:status.source.revision,job_id:status.job_id,chapter_id:id})});if(!response.ok)throw Error('章节发布失败：'+response.status);current=await response.json();if(!publishedBefore.has(id))newlyPublished.push(id);}
+  }finally{
+    if(newlyPublished.length>=2){const warning=`警告：本次 --preview 一次新发布了 ${newlyPublished.length} 章（${newlyPublished.join('、')}）。必须每写完一章立即发布，再写下一章；不得攒多章一起发布。`;warnings.push(warning);console.error(warning);}
+  }
+  console.log(JSON.stringify({file,preview,views:result.views,ready_chapters:result.ready_chapters,newly_published_chapters:newlyPublished,chapter_timings:current?.chapters.map(({id,first_published_at})=>({id,first_published_at}))??[],chapter_timing_file:current?.chapter_timing_file??null,warnings,parts:parts.length,assembly_ms:Math.round(performance.now()-started)}));
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(error=>{console.error(error.message);process.exitCode=1;});

@@ -9,11 +9,13 @@ The machine-readable format is [tree.schema.json](tree.schema.json). The runtime
 | Level | Fields |
 |---|---|
 | Root | `schema_version: 2`, `session_id`, `topic`, `revision`, `current_round`, `status`, `nodes` |
-| Node | `id`, `question`, required `rationale`, optional `recommendation`, `input`, `options`, `answer`, `depends_on`, `status`, `round` |
+| Node | `id`, `question`, required `rationale`, optional `recommendation` / `chapter_id`, `input`, `options`, `answer`, `depends_on`, `status`, `round` |
 | Option | Stable `id`, visible `label`; multi_choice may have one `exclusive: true` option |
 | Answer | `option_ids: []` plus `text: ""`; preserves free-text whitespace, newlines and Unicode |
 
 Root status is `active` or `complete`. Node status is `pending` (待答), `answered` (已答), or `needs_review` (待复核). `input` is `single_choice`, `multi_choice` or `text`. Multi-choice answers select at least one known option; an exclusive “都不需要” must be selected alone. Empty selection is unanswered, never an implicit “none”. Text nodes have an empty options array; single-choice answers select exactly one known option and may include a text note. An unanswered node has `answer: null`. A node needing review retains its previous answer, including null if it had never been answered.
+
+`chapter_id` is optional v2 document metadata, naming a root question reachable through this question's dependencies; roots name themselves. New question authors supply it each round. Explicit values directly determine document membership, including a chosen root for a multi-dependency question; missing values fall back to the original primary-root projection without backfilling the file. It never changes parent branches, review dependencies or geometry. `/context` projects the resolved ID and `/document/status.source.chapters[].node_ids` supplies frozen membership. V1 schema and read-only behavior are unchanged.
 
 ## New questions and recommendations
 
@@ -47,6 +49,7 @@ The user can confirm an existing answer directly in the page with **仍然有效
 | GET | `/recovery` | Read-only session/schema/revision, process instance and original file paths; never included in clipboard reminder |
 | GET | `/guidance` | Source-bound recommendation freshness; no tree writes |
 | GET | `/wait?round=N` | Blocks until the whole round is answered or service timeout; JSON below |
+| POST | `/ai/check` | `{expected_revision, expected_instance_id}`; identity-bound AI query receipt in memory, returns current progress |
 | POST | `/submit` | `{round, expected_revision, answers:[{id,answer}]}` for every open question of the current round |
 | POST | `/round` | `{round, expected_revision, nodes:[...]}`; publishes the next round, preserving prior nodes |
 | POST | `/decision` | `{id, expected_revision, answer}`; revise or explicitly reconfirm one node |
@@ -60,6 +63,8 @@ Normal wait timeout returns HTTP 200 and `{status:"pending", round, revision, re
 Any unresolved `needs_review`, including an old node outside the requested round, holds `/wait` pending and blocks `/round`. After receiving an answer batch, the AI must reread `/context` before generating another round, fetching `/state` when an abridged earlier answer needs exact detail.
 
 ## Short queries, recovery and evidence
+
+AI liveness is transient: after checking `/state`, revision and `/recovery.instance_id`, `check.mjs` posts `/ai/check` with `expected_session_id`, `expected_revision` and `expected_instance_id`. A mismatch returns 409 without updating the receipt. It changes no interview data, file or revision. `/progress.ai` exposes `last_check_at`, `seconds_since_last_check` and `timeout_ms`; the first two are null until a valid receipt in this server process. Ordinary GETs never renew the receipt. See [runtime](runtime.md#ai-查询中断提示) for the 30-second threshold, initial-page grace and applicable waiting states.
 
 The old /wait and /document/wait endpoints remain available with their historical 25-second default, but assistants use one-shot scripts/check.mjs with a 3-second overall network deadline. Check /state identity first; read document/progress/recovery together and reject mixed session/revision/instance snapshots. The CLI prints compact state, not answers. Approximately 10 seconds between invocations is a starting default, not automatic chat wakeup or a speed guarantee.
 
@@ -83,14 +88,14 @@ Waiting loops a visual extension, without adding rounds/nodes or cumulative tree
 | GET | /document/status | phase, control sequence, offered revision, job, failure and source context derived from tree.json |
 | GET | /document/wait?after=S | Bounded current-conversation wait for a newer control sequence; pending is normal |
 | GET | /document | Source-validated standalone HTML; ?download=1 downloads the final file; ?chapter=ID reads an already validated chapter snapshot during generation |
-| GET | /progress | Transient waiting start, server clock, stage, actual round and completed round count; no tree writes |
+| GET | /progress | Transient waiting start, server clock, AI query age, stage, actual round and completed round count; no tree writes |
 | GET | /context | Bounded decision summary, exact latest answers, full dependency/status index and source revision/digest |
 
 Offer is valid only while the current tree revision is fully answered and review-free. A canonical mutation invalidates it. Human save uses the existing finish model to atomically freeze complete and increment revision once. The read-only preview remains alive. Claim enters generating; only source-valid output can become ready. progress accepts fixed stage names, never arbitrary stream text. chapter accepts a root chapter_id and validates the fixed <document_file>.preview.html sibling against the current source/job, all three views and a completed chapter in design-view (data-chapter-ready="true"). It freezes an immutable readable snapshot for that chapter; unpublished chapters and the final document stay unavailable. Retry clears snapshots and replaces the job. The UI labels unripe fruit “生成中”, and only opens source-matching ready chapters. Failure messages are short operational text, not raw protocol output. See [progressive writer handoff](progressive-writer.md). Failure/retry keeps the identical frozen tree and creates a fresh transient job. Closing the preview exits and releases the port. The original /finish still immediately closes an active interview.
 
 Configure an existing task file with --document; otherwise the default is outputs/task.html beside tree.json. This conversation applies project-requirement-writer and preserves its canonical three tabs. The main data-task-record includes data-source-session, data-source-revision, data-source-digest and data-source-job from the current document context. Consume the supplied digest directly; a different JSON serializer must not redefine it. The writer validates and atomically replaces the target before posting ready. A missing or mismatched file is never a generated document.
 
-Each root question defines one chapter and one fruit. The primary parent is the dependency with the latest round, tie-breaking by later original nodes order. Other dependencies remain available for review and cross-topic references. The same shared projection supplies chapter anchors to renderer and server; anchors use an injective UTF-16 encoding of the root ID. The primary-root chapter contains each source answer once and links related work and criteria. A task saved from an interview is not approval to implement it.
+Each root question defines one chapter and one fruit. The primary parent is the dependency with the latest round, tie-breaking by later original nodes order. Other dependencies remain available for review and cross-topic references. The same root IDs supply chapter anchors to renderer and server; anchors use an injective UTF-16 encoding of the root ID. Explicit chapter_id (or the legacy primary root when absent) places each source answer in one chapter and links related work and criteria. A task saved from an interview is not approval to implement it.
 
 On restart, complete tree data and a validated document restore read-only ready; an unfinished document can be resumed/retried by the same conversation. The local server does not run a model or wake an ended chat. Reconnect is connection recovery; AI continuation needs the original conversation to resume.
 

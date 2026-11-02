@@ -2,7 +2,7 @@
 import argparse,json,subprocess,os,time
 from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
-from browser_acceptance import Service,seed,node,request,no_overflow,document_fixture
+from browser_acceptance import Service,seed,node,request,no_overflow,document_fixture,ai_check
 
 BASE=Path(__file__).resolve().parents[1]
 def run(work):
@@ -18,6 +18,7 @@ def run(work):
             context.grant_permissions(['clipboard-read','clipboard-write'],origin=service.url)
             page=context.new_page();page.on('pageerror',lambda e:report['errors'].append(str(e)))
             try:
+                ai_check(service)
                 page.goto(service.url);page.wait_for_load_state('networkidle');expect(page.locator('#card .why')).to_contain_text('决定首版')
                 boxes=page.get_by_role('checkbox');expect(boxes).to_have_count(3)
                 for box in boxes.all():expect(box).not_to_be_checked()

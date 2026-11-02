@@ -1,11 +1,12 @@
 import {createDecisionTree} from './tree.mjs';
 import {primaryGraph,chapters,answerText} from './topics.mjs';
-import {publicError} from './presentation.mjs';
+import {publicError,assistantConnection} from './presentation.mjs';
 import {selectionValid} from './answers.mjs';
 
 const card=document.querySelector('#card'),dialog=document.querySelector('#node-dialog');
 const drafts=new Map(),working=new Map();
 let guidance={};
+let aiActivity=null,aiInstance=null,aiOpenedAt=performance.now(),assistantDisplay='inactive';
 let state,documentState={phase:'idle'},currentId=null,busy=false,waitingSince=null,documentSince=null,documentKey=null,stopped=false,returnFocus=null,rendering=false,renderFailed=false,refreshSequence=0,appliedRefresh=0,messageTimer;
 const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
 const message=(text,error=false)=>{const n=document.querySelector('#message');clearTimeout(messageTimer);n.textContent=text?publicError(text):'';n.setAttribute('role',error?'alert':'status');if(text)messageTimer=setTimeout(()=>{n.textContent='';},8000);};
@@ -17,6 +18,18 @@ const reviews=()=>state.nodes.filter(n=>n.status==='needs_review');
 const isWaiting=()=>state?.schema_version===2&&state.status==='active'&&state.nodes.every(n=>n.status==='answered');
 const allConfirmed=()=>Boolean(state?.nodes.length)&&state.nodes.every(n=>n.status==='answered'&&n.answer!==null);
 const documentMatches=()=>documentState.source?.session_id===state.session_id&&documentState.source?.revision===state.revision;
+function assistantStatus(){
+  const offered=documentState.phase==='offered'&&documentState.offered_revision===state?.revision;
+  const queued=state?.status==='complete'&&documentMatches()&&['requested','generating'].includes(documentState.phase)&&documentState.stage==='queued';
+  if(state?.schema_version!==2||!(isWaiting()&&!offered||queued))return 'inactive';
+  return assistantConnection(aiActivity,performance.now()-aiOpenedAt);
+}
+function waitingHeader(title,progress){
+  if(['paused','connecting'].includes(assistantDisplay)){
+    const paused=assistantDisplay==='paused',notice=el('p',paused?'AI 对话好像已暂停。请回到聊天窗口发一句「继续」，或点「复制提醒」粘贴过去。你的答案已保存，不会丢。':'请回到聊天窗口让 AI 继续，或点「复制提醒」粘贴过去。你的答案已保存。','ai-wait-notice');notice.id='ai-wait-notice';
+    card.append(el('h2',paused?'等待 AI 对话续接':'等待 AI 对话连接','q'),notice);
+  }else card.append(el('h2',title,'q'),el('p',progress,'growth-status'));
+}
 
 async function post(path,body){
   if(stopped)throw Error('请先恢复原访谈，再继续操作。');
@@ -39,7 +52,7 @@ function updateMeta(){
   document.querySelector('#meta').textContent=`${roundLabel} · ${state.topic}\n已确认 ${done} / ${state.nodes.length}${drafts.size?` · 本轮未提交 ${drafts.size}`:''}${reviews().length?` · 待复核 ${reviews().length}`:''}`;
   document.querySelector('#meta').dataset.revision=String(state.revision);card.dataset.revision=String(state.revision);
 }
-function updateTree(){const finished=documentState.phase==='offered'&&documentState.offered_revision===state.revision;view.update(state,{drafts,currentId,waiting:isWaiting()&&!finished,finished,fruitStates:new Map(chapters(state).map(c=>[c.id,documentMatches()?(documentState.chapters?.find(x=>x.id===c.id)?.status??(documentState.phase==='ready'?'ready':'generating')):'generating']))});updateMeta();}
+function updateTree(){const finished=documentState.phase==='offered'&&documentState.offered_revision===state.revision;view.update(state,{drafts,currentId,waiting:isWaiting()&&!finished&&assistantDisplay==='connected',finished,fruitStates:new Map(chapters(state).map(c=>[c.id,documentMatches()?(documentState.chapters?.find(x=>x.id===c.id)?.status??(documentState.phase==='ready'?'ready':'generating')):'generating']))});updateMeta();}
 function chooseCurrent(){
   const review=reviews();
   if(review.length){if(!review.some(n=>n.id===currentId&&ready(n)))currentId=(review.find(ready)||review[0]).id;return state.nodes.find(n=>n.id===currentId);}
@@ -102,8 +115,8 @@ function renderSummary(){
   }),true);submit.disabled=busy;card.append(submit);
 }
 function renderWaiting(){
-  card.append(el('p',`第 ${state.current_round} 轮 · 已确认`,'k'),el('h2','正在想下一轮的问题…','q'),el('p','生长中','growth-status'),elapsedLine(waitingSince),el('p','可以点已答的花回看或修改。','w'));
-  const late=el('p','还在想，可以先回看已答的花','w');late.id='long-wait';late.hidden=waitingSince===null||performance.now()-waitingSince<=60000;card.append(late);
+  card.append(el('p',`第 ${state.current_round} 轮 · 已确认`,'k'));waitingHeader('正在想下一轮的问题…','生长中');card.append(elapsedLine(waitingSince),el('p','可以点已答的花回看或修改。','w'));
+  if(assistantDisplay==='connected'){const late=el('p','还在想，可以先回看已答的花','w');late.id='long-wait';late.hidden=waitingSince===null||performance.now()-waitingSince<=60000;card.append(late);}
   if(documentState.phase==='offered'&&documentState.offered_revision===state.revision){card.replaceChildren(el('p','需求已问清','k'),el('h2','这一棵树，可以结果了。','q'),el('p','保存后这次访谈只读，接下来生成方案、开发清单与验收标准。','w'),button('保存并生成任务文档',()=>docAction('save'),true));}
 }
 function elapsedLine(since){const line=el('p','', 'wait-elapsed');line.id='wait-elapsed';line.setAttribute('aria-live','off');line.dataset.since=String(since??performance.now());line.textContent=`已等待 ${Math.max(0,Math.floor((performance.now()-Number(line.dataset.since))/1000))} 秒`;return line;}
@@ -128,11 +141,12 @@ function renderDocument(){
   }else{
     const stage={queued:'等待当前对话接手',drafting:'正在整理三个视图',design:'正在整理设计方案',plan:'正在整理开发清单',acceptance:'正在整理验收标准',checking:'正在校验章节、引用和来源'}[documentState.stage]??'正在整理三个视图';
     const done=documentState.chapters?.filter(c=>c.status==='ready').length??0;
-    card.append(el('h2','正在生成任务文档…','q'),el('p','生长中 · '+stage,'growth-status'),elapsedLine(documentSince),el('p',`已完成 ${done} / ${chapters(state).length} 章；完成的章节可以先读。`,'w'),chapterList(),el('p','答案已保存。若当前对话已中断，请回到原对话说“继续”。','w'));
+    waitingHeader('正在生成任务文档…','生长中 · '+stage);card.append(elapsedLine(documentSince),el('p',`已完成 ${done} / ${chapters(state).length} 章；完成的章节可以先读。`,'w'),chapterList());if(assistantDisplay==='inactive'||assistantDisplay==='connected')card.append(el('p','答案已保存。若当前对话已中断，请回到原对话说“继续”。','w'));
   }
 }
 function render(){
   if(!state)return;rendering=true;renderFailed=false;try{const hadText=document.activeElement?.matches('textarea,input');
+  assistantDisplay=assistantStatus();const reminder=document.querySelector('#copy-reminder');reminder.classList.toggle('needs-attention',assistantDisplay==='paused');if(assistantDisplay==='paused')reminder.setAttribute('aria-describedby','ai-wait-notice');else reminder.removeAttribute('aria-describedby');
   card.replaceChildren();
   if(state.schema_version===1){currentId=null;card.append(el('p','v1 历史访谈 · 只读','k'),el('h2','原来的回答，仍在这棵树上。','q'),el('p','可以点击花朵回看；未完成的旧访谈请用原 alpha 版本继续。不会自动迁移或补写历史理由。','w'));if(documentState.phase==='ready'){const a=el('a','打开原任务文档','doc-link');a.href='/document';a.target='_blank';a.rel='noopener';card.append(a);}card.append(button('结束预览',()=>act(async()=>{await post('/document/control',{action:'close',expected_revision:state.revision});stopped=true;document.querySelector('#connection').textContent='只读预览已结束；原访谈文件保持不变。';})));}
   else if(state.status==='complete'){currentId=null;if(allConfirmed())renderDocument();else card.append(el('p','状态待核对','k'),el('h2','保存状态与答案不一致。','q'),el('p',`当前只有 ${state.nodes.filter(n=>n.status==='answered').length} / ${state.nodes.length} 个问题已确认；请回到原对话核对 tree.json。`,'w'));}
@@ -179,11 +193,12 @@ document.addEventListener('keydown',event=>{
 async function refresh(force=false){
   const sequence=++refreshSequence;
   const [response,docResponse,progressResponse,adviceResponse]=await Promise.all([fetch('/state',{cache:'no-store'}),fetch('/document/status',{cache:'no-store'}),fetch('/progress',{cache:'no-store'}),fetch('/guidance',{cache:'no-store'})]);
-  if(!response.ok||!docResponse.ok||!adviceResponse.ok)throw Error('读取本机状态失败');
+  if(!response.ok||!docResponse.ok||!progressResponse.ok||!adviceResponse.ok)throw Error('读取本机状态失败');
   const next=await response.json(),doc=await docResponse.json(),progress=progressResponse.ok?await progressResponse.json():null,advice=await adviceResponse.json();
   if(stopped)return;
   if(state&&next.session_id!==state.session_id){stopped=true;card.querySelectorAll('input,button,textarea').forEach(n=>n.disabled=true);document.querySelector('#connection').textContent='此地址已换成另一个访谈。请复制提醒，恢复原会话后继续。';return;}
-  if(advice.session_id!==next.session_id||advice.revision!==next.revision||doc.source?.session_id!==next.session_id||doc.source?.revision!==next.revision)throw Error('状态正在变更，稍后重读');
+  const instance=response.headers.get('x-grow-me-instance');
+  if(!instance||[docResponse,progressResponse,adviceResponse].some(r=>r.headers.get('x-grow-me-instance')!==instance)||progress?.session_id!==next.session_id||progress.revision!==next.revision||advice.session_id!==next.session_id||advice.revision!==next.revision||doc.source?.session_id!==next.session_id||doc.source?.revision!==next.revision)throw Error('状态正在变更，稍后重读');
   if(sequence<appliedRefresh||(state&&next.revision<state.revision))return;
   appliedRefresh=sequence;
   const changed=!state||next.revision!==state.revision,docChanged=JSON.stringify({...doc,server_now:0})!==JSON.stringify({...documentState,server_now:0});
@@ -197,11 +212,12 @@ async function refresh(force=false){
     state=next;
   }
   documentState=doc;guidance=advice.recommendations;document.querySelector('#copy-reminder').disabled=false;
+  if(instance!==aiInstance){aiInstance=instance;aiOpenedAt=performance.now();}aiActivity=progress.ai??null;
   if(isWaiting()){if(waitingSince===null)waitingSince=performance.now()-(progress?.session_id===state.session_id&&progress.revision===state.revision&&progress.started_at!==null?Math.max(0,progress.server_now-progress.started_at):0);}else waitingSince=null;
   const key=['requested','generating'].includes(doc.phase)?state.session_id+'/'+doc.job_id:null;
   if(key!==documentKey){documentKey=key;documentSince=key?performance.now()-Math.max(0,(doc.server_now??Date.now())-(doc.started_at??Date.now())):null;}
   document.querySelector('#connection').textContent=state.schema_version===1?'v1 历史访谈 · 只读':state.status==='complete'?(allConfirmed()?'已保存 · 本机文档预览':'保存状态与答案待核对'):'已连接本机';
-  if(changed||docChanged||force||renderFailed)render();
+  if(changed||docChanged||assistantDisplay!==assistantStatus()||force||renderFailed)render();
 }
 async function poll(){if(stopped)return;try{await refresh();}catch(error){if(!stopped){document.querySelector('#connection').textContent='连接已断开，正在重连；已提交答案仍在本机。';if(!state)message('暂时读不到问题，将自动重连。',true);}}if(!stopped)setTimeout(poll,1000);}
 document.querySelector('#copy-reminder').addEventListener('click',async()=>{

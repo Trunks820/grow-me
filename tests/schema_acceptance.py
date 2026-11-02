@@ -27,4 +27,13 @@ for change in ['no_reason','blank_reason','single_many','text_options','empty_mu
 old=copy.deepcopy(sample);old['schema_version']=1
 for node in old['nodes']:del node['rationale']
 validator.validate(old);count+=1
+annotated=copy.deepcopy(sample)
+for node in annotated['nodes']:
+    if not node['depends_on']:node['chapter_id']=node['id']
+validator.validate(annotated);count+=1
+for value in [None,'',' \n ',42,[]]:
+    candidate=copy.deepcopy(sample);candidate['nodes'][0]['chapter_id']=value
+    assert list(validator.iter_errors(candidate)),repr(value);count+=1
+old['nodes'][0]['chapter_id']=old['nodes'][0]['id']
+assert list(validator.iter_errors(old)),'v1 must not accept chapter_id';count+=1
 print(json.dumps({'status':'passed','schema_cases':count,'note':'Runtime/API tests additionally enforce ID relationships, dependency cycles, source binding and exclusive selections.'}))

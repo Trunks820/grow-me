@@ -2,9 +2,9 @@
 
 把逐轮澄清搬到本机网页：回答一题，树上开一朵花；追问沿着依赖长出枝条；修改上游答案，相关问题变成需要复核的黄叶；保存后，果子通向文档里的主题章节。
 
-**V2 试用版 · v0.2.0-alpha.1 · MIT 开源。** 使用 v2 访谈协议。旧 v1 访谈在此版本中只读，继续答题请使用 [V1 试用版](https://github.com/Trunks820/grow-me/releases/tag/v0.1.0-alpha.1)；不会自动迁移。
+**V2 试用版 · v0.2.0-alpha.2 · MIT 开源。** 使用 v2 访谈协议。旧 v1 访谈在此版本中只读，继续答题请使用 [V1 试用版](https://github.com/Trunks820/grow-me/releases/tag/v0.1.0-alpha.1)；不会自动迁移。
 
-[下载 V2 ZIP](https://github.com/Trunks820/grow-me/releases/download/v0.2.0-alpha.1/grow-me-v0.2.0-alpha.1.zip) · [版本说明](https://github.com/Trunks820/grow-me/releases/tag/v0.2.0-alpha.1) · [SHA-256 校验](https://github.com/Trunks820/grow-me/releases/download/v0.2.0-alpha.1/grow-me-v0.2.0-alpha.1.sha256)
+[下载 V2 ZIP](https://github.com/Trunks820/grow-me/releases/download/v0.2.0-alpha.2/grow-me-v0.2.0-alpha.2.zip) · [版本说明](https://github.com/Trunks820/grow-me/releases/tag/v0.2.0-alpha.2) · [SHA-256 校验](https://github.com/Trunks820/grow-me/releases/download/v0.2.0-alpha.2/grow-me-v0.2.0-alpha.2.sha256)
 
 界面与接口回归已通过，跨助手真实闭环和模型生成速度仍在验收中。欢迎带着真实需求试用并反馈等待时间。
 
@@ -54,6 +54,8 @@ git clone https://github.com/Trunks820/grow-me.git "$HOME/.claude/skills/grow-me
 
 本机服务不自带模型、不需要在仓库配置模型 API Key。**当前 AI 对话负责出题和写文档，网页负责答题与展示。** 让原对话保持运行；对话中断后，点击网页「复制提醒」并粘回原对话；只含会话编号、轮次和服务地址。服务退出但 tree.json 仍在时，助手按原文件重启，不重新开访谈。答案会交给所用 AI 助手处理，本机服务本身不调用外部模型。
 
+如果 AI 那边停了，回聊天窗口发一句「继续」即可续上，已保存的答案不会丢；页面在等待 AI 时会提示你使用「复制提醒」。
+
 已安装 `project-requirement-writer` 时可沿用它；没有安装也可使用仓库内置的 [writer 指引](references/writer-guide.md)、HTML 模板与校验工具，完成同样的三视图交付。
 
 ### 先看看长什么样
@@ -73,8 +75,10 @@ npm run demo
 - `tree.json` 是唯一访谈数据源，所有写操作保留 revision 冲突检测。
 - 依赖追问从父枝曲线长出；同一份数据生成相同树形。
 - 修改答案后，所有下游依赖进入黄叶复核，逐题确认。
-- 等待时持续显示「生长中」与秒数；超过 60 秒提示可回看，断线自动重连。
+- 等待时显示秒数；AI 查询正常时超过 60 秒提示可回看，超过 30 秒没有 AI 查询则提示回聊天续接并高亮「复制提醒」。从未连接显示等待连接；服务断线自动重连。
 - 每条根话题对应一颗果子；章节完成并通过来源校验后即可先读，其余章节标记「生成中」。
+- 每章写完立即发布，再写下一章；记录每章首次发布时间，批量发布多章会明确警告。
+- 保存前先预读 writer 规则与模板；新题标明所属章节，旧数据缺该字段仍可组装，正文依据用户保存后冻结的答案生成。
 - 文档包含「设计方案／开发清单／验收标准」三个视图，最终保存后访谈只读，文档失败可重试。
 - 桌面与窄屏布局、键盘操作、生长回放和减少动态效果支持。
 

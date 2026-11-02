@@ -109,6 +109,10 @@ const server = http.createServer(async (req, res) => {
       if (req.headers.origin && req.headers.origin !== allowedOrigin) throw new InputError('foreign origin', 403);
       const data = await body(req);
       if (tree.schema_version === 2 && data.expected_session_id !== tree.session_id) throw new InputError('session changed; read /state and verify identity before writing', 409);
+      if (url.pathname === '/ai/check') {
+        if (data.expected_session_id !== tree.session_id || data.expected_revision !== tree.revision || data.expected_instance_id !== instanceId) throw new InputError('query identity or revision changed; repeat the short check', 409);
+        return json(res, 200, progress.checkIn());
+      }
       if (!(url.pathname === '/document/control' && data.action === 'close')) assertWritable(tree);
       if (url.pathname === '/document/control') return json(res, 200, documents.control(data));
       if (url.pathname === '/submit') save(submitRound(tree, data), 'submit');

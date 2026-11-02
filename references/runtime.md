@@ -4,11 +4,19 @@
 
 ## 短查询
 
-`check.mjs --url <origin> --session <UUID>` 是一次性命令。先 GET /state 验证身份，随后读取文档、进度与恢复元数据，所有网络请求共用最多 3 秒期限。输出仅有修订、轮次、文档阶段与计时，不打印答案。下一次带上前次的 `--after-revision R --after-sequence S --after-instance ID`，识别无变更和服务重启；无需缓存另一份决定文件。
+`check.mjs --url <origin> --session <UUID>` 是一次性命令。先 GET /state 验证身份，随后读取文档、进度与恢复元数据；核对 session、revision、instance 一致后 POST /ai/check，登记最近一次 AI 查询。所有网络请求共用最多 3 秒期限。输出仅有修订、轮次、文档阶段与计时，不打印答案。下一次带上前次的 `--after-revision R --after-sequence S --after-instance ID`，识别无变更和服务重启；无需缓存另一份决定文件。
 
-保持当前任务活跃，约每 10 秒重新调用一次；使用宿主短等待，不把一个 shell 命令永久挂住。无变更不是失败；状态变化时读 /context，必要时读 /state 获取精确原文。发现 review 就等用户逐条复核；所有已答时生成追问或 offer。候选读取时捕获修订，提交时不可替换成更晚修订。
+用户未点最终保存前，不得结束本轮回复；每次短查询后必须继续下一次，约每 10 秒重新调用。使用宿主短等待，不把一个 shell 命令永久挂住。无变更不是失败；状态变化时读 /context，必要时读 /state 获取精确原文。发现 review 就等用户逐条复核；所有已答时生成追问或 offer。候选读取时捕获修订，提交时不可替换成更晚修订。
 
 没有长期轮次总数。用户本地确认开花不算提交。进入 offered 后继续短查询；保存后 requested 才能 claim。文档阶段、原文使用和重试细节见 progressive-writer.md。服务仍保留旧 /wait 与 /document/wait 兼容接口，新流程不依赖它们。
+
+## AI 查询中断提示
+
+常量 `scripts/progress.mjs` 的 `AI_CHECK_TIMEOUT_MS = 30_000` 控制提示阈值。`/progress.ai` 返回 `last_check_at`（Unix 毫秒）、`seconds_since_last_check` 和 `timeout_ms`；从未收到查询时前两项为 null。记录只在当前服务内存中，不写 tree.json、不递增 revision。普通 /state、/progress 和网页轮询不算 AI 查询，避免页面替已经停止的助手续命；手动读 /state 也不能替代 check.mjs。
+
+只在等待 AI 出题或等待 AI 接手文档的 queued 阶段，超过 30 秒没有查询时提示“AI 对话好像已暂停”，说明发“继续”或复制提醒，并高亮按钮；查询恢复后自动回到正常等待。等待用户答题、保存确认以及已 claim 的文档生成不套用此提示。它根据查询间隔提醒续接，不声称能读取模型的内部运行状态。
+
+页面首次成功同步或检测到服务实例变化后有同样的 30 秒宽限，防止刚打开页面就被旧时间戳误报；使用服务器报告的时间差，避免两端时钟偏差。服务重启清空查询记录；从未来查过时始终显示“等待 AI 对话连接”，不显示暂停。即使宿主仍提前收尾，页面也会提示用户回聊天续接；不会自动唤醒已结束的 AI 对话。提醒只保证已提交／保存的答案，本地未提交草稿仍遵循原规则。
 
 ## 恢复原会话
 

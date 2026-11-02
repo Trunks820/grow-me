@@ -32,6 +32,9 @@ class Service:
     def close(self):
         if self.child.poll() is None:self.child.terminate();self.child.wait(timeout=5)
 
+def ai_check(service):
+    return json.loads(subprocess.check_output(['node',str(BASE/'scripts/check.mjs'),'--url',service.url,'--session',service.state()['session_id']],text=True,encoding='utf-8'))
+
 def capture(page,out,name):
     page.screenshot(path=str(out/(name+'.png')),full_page=True)
 
@@ -52,6 +55,7 @@ def run_suite(work,scenario='all',layout_fixture='v7'):
         if scenario in ('all','interactions'):
             service=Service(work/'draft-submit',seed([node('choice','界面视觉以哪一版为准？',options=[{'id':'v7','label':'按 v7 的纸底与墨枝'},{'id':'other','label':'另一版'}]),node('text','本轮答案什么时候保存？'),node('extra','补充一个交互要求？')]))
             try:
+                ai_check(service)
                 page=browser.new_page(viewport={'width':1440,'height':900});page.on('pageerror',lambda e:report['errors'].append(str(e)))
                 page.clock.install();page.goto(service.url);page.wait_for_load_state('networkidle');expect(page.get_by_role('heading',name='界面视觉以哪一版为准？',exact=True)).to_be_visible();page.wait_for_timeout(1600)
                 assert page.evaluate('getComputedStyle(document.body).backgroundColor')=='rgb(239, 233, 220)'
@@ -82,6 +86,7 @@ def run_suite(work,scenario='all',layout_fixture='v7'):
             old=[node('A',deps=[],answered=True),node('B',deps=['A'],answered=True),node('C',deps=['B'],answered=True),node('D',answered=True),node('F',deps=['A','D'],answered=True)]
             service=Service(work/'review',seed(old+[node('X','无关的新题',round=2)],round=2))
             try:
+                ai_check(service)
                 page=browser.new_page(viewport={'width':1440,'height':900});page.on('pageerror',lambda e:report['errors'].append(str(e)))
                 page.goto(service.url);page.wait_for_load_state('networkidle');page.wait_for_timeout(1400)
                 page.get_by_label('无关的新题',exact=True).fill('这份无关草稿应该保留')
@@ -172,10 +177,10 @@ def run_actor(args):
                 if args.check_cards:assert page.locator('#card').is_visible() and page.locator('link[rel=stylesheet]').count()==1
             browser.close();return {'status':'passed','kind':'capture-only'}
         capture(page,out,'round-1');navigation=page.evaluate('performance.timeOrigin');page.get_by_label('先做网页版',exact=True).check();page.get_by_role('button',name='确认并下一题',exact=True).click();page.get_by_role('textbox').fill(raw);page.get_by_role('button',name='确认并下一题',exact=True).click();time.sleep(args.submit_delay)
-        report['submitted_at_epoch']=time.time();page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible();print('BROWSER_SUBMITTED_ROUND_1',flush=True)
+        report['submitted_at_epoch']=time.time();page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.locator('#wait-elapsed')).to_be_visible();print('BROWSER_SUBMITTED_ROUND_1',flush=True)
         expect(page.locator('#meta')).to_contain_text('第 2 轮',timeout=300000);assert navigation==page.evaluate('performance.timeOrigin');assert nonce in page.locator('#card').inner_text() and '3000' in page.locator('#card').inner_text()
         report['round2_visible_at_epoch']=time.time();report['submit_to_next_question_seconds']=report['round2_visible_at_epoch']-report['submitted_at_epoch'];capture(page,out,'new-branches')
-        page.get_by_role('textbox').fill('确认，预算保持 3000；第二轮回传成功。');page.get_by_role('button',name='确认并下一题',exact=True).click();page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible();assert not report['errors'],report['errors'];report['checks']={'same_page':True,'unseen_feature_word_used_by_current_agent':True,'second_round_submitted':True};report['status']='passed';browser.close()
+        page.get_by_role('textbox').fill('确认，预算保持 3000；第二轮回传成功。');page.get_by_role('button',name='确认并下一题',exact=True).click();page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.locator('#wait-elapsed')).to_be_visible();assert not report['errors'],report['errors'];report['checks']={'same_page':True,'unseen_feature_word_used_by_current_agent':True,'second_round_submitted':True};report['status']='passed';browser.close()
     (out/'browser-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8');return report
 
 def main():

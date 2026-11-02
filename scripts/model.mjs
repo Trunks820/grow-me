@@ -26,7 +26,7 @@ export function validateTree(tree) {
   requireValue(tree.nodes.every(n => n && typeof n === 'object') && unique(tree.nodes.map(n => n.id)), 'duplicate/invalid node id');
   const nodes = new Map(tree.nodes.map(n => [n.id, n]));
   for (const n of tree.nodes) {
-    requireValue(keys(n, ['id','question','input','options','answer','depends_on','status','round',...(modern?['rationale','recommendation']:[])]), 'unknown node field');
+    requireValue(keys(n, ['id','question','input','options','answer','depends_on','status','round',...(modern?['rationale','recommendation','chapter_id']:[])]), 'unknown node field');
     requireValue(nonempty(n.id) && nonempty(n.question) && (modern?['text','single_choice','multi_choice']:['text','single_choice']).includes(n.input), 'invalid node');
     if (modern) requireValue(nonempty(n.rationale), 'every question needs a nonblank rationale explaining its decision');
     requireValue(Number.isInteger(n.round) && n.round > 0 && n.round <= tree.current_round, 'invalid node round');
@@ -55,6 +55,9 @@ export function validateTree(tree) {
     active.delete(id); visited.add(id);
   }
   for (const id of nodes.keys()) visit(id);
+  const roots=new Map();
+  function rootIds(id){if(!roots.has(id)){const node=nodes.get(id);roots.set(id,new Set(node.depends_on.length?node.depends_on.flatMap(dep=>[...rootIds(dep)]):[id]));}return roots.get(id);}
+  for(const n of tree.nodes)if(n.chapter_id!==undefined)requireValue(nonempty(n.chapter_id)&&rootIds(n.id).has(n.chapter_id),'chapter_id must name a dependency root (a root question names itself)');
   requireValue(tree.nodes.some(n => n.round === tree.current_round), 'current round has no nodes');
   return tree;
 }

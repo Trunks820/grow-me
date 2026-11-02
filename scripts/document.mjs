@@ -1,4 +1,4 @@
-import {readFileSync,existsSync,realpathSync,statSync} from 'node:fs';
+import {readFileSync,existsSync,realpathSync,statSync,appendFileSync,mkdirSync} from 'node:fs';
 import {createHash,randomUUID} from 'node:crypto';
 import {dirname,resolve,relative,isAbsolute,extname,basename} from 'node:path';
 import {InputError,finish} from './model.mjs';
@@ -44,13 +44,14 @@ export function validateDocument(file,tree,jobId=null,{chapterId=null,partial=fa
 export class DocumentBridge{
   constructor({getTree,save,file,stop}){
     Object.assign(this,{getTree,save,file,stop});this.waiters=new Set();this.sequence=0;this.phase='idle';this.offeredRevision=null;this.jobId=null;this.error=null;this.startedAt=null;this.updatedAt=Date.now();this.stage='queued';this.readable=new Map();
+    this.publishedAt=new Map();this.timingFile=file+'.chapter-timings.jsonl';
     const tree=getTree();
     if(tree.status==='complete'&&tree.nodes.every(n=>n.status==='answered')){
       try{validateDocument(file,tree);this.phase='ready';}catch{this.phase='failed';this.error='答案已保存；请在原对话恢复文档生成，或点击重试。';}
     }
   }
-  context(){const tree=this.getTree();return{session_id:tree.session_id,revision:tree.revision,digest:fingerprint(tree),chapters:chapters(tree).map(({id,anchor,title})=>({id,anchor,title})),document_file:this.file};}
-  status(){return{phase:this.phase,sequence:this.sequence,offered_revision:this.offeredRevision,job_id:this.jobId,error:this.error===null?null:publicError(this.error,'文档生成遇到问题，请重试。'),started_at:this.startedAt,updated_at:this.updatedAt,server_now:Date.now(),stage:this.phase==='ready'?'complete':this.stage,chapters:chapters(this.getTree()).map(c=>({id:c.id,anchor:c.anchor,title:c.title,status:this.phase==='ready'||this.readable.has(c.id)?'ready':this.phase==='failed'?'failed':'generating'})),source:this.context()};}
+  context(){const tree=this.getTree();return{session_id:tree.session_id,revision:tree.revision,digest:fingerprint(tree),chapters:chapters(tree).map(({id,anchor,title,nodes})=>({id,anchor,title,node_ids:nodes.map(n=>n.id)})),document_file:this.file};}
+  status(){return{phase:this.phase,sequence:this.sequence,offered_revision:this.offeredRevision,job_id:this.jobId,error:this.error===null?null:publicError(this.error,'文档生成遇到问题，请重试。'),started_at:this.startedAt,updated_at:this.updatedAt,server_now:Date.now(),stage:this.phase==='ready'?'complete':this.stage,chapter_timing_file:this.timingFile,chapters:chapters(this.getTree()).map(c=>({id:c.id,anchor:c.anchor,title:c.title,first_published_at:this.publishedAt.get(c.id)??null,status:this.phase==='ready'||this.readable.has(c.id)?'ready':this.phase==='failed'?'failed':'generating'})),source:this.context()};}
   changed(){this.sequence++;this.updatedAt=Date.now();for(const waiter of [...this.waiters])if(this.sequence>waiter.after)waiter.done(this.status());}
   onMutation(){if(this.getTree().status==='active'){this.phase='idle';this.offeredRevision=null;this.error=null;this.changed();}}
   control(body){
@@ -62,10 +63,10 @@ export class DocumentBridge{
       case'save':
         requireValue(this.phase==='offered'&&this.offeredRevision===tree.revision,'AI 尚未针对当前版本确认收尾');
         requireValue(tree.status==='active'&&tree.nodes.every(n=>n.status==='answered'),'先处理所有未答与黄叶');
-        this.save(finish(tree,body));this.phase='requested';this.offeredRevision=null;this.jobId=randomUUID();this.error=null;this.startedAt=Date.now();this.stage='queued';this.readable.clear();break;
+        this.save(finish(tree,body));this.phase='requested';this.offeredRevision=null;this.jobId=randomUUID();this.error=null;this.startedAt=Date.now();this.stage='queued';this.readable.clear();this.publishedAt.clear();break;
       case'retry':
         requireValue(tree.status==='complete'&&tree.nodes.every(n=>n.status==='answered')&&this.phase==='failed','当前不能重试');
-        this.phase='requested';this.jobId=randomUUID();this.error=null;this.startedAt=Date.now();this.stage='queued';this.readable.clear();break;
+        this.phase='requested';this.jobId=randomUUID();this.error=null;this.startedAt=Date.now();this.stage='queued';this.readable.clear();this.publishedAt.clear();break;
       case'claim':
         requireValue(tree.status==='complete'&&this.phase==='requested'&&body.job_id===this.jobId,'生成请求已过期');this.phase='generating';this.stage='drafting';break;
       case'progress':
@@ -74,6 +75,11 @@ export class DocumentBridge{
       case'chapter':{
         requireValue(this.phase==='generating'&&body.job_id===this.jobId,'生成请求已过期');
         const content=validateDocument(this.file+'.preview.html',tree,this.jobId,{partial:true,chapterId:body.chapter_id});
+        if(!this.publishedAt.has(body.chapter_id)){
+          const at=Date.now();mkdirSync(dirname(this.timingFile),{recursive:true});
+          appendFileSync(this.timingFile,JSON.stringify({event:'chapter_first_published',session_id:tree.session_id,revision:tree.revision,digest:fingerprint(tree),job_id:this.jobId,chapter_id:body.chapter_id,first_published_at:at,first_published_at_iso:new Date(at).toISOString(),generation_started_at:this.startedAt,elapsed_ms:at-this.startedAt})+'\n','utf8');
+          this.publishedAt.set(body.chapter_id,at);
+        }
         this.readable.set(body.chapter_id,content);break;
       }
       case'ready':

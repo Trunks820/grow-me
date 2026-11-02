@@ -1,9 +1,10 @@
 import{test}from'node:test';import assert from'node:assert/strict';
-import{spawn}from'node:child_process';import{once}from'node:events';
-import{mkdtempSync,writeFileSync,readFileSync,mkdirSync,rmSync,realpathSync}from'node:fs';
+import{spawn,execFile}from'node:child_process';import{once}from'node:events';import{promisify}from'node:util';
+import{mkdtempSync,writeFileSync,readFileSync,mkdirSync,rmSync,realpathSync,existsSync}from'node:fs';
 import{tmpdir}from'node:os';import{join,dirname,basename}from'node:path';import{fileURLToPath}from'node:url';
 import{createServer}from'node:net';import{fingerprint}from'../scripts/document.mjs';import{chapters}from'../assets/topics.mjs';
 const server=fileURLToPath(new URL('../scripts/server.mjs',import.meta.url));
+const run=promisify(execFile),composer=fileURLToPath(new URL('../scripts/compose-document.mjs',import.meta.url));
 const answer=(id,deps=[])=>({id,question:id+' 的真实问题',rationale:'受控测试：核对文档来源和复核边界。',input:'text',options:[],answer:{option_ids:[],text:'原答案'},depends_on:deps,status:'answered',round:1});
 const tree=()=>({schema_version:2,session_id:'document-fixture',topic:'文档交接测试',revision:0,current_round:1,status:'active',nodes:[answer('a'),answer('b'),answer('joint',['a','b'])]});
 const post=async(url,route,data,extra={})=>{const tree=await(await fetch(url+'/state')).json();return fetch(url+route,{method:'POST',headers:{'content-type':'application/json',...extra},body:JSON.stringify({expected_session_id:tree.session_id,...data})});};
@@ -14,6 +15,16 @@ async function start(t,seed=tree(),root=null,port=0){
  t.after(async()=>{if(child.exitCode===null){child.kill();await once(child,'exit');}if(own){const p=realpathSync(root);assert.equal(dirname(p).toLowerCase(),realpathSync(tmpdir()).toLowerCase());assert.ok(basename(p).startsWith('grill-document-test-'));rmSync(p,{recursive:true,force:true});}});return{...ready,root,child};
 }
 const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');
+async function writer(t){
+ const s=await start(t),control=data=>post(s.url,'/document/control',data);
+ await control({action:'offer',expected_revision:0});
+ const requested=await(await control({action:'save',expected_revision:0})).json();
+ const status=await(await control({action:'claim',expected_revision:1,job_id:requested.job_id})).json();
+ const context=join(s.root,'status.json'),parts=join(s.root,'parts');mkdirSync(parts);writeFileSync(context,JSON.stringify(status));
+ return{...s,status,control,put(id){writeFileSync(join(parts,id+'.json'),JSON.stringify({source:{...status.source,job_id:status.job_id},view:'chapter',chapter_id:id,html:'<p>已完成的 '+id+' 章正文</p>'}));},
+  async preview(online=true){const args=[composer,'--context',context,'--tree',s.state_file,'--parts',parts,'--preview'];if(online)args.push('--url',s.url);const result=await run(process.execPath,args,{timeout:15000,windowsHide:true});return{...result,data:JSON.parse(result.stdout)};},
+  timings(){return readFileSync(status.chapter_timing_file,'utf8').trim().split('\n').map(line=>JSON.parse(line));}};
+}
 function documentFixture(tree,job){return`<!doctype html><html lang="zh-CN"><main data-task-record data-revision="test-r1" data-source-session="${esc(tree.session_id)}" data-source-revision="${tree.revision}" data-source-digest="${fingerprint(tree)}" data-source-job="${job}"><section id="design-view">${chapters(tree).map(c=>`<article id="${c.anchor}">${esc(c.title)}</article>`).join('')}<article id="R1" data-kind="requirement">测试需求</article><p data-node-id="R1">原文含 id="AC1"</p><p data-node-id="R1">引用同一源题</p></section><section id="plan-view"><article id="W1" data-kind="work">测试开发项</article></section><section id="acceptance-view"><article id="AC1" data-kind="criterion">测试验收项</article></section></main></html>`;}
 test('document offer is revision-bound; edits invalidate it and review blocks saving',async t=>{
  const s=await start(t);const control=data=>post(s.url,'/document/control',data);
@@ -47,4 +58,26 @@ test('freeze once; failed generation retries same data; stale jobs rejected; val
  const exited=once(s.child,'exit');await control({action:'close',expected_revision:1});assert.equal((await exited)[0],0);
  const listener=createServer();await new Promise((resolve,reject)=>listener.once('error',reject).listen(s.port,'127.0.0.1',resolve));await new Promise(resolve=>listener.close(resolve));
  const restored=await start(t,null,s.root,s.port);assert.equal((await(await fetch(restored.url+'/document/status')).json()).phase,'ready');
+});
+
+test('preview records increasing first publication times, preserves them on repeat, and does not time offline assembly',async t=>{
+ const s=await writer(t),frozen=readFileSync(s.state_file);s.put('a');
+ const offline=await s.preview(false);assert.deepEqual(offline.data.newly_published_chapters,[]);assert.equal(offline.data.chapter_timing_file,null);assert.equal(existsSync(s.status.chapter_timing_file),false);
+ const first=await s.preview();assert.equal(first.stderr,'');assert.deepEqual(first.data.newly_published_chapters,['a']);assert.deepEqual(first.data.warnings,[]);
+ const firstTime=first.data.chapter_timings.find(c=>c.id==='a').first_published_at;assert.ok(firstTime>=s.status.started_at);assert.equal(first.data.chapter_timings.find(c=>c.id==='b').first_published_at,null);
+ assert.equal((await fetch(s.url+'/document?chapter=a')).status,200);assert.equal((await fetch(s.url+'/document?chapter=b')).status,409);
+ await new Promise(resolve=>setTimeout(resolve,10));s.put('b');const second=await s.preview();
+ assert.equal(second.stderr,'');assert.deepEqual(second.data.newly_published_chapters,['b']);assert.deepEqual(second.data.warnings,[]);assert.equal(second.data.chapter_timings[0].first_published_at,firstTime);assert.ok(second.data.chapter_timings[1].first_published_at>firstTime);
+ const again=await s.preview();assert.deepEqual(again.data.newly_published_chapters,[]);assert.deepEqual(again.data.chapter_timings,second.data.chapter_timings);assert.equal(again.stderr,'');
+ const entries=s.timings();assert.equal(entries.length,2);assert.deepEqual(entries.map(e=>e.chapter_id),['a','b']);
+ for(const e of entries){assert.equal(e.event,'chapter_first_published');assert.equal(e.session_id,s.status.source.session_id);assert.equal(e.revision,s.status.source.revision);assert.equal(e.digest,s.status.source.digest);assert.equal(e.job_id,s.status.job_id);assert.equal(e.first_published_at_iso,new Date(e.first_published_at).toISOString());assert.equal(e.elapsed_ms,e.first_published_at-s.status.started_at);assert.equal(e.generation_started_at,s.status.started_at);}
+ assert.deepEqual(readFileSync(s.state_file),frozen,'publication timing never changes interview data');
+ const exited=once(s.child,'exit');await s.control({action:'close',expected_revision:1});await exited;assert.deepEqual(s.timings(),entries,'publication evidence survives service shutdown');
+});
+
+test('one preview publishing multiple new chapters warns clearly without blocking publication',async t=>{
+ const s=await writer(t);s.put('a');s.put('b');const result=await s.preview();
+ assert.deepEqual(result.data.newly_published_chapters,['a','b']);assert.equal(result.data.warnings.length,1);assert.match(result.stderr,/警告.*一次新发布了 2 章/);assert.match(result.stderr,/不得攒多章一起发布/);assert.ok(result.stderr.includes(result.data.warnings[0]));
+ assert.equal(s.timings().length,2);for(const id of ['a','b'])assert.equal((await fetch(s.url+'/document?chapter='+id)).status,200);
+ const repeat=await s.preview();assert.deepEqual(repeat.data.warnings,[]);assert.equal(repeat.stderr,'');assert.equal(s.timings().length,2);
 });

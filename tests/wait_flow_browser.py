@@ -4,7 +4,8 @@ Virtual waits are UI evidence, never model latency measurements.
 import argparse, json, subprocess, time, re
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
-from browser_acceptance import Service, seed, node, request, no_overflow
+from browser_acceptance import Service, seed, node, request, no_overflow, ai_check
+from ai_presence_browser import run as run_ai_presence
 
 BASE=Path(__file__).resolve().parents[1]
 
@@ -12,6 +13,7 @@ def run(work):
     work.mkdir(parents=True,exist_ok=True)
     report={'kind':'controlled browser/API regression, virtual waits; no model speed claim','checks':{},'errors':[],'screenshots':[]}
     service=Service(work/'runtime',seed([node('A','这次的使用目标？'),node('B','必须保留什么？')]))
+    ai_check(service)
     def post(path,data):
         code,result=request(service.url,path,data);assert code==200,(code,result);return result
     def control(action,**kwargs):return post('/document/control',{'action':action,'expected_revision':service.state()['revision'],**kwargs})
@@ -78,6 +80,7 @@ def run(work):
             report['checks']['all_original_answers_unchanged_on_document_retry']=service.state()['nodes'][0]['answer']['text']=='黄叶复核之后也要持续显示等待'
             report['checks']['bad_stream_at_initial_load_keeps_card_and_recovers']=True
             browser.close()
+        report['ai_presence']=run_ai_presence(work/'ai-presence')
         assert not report['errors'],report['errors'];report['status']='passed'
     except Exception as error:
         report['status']='failed';report['failure']=str(error);raise
