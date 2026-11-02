@@ -1,13 +1,10 @@
-import {resolve} from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {isMain} from './entry.mjs';
+import {readFileSync,writeFileSync,renameSync,existsSync} from 'node:fs';
+import {randomUUID} from 'node:crypto';
 import {startService} from './start.mjs';
-
-class CheckError extends Error{constructor(kind,message){super(message);this.kind=kind;}}
-export function localUrl(value){
-  const url=new URL(value);
-  if(url.protocol!=='http:'||url.hostname!=='127.0.0.1'||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw new CheckError('identity','Use the exact http://127.0.0.1:<port> service origin.');
-  return url.origin;
-}
+import {CheckError,localUrl} from './runtime-client.mjs';
+import {startHeartbeat,stopHeartbeat} from './heartbeat.mjs';
+export {localUrl} from './runtime-client.mjs';
 
 export async function checkOnce({url,sessionId,afterRevision,afterSequence,afterInstance,timeoutMs=3000}){
   url=localUrl(url);
@@ -27,26 +24,41 @@ export async function checkOnce({url,sessionId,afterRevision,afterSequence,after
   if(doc.source?.session_id!==sessionId||progress.session_id!==sessionId||recovery.session_id!==sessionId||
       doc.source.revision!==state.revision||progress.revision!==state.revision||recovery.revision!==state.revision||
       instances.some(id=>!id||id!==recovery.instance_id))throw new CheckError('changed','查询期间状态已变，请重新短查询。');
+  const cursorFile=recovery.state_file+'.cursor.json';
+  let cursor=null;
+  if(existsSync(cursorFile)){
+    try{cursor=JSON.parse(readFileSync(cursorFile,'utf8'));}catch{throw new CheckError('cursor','本地游标损坏；先核对原会话，不自动跳过提交。');}
+    if(cursor.session_id!==sessionId||!Number.isSafeInteger(cursor.sequence)||cursor.sequence<0)throw new CheckError('cursor','本地游标身份不匹配。');
+  }
+  const sequence=afterSequence??cursor?.sequence??0;
   const observed=Date.now(),submission=progress.last_submission?.revision===state.revision?progress.last_submission:null;
-  // Browser GET polling must never impersonate a live assistant. This receipt is memory-only.
-  const activity=await get('/ai/check',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expected_session_id:sessionId,expected_revision:state.revision,expected_instance_id:recovery.instance_id})});
+  const activity=await get('/ai/check',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expected_session_id:sessionId,expected_revision:state.revision,expected_instance_id:recovery.instance_id,after_sequence:sequence,after_revision:afterRevision})});
   if(activity.session_id!==sessionId||activity.revision!==state.revision||instances.at(-1)!==recovery.instance_id)throw new CheckError('changed','查询期间状态已变，请重新短查询。');
-  return{status:state.schema_version===1?'legacy_read_only':state.status==='complete'?'document':progress.stage==='thinking'?'ready_for_ai':progress.stage==='review'?'review':'waiting_for_user',
-    changed:afterRevision!==state.revision||afterSequence!==doc.sequence||afterInstance!==recovery.instance_id,
+  const next={session_id:sessionId,revision:state.revision,sequence:activity.sequence,instance:recovery.instance_id};
+  // Concurrent short checks may repeat an event but must never move the cursor backwards.
+  if(existsSync(cursorFile)){const latest=JSON.parse(readFileSync(cursorFile,'utf8'));if(latest.session_id===sessionId&&latest.sequence>next.sequence)throw new CheckError('changed','另一短查询已更新游标，请重新查询。');}
+  const temp=cursorFile+'.'+randomUUID()+'.tmp';writeFileSync(temp,JSON.stringify(next)+'\n','utf8');renameSync(temp,cursorFile);
+  return{status:state.schema_version===1?'legacy_read_only':state.status==='complete'?'document':activity.stage==='waiting_for_save'?'waiting_for_save':activity.stage==='thinking'?'ready_for_ai':activity.stage==='review'?'review':'waiting_for_user',
+    changed:activity.events.length>0,events:activity.events.map(({kind,sequence,revision,round,at})=>({kind,sequence,revision,round,at})),sequence:activity.sequence,
+    instance_changed:Boolean((afterInstance??cursor?.instance)&&(afterInstance??cursor?.instance)!==recovery.instance_id),cursor_file:cursorFile,
     session_id:sessionId,schema_version:state.schema_version,revision:state.revision,current_round:state.current_round,url,instance_id:recovery.instance_id,
     document:{phase:doc.phase,sequence:doc.sequence,job_id:doc.job_id,stage:doc.stage,ready_chapters:doc.chapters.filter(c=>c.status==='ready').length},
-    timing:{observed_at:observed,submission_at:submission?.at??null,discovery_delay_ms:submission?Math.max(0,observed-submission.at):null,
-      submission_kind:submission?.cause??null,note:submission?'First observation after a new submission is the discovery measurement.':'No in-memory submission timestamp; never invent one after a restart.'}};
+    timing:{observed_at:observed,submission_at:activity.stage==='waiting_for_save'?null:submission?.at??null,discovery_delay_ms:activity.discovery_delay_ms,
+      submission_kind:activity.stage==='waiting_for_save'?null:submission?.cause??null,timing_file:recovery.timing_file,note:'Discovery is recorded once per user submission; waiting_for_save does not accrue delay.'}};
 }
 
-if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+if(isMain(import.meta.url)){
   const args=process.argv.slice(2),arg=(name,fallback)=>{const i=args.indexOf(name);return i<0?fallback:args[i+1];};
-  if(args.includes('--help'))console.log('node scripts/check.mjs --url <origin> --session <id> [--after-revision R --after-sequence S --after-instance ID] [--timeout-ms 3000]\nOne short check; no answers are printed. For an offline service: add --restart --state <original-tree.json> --document <original-task.html>.');
+  if(args.includes('--help'))console.log('node scripts/check.mjs --url <origin> --session <id> [--heartbeat | --heartbeat-stop <id>] [--owner-pid PID] [--after-revision R --after-sequence S --after-instance ID] [--timeout-ms 3000]\nOne short check with a persistent local cursor; no answers are printed. Heartbeat is a detached 10-second metadata-only pulse (15-minute lease). For an offline service: add --restart --state <original-tree.json> --document <original-task.html>.');
   else try{
     const number=name=>{const value=arg(name);if(value===undefined)return undefined;const n=Number(value);if(!Number.isSafeInteger(n)||n<0)throw Error('Invalid '+name);return n;};
     const options={url:arg('--url'),sessionId:arg('--session'),afterRevision:number('--after-revision'),afterSequence:number('--after-sequence'),afterInstance:arg('--after-instance'),timeoutMs:number('--timeout-ms')??3000};
     if(options.timeoutMs<10||options.timeoutMs>3000)throw Error('timeout-ms must be 10..3000');
-    try{console.log(JSON.stringify(await checkOnce(options)));}
+    try{
+      if(args.includes('--heartbeat'))console.log(JSON.stringify(await startHeartbeat(options,{ownerPid:number('--owner-pid')})));
+      else if(args.includes('--heartbeat-stop'))console.log(JSON.stringify(await stopHeartbeat(options,arg('--heartbeat-stop'))));
+      else console.log(JSON.stringify(await checkOnce(options)));
+    }
     catch(error){
       if(error.kind!=='offline'||!args.includes('--restart'))throw error;
       if(!arg('--state')||!arg('--document'))throw new CheckError('recovery','恢复需要原 tree.json 和文档路径；从原启动回执取得，不能创建新访谈。');

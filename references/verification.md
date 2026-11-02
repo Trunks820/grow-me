@@ -45,3 +45,17 @@ cat outputs/task.html.chapter-timings.jsonl
 ```
 
 检查每章写完后立即 preview，再写下一章；旧章节加一章不警告，一次新发布两章以上必须看到警告但命令成功。检查旧 v2 无 chapter_id 仍能组装，显式字段被直接采用，树形不变。预读只涉及规则／模板，内容与代码入口须核对保存后的冻结答案。自动化只验证这些流程与记录机制，实际提速由用户的 Claude Code 真实运行判定。
+
+## 运行计时日志与自动游标
+
+`/recovery.timing_file` 指向 `<tree.json>.runtime-timings.jsonl`；只保存事件元数据，不保存答案。每行有 event、Unix 毫秒 at、ISO at_iso、session_id、instance_id，以及相关 revision。`user_event` 有独立 sequence；check.mjs 把处理到的 revision/sequence/instance 写入 `<tree.json>.cursor.json`。AI 活跃状态仍只在内存，重启不从日志恢复“在线”。
+
+- `heartbeat_start/end`：后台工作起止；end 的 reason 区分主动停止、会话结束、过期观察。强杀后仅能知道 last_pulse_at，不能据此编造实际退出时刻。
+- `pause_shown/pause_cleared`：页面实际展示／收起提示，含 page_id；没有打开页面就没有此事件。`ai_resumed` 表示 check 或心跳在超过阈值后恢复，含 source 和 silence_ms。
+- `code_read_start/end`：work.mjs 包裹的每次命令，按 operation_id 配对；含 elapsed_ms、exit_code。宿主绕过入口的读取不可观测，未配对项标为中断。
+- `submission_discovered`：首次发现用户提交的 discovery_delay_ms；重复检查、AI 发布、waiting_for_save 不累加。与提交到新题的总等待分别报告，避免把轮询发现延迟算成模型生成耗时。
+- `chapter_first_published`：每章首次发布，含 job_id、chapter_id、first_published_at、elapsed_ms。既有 `<document>.chapter-timings.jsonl` 与 `/document/status.chapters[].first_published_at` 保留；重新发布不重置。
+
+Windows 查看：`Get-Content -LiteralPath '<tree.json>.runtime-timings.jsonl' | ConvertFrom-Json | Format-Table at_iso,event,sequence,chapter_id,elapsed_ms`。macOS/Linux 可逐行 `cat` 该文件，或用 Python 读取筛选 event。计时文件不能当成用户答案数据源。
+
+新增回归覆盖：symlink/junction CLI 输出、游标连续调用和实例恢复、仅用户事件、waiting_for_save、心跳不消费提交、心跳恢复页面、冻结树原话转义／多选与章节归属、代码读取起止。受控测试不证明 Claude Code 实际变快；真实跨助手用时仍由用户复测。

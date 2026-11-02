@@ -4,9 +4,10 @@ import { dirname, resolve } from 'node:path';
 import {randomUUID} from 'node:crypto';
 import { InputError, assertWritable, validateTree, submitRound, editDecision, reopenDecision, publishRound, finish, roundResult } from './model.mjs';
 import { DocumentBridge } from './document.mjs';
-import { InterviewProgress } from './progress.mjs';
+import { InterviewProgress, AI_CHECK_TIMEOUT_MS } from './progress.mjs';
 import { interviewContext } from './context.mjs';
 import {recommendationView} from './recommendations.mjs';
+import {RuntimeLog} from './runtime-log.mjs';
 
 const arg = (key, fallback) => { const i = process.argv.indexOf(key); return i < 0 ? fallback : process.argv[i + 1]; };
 if (!arg('--state')) { console.error('Usage: node server.mjs --state <tree.json> [--port 0] [--wait-ms 25000]'); process.exit(1); }
@@ -22,7 +23,9 @@ const waiters = new Set();
 const instanceId = randomUUID();
 const appVersion = JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
 let documents;
-const progress=new InterviewProgress(()=>tree);
+const runtimeLog=new RuntimeLog(stateFile+'.runtime-timings.jsonl',tree.session_id,instanceId);
+const progress=new InterviewProgress(()=>tree,{log:runtimeLog,getPhase:()=>documents?.phase});
+const heartbeatSweep=setInterval(()=>progress.sweep(),1000);heartbeatSweep.unref();
 function save(next, cause = null) {
   validateTree(next); mkdirSync(dirname(stateFile), { recursive: true });
   const temp = `${stateFile}.${process.pid}.tmp`;
@@ -46,12 +49,13 @@ async function body(req) {
 }
 function stop() {
   if (closing) return; closing = true;
+  progress.close();clearInterval(heartbeatSweep);
   documents?.closeWaiters();
   for (const waiter of [...waiters]) waiter.done({ status: 'closed', round: waiter.round, revision: tree.revision });
   server.close(); server.closeIdleConnections();
   setTimeout(() => server.closeAllConnections(), 1000).unref();
 }
-documents = new DocumentBridge({ getTree: () => tree, save, file: documentFile, stop });
+documents = new DocumentBridge({ getTree: () => tree, save, file: documentFile, stop,onEvent:(event,detail)=>runtimeLog.append(event,detail) });
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://127.0.0.1');
@@ -93,7 +97,7 @@ const server = http.createServer(async (req, res) => {
       recommendations:Object.fromEntries(tree.nodes.filter(n=>n.recommendation).map(n=>[n.id,recommendationView(tree,n)]))});
     if (req.method === 'GET' && url.pathname === '/recovery') return json(res, 200, {session_id:tree.session_id,schema_version:tree.schema_version,
       revision:tree.revision,current_round:tree.current_round,instance_id:instanceId,app_version:appVersion,read_only:tree.schema_version===1,
-      state_file:stateFile,document_file:documentFile});
+      state_file:stateFile,document_file:documentFile,timing_file:runtimeLog.file,document_phase:documents.phase,heartbeat_ids:[...progress.heartbeats.keys()]});
     if (req.method === 'GET' && url.pathname === '/context') return json(res, 200, interviewContext(tree));
     if (req.method === 'GET' && url.pathname === '/wait') {
       const round = Number(url.searchParams.get('round'));
@@ -111,13 +115,37 @@ const server = http.createServer(async (req, res) => {
       if (tree.schema_version === 2 && data.expected_session_id !== tree.session_id) throw new InputError('session changed; read /state and verify identity before writing', 409);
       if (url.pathname === '/ai/check') {
         if (data.expected_session_id !== tree.session_id || data.expected_revision !== tree.revision || data.expected_instance_id !== instanceId) throw new InputError('query identity or revision changed; repeat the short check', 409);
-        return json(res, 200, progress.checkIn());
+        for(const key of ['after_sequence','after_revision'])if(data[key]!==undefined&&(!Number.isSafeInteger(data[key])||data[key]<0))throw new InputError('invalid event cursor',400);
+        return json(res, 200, progress.checkIn({afterSequence:data.after_sequence??0,afterRevision:data.after_revision}));
+      }
+      if (['/ai/heartbeat','/ai/telemetry','/ai/work'].includes(url.pathname)) {
+        if(data.expected_session_id!==tree.session_id||data.expected_revision!==tree.revision||data.expected_instance_id!==instanceId)throw new InputError('runtime identity changed; repeat with current metadata',409);
+        if(url.pathname==='/ai/heartbeat'){
+          if(typeof data.heartbeat_id!=='string'||!/^[a-zA-Z0-9-]{1,80}$/.test(data.heartbeat_id)||!['pulse','stop'].includes(data.action??'pulse'))throw new InputError('invalid heartbeat',400);
+          const ended=closing||['ready','closed'].includes(documents.phase)||tree.schema_version===1;
+          if(ended)progress.endHeartbeat(data.heartbeat_id,'session_finished');
+          const active=!ended&&progress.heartbeat(data.heartbeat_id,data.action);
+          return json(res,200,{session_id:tree.session_id,revision:tree.revision,instance_id:instanceId,active});
+        }
+        if(url.pathname==='/ai/telemetry'){
+          if(!['pause_shown','pause_cleared'].includes(data.event)||typeof data.page_id!=='string'||data.page_id.length>80)throw new InputError('invalid UI timing',400);
+          const age=progress.status().ai.seconds_since_last_check,eligible=progress.status().stage==='thinking'||documents.stage==='queued'&&['requested','generating'].includes(documents.phase);
+          if(data.event==='pause_shown'&&(!eligible||age===null||age*1000<=AI_CHECK_TIMEOUT_MS||data.last_activity_at!==progress.lastAiCheckAt))return json(res,200,{recorded:false});
+          runtimeLog.append(data.event,{revision:tree.revision,page_id:data.page_id,seconds_without_ai:age});return json(res,200,{recorded:true});
+        }
+        if(typeof data.operation_id!=='string'||!/^[a-zA-Z0-9-]{1,80}$/.test(data.operation_id)||!['start','end'].includes(data.action))throw new InputError('invalid work timing',400);
+        if(data.action==='start'){
+          if(tree.status!=='active'||!tree.nodes.some(n=>n.round===tree.current_round&&n.status==='pending')||tree.nodes.some(n=>n.status==='needs_review')||data.final_round!==true)throw new InputError('code reading belongs to the final-round user-answer window',409);
+          if(progress.work.has(data.operation_id))throw new InputError('work already started',409);
+          progress.work.set(data.operation_id,Date.now());runtimeLog.append('code_read_start',{revision:tree.revision,operation_id:data.operation_id});
+        }else{const started=progress.work.get(data.operation_id);if(started===undefined)throw new InputError('unknown work operation',409);runtimeLog.append('code_read_end',{revision:tree.revision,operation_id:data.operation_id,elapsed_ms:Date.now()-started,exit_code:Number.isInteger(data.exit_code)?data.exit_code:null});progress.work.delete(data.operation_id);}
+        return json(res,200,{ok:true});
       }
       if (!(url.pathname === '/document/control' && data.action === 'close')) assertWritable(tree);
-      if (url.pathname === '/document/control') return json(res, 200, documents.control(data));
+      if (url.pathname === '/document/control') {const result=documents.control(data);if(['save','retry'].includes(data.action))progress.userEvent(data.action);if(['ready','close'].includes(data.action))progress.close();return json(res,200,result);}
       if (url.pathname === '/submit') save(submitRound(tree, data), 'submit');
       else if (url.pathname === '/decision') save(editDecision(tree, data), 'review');
-      else if (url.pathname === '/reopen') save(reopenDecision(tree, data));
+      else if (url.pathname === '/reopen') save(reopenDecision(tree, data),'reopen');
       else if (url.pathname === '/round') save(publishRound(tree, data));
       else if (url.pathname === '/finish') {
         save(finish(tree, data)); json(res, 200, { status: 'complete', revision: tree.revision });

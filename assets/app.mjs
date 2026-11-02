@@ -6,7 +6,9 @@ import {selectionValid} from './answers.mjs';
 const card=document.querySelector('#card'),dialog=document.querySelector('#node-dialog');
 const drafts=new Map(),working=new Map();
 let guidance={};
-let aiActivity=null,aiInstance=null,aiOpenedAt=performance.now(),assistantDisplay='inactive';
+let aiActivity=null,aiInstance=null,aiOpenedAt=performance.now(),aiObservedAt=performance.now(),assistantDisplay='inactive',reportedPause=false;
+const pageId=crypto.randomUUID();
+const pauseText=()=>`已 ${Math.max(0,Math.floor((aiActivity?.seconds_since_last_check??0)+(performance.now()-aiObservedAt)/1000))} 秒没收到 AI 回应，回聊天窗口发\"继续\"`;
 let state,documentState={phase:'idle'},currentId=null,busy=false,waitingSince=null,documentSince=null,documentKey=null,stopped=false,returnFocus=null,rendering=false,renderFailed=false,refreshSequence=0,appliedRefresh=0,messageTimer;
 const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
 const message=(text,error=false)=>{const n=document.querySelector('#message');clearTimeout(messageTimer);n.textContent=text?publicError(text):'';n.setAttribute('role',error?'alert':'status');if(text)messageTimer=setTimeout(()=>{n.textContent='';},8000);};
@@ -26,8 +28,8 @@ function assistantStatus(){
 }
 function waitingHeader(title,progress){
   if(['paused','connecting'].includes(assistantDisplay)){
-    const paused=assistantDisplay==='paused',notice=el('p',paused?'AI 对话好像已暂停。请回到聊天窗口发一句「继续」，或点「复制提醒」粘贴过去。你的答案已保存，不会丢。':'请回到聊天窗口让 AI 继续，或点「复制提醒」粘贴过去。你的答案已保存。','ai-wait-notice');notice.id='ai-wait-notice';
-    card.append(el('h2',paused?'等待 AI 对话续接':'等待 AI 对话连接','q'),notice);
+    const paused=assistantDisplay==='paused',notice=el('p',paused?pauseText():'请回到聊天窗口让 AI 继续，或点「复制提醒」粘贴过去。你的答案已保存。','ai-wait-notice');notice.id='ai-wait-notice';
+    card.append(el('h2',paused?'等待 AI 对话续接':'等待 AI 对话连接','q'),notice);if(paused)card.append(el('p','也可以点「复制提醒」粘贴过去。你的答案已保存，不会丢。','w'));
   }else card.append(el('h2',title,'q'),el('p',progress,'growth-status'));
 }
 
@@ -69,22 +71,24 @@ function inputs(n){
   const value=working.get(n.id)??drafts.get(n.id)??n.answer??{option_ids:[],text:''};
   const form=el('form',undefined,'question-form');let read;
   if(n.input!=='text'){
-    const multiple=n.input==='multi_choice',advice=guidance[n.id];
+    const multiple=n.input==='multi_choice',advice=guidance[n.id];let recommendation;
     if(advice){
-      const info=el('div',undefined,'recommendation-info');
+      const info=el('details',undefined,'recommendation-info');recommendation=info;info.append(el('summary','查看推荐（可选）'));
       if(advice.stale)info.append(el('p','推荐依据已变／待复核，旧推荐已隐藏。','w'));
       else{
-        info.append(el('p','AI 建议：'+advice.reason,'w'));
+        info.append(el('p','AI 建议，不是你的决定','recommendation-label'),el('p',advice.reason.replace(/^AI 建议[，,]不是你的决定[：:，,。\s]*/,''),'w'));
+        const choices=el('ul',undefined,'recommended-options');for(const option of n.options.filter(o=>advice.option_ids.includes(o.id)))choices.append(el('li',option.label));info.append(choices);
         for(const source of advice.sources){const line=el('p',undefined,'recommendation-source');line.append(el('span',`根据你第 ${source.round} 轮说的“${source.answer}”，不对请改。`),button('回看依据',event=>openNode(source.id,event?.currentTarget)));info.append(line);}
       }
       form.append(info);
     }
     const group=el('fieldset',undefined,'choice-group'),legend=el('legend',multiple?'选择一项或多项':'选择一项','sr-only');group.append(legend);
     n.options.forEach((o,i)=>{const label=el('label',undefined,'option'),input=document.createElement('input');input.type=multiple?'checkbox':'radio';input.name='answer';input.value=o.id;input.checked=value.option_ids.includes(o.id);input.dataset.exclusive=String(Boolean(o.exclusive));const copy=el('span',o.label,'option-copy');
-      if(advice&&!advice.stale&&advice.option_ids.includes(o.id))copy.append(el('span','推荐','recommendation-badge'));
+      if(advice&&!advice.stale&&advice.option_ids.includes(o.id)){const badge=el('span','推荐','recommendation-badge');badge.hidden=true;copy.append(badge);}
       if(o.exclusive)copy.append(el('span','与其他选项互斥','exclusive-hint'));
       label.append(input,copy);group.append(label);input.dataset.shortcut=String(i+1);
     });
+    recommendation?.addEventListener('toggle',()=>{for(const badge of group.querySelectorAll('.recommendation-badge'))badge.hidden=!recommendation.open;});
     group.addEventListener('change',event=>{const input=event.target;if(!multiple||!input.checked)return;for(const other of group.querySelectorAll('input'))if(other!==input&&(input.dataset.exclusive==='true'||other.dataset.exclusive==='true'))other.checked=false;});
     const notes=el('details',undefined,'notes'),summary=el('summary','补充说明（可选）'),label=el('label','补充说明（可选）','sr-only'),area=el('textarea',undefined,'field');area.id='answer-note';label.htmlFor=area.id;area.value=value.text;notes.open=Boolean(value.text);notes.append(summary,label,area);form.append(group,notes);
     read=()=>({option_ids:[...group.querySelectorAll('input:checked')].map(n=>n.value),text:area.value});
@@ -153,12 +157,14 @@ function render(){
   else{
     const n=chooseCurrent();
     if(n){const roundNodes=state.nodes.filter(x=>x.round===n.round);card.append(el('p',`第 ${n.round} 轮 · 本轮第 ${roundNodes.indexOf(n)+1} 题，共 ${roundNodes.length} 题${n.status==='needs_review'?' · 需复核':''}`,'k'));sourceLine(n);card.append(el('h2',n.question,'q'));
-      card.append(el('p','为什么问：'+n.rationale,'why'));
+      const decision=n.rationale.match(/^[\s\S]*?[。！？.!?](?:\s|$)?/)?.[0]??n.rationale;
+      card.append(el('p','决定什么：'+decision.trim(),'why'));const reason=el('details',undefined,'question-reason');reason.append(el('summary','为什么问'),el('p',n.rationale,'w'));card.append(reason);
       if(n.status==='needs_review')card.append(el('p','本题或其上游已重新打开。请确认旧答案是否仍然有效。','review-note'));
       inputs(n);
     }else if(openQuestions().length)renderSummary();
     else renderWaiting();
   }
+  if(reportedPause!==(assistantDisplay==='paused')){reportedPause=assistantDisplay==='paused';post('/ai/telemetry',{event:reportedPause?'pause_shown':'pause_cleared',page_id:pageId,last_activity_at:aiActivity?.last_activity_at,expected_revision:state.revision,expected_instance_id:aiInstance}).catch(()=>{});}
   card.dataset.currentId=currentId??'';updateTree();if(hadText&&!busy)card.querySelector('input:checked,textarea,input')?.focus({preventScroll:true});
   }catch(error){renderFailed=true;card.replaceChildren(el('h2','正在同步生长状态…','q'),el('p','生长中','growth-status'),elapsedLine(state.status==='complete'?documentSince:waitingSince),el('p','已提交答案仍在本机，将自动重新读取。','w'));message('页面状态正在同步，稍后会自动恢复。',true);console.error('State rendering failed');}finally{rendering=false;}
 }
@@ -212,7 +218,7 @@ async function refresh(force=false){
     state=next;
   }
   documentState=doc;guidance=advice.recommendations;document.querySelector('#copy-reminder').disabled=false;
-  if(instance!==aiInstance){aiInstance=instance;aiOpenedAt=performance.now();}aiActivity=progress.ai??null;
+  if(instance!==aiInstance){aiInstance=instance;aiOpenedAt=performance.now();}aiActivity=progress.ai??null;aiObservedAt=performance.now();
   if(isWaiting()){if(waitingSince===null)waitingSince=performance.now()-(progress?.session_id===state.session_id&&progress.revision===state.revision&&progress.started_at!==null?Math.max(0,progress.server_now-progress.started_at):0);}else waitingSince=null;
   const key=['requested','generating'].includes(doc.phase)?state.session_id+'/'+doc.job_id:null;
   if(key!==documentKey){documentKey=key;documentSince=key?performance.now()-Math.max(0,(doc.server_now??Date.now())-(doc.started_at??Date.now())):null;}
@@ -222,9 +228,9 @@ async function refresh(force=false){
 async function poll(){if(stopped)return;try{await refresh();}catch(error){if(!stopped){document.querySelector('#connection').textContent='连接已断开，正在重连；已提交答案仍在本机。';if(!state)message('暂时读不到问题，将自动重连。',true);}}if(!stopped)setTimeout(poll,1000);}
 document.querySelector('#copy-reminder').addEventListener('click',async()=>{
   if(!state)return;
-  const text='请继续 grow-me。先读取 /state，核对会话身份与当前 revision 后再继续。\n'+JSON.stringify({session_id:state.session_id,current_round:state.current_round,url:location.origin});
+  const text='请继续 grow-me。恢复后的第一步先运行一次 check.mjs，核对会话身份、实例和 revision，再做别的事；curl GET 不算轮询。服务若已停止，先按原启动回执重启原会话并立即运行 check.mjs。\n'+JSON.stringify({session_id:state.session_id,current_round:state.current_round,url:location.origin});
   try{await navigator.clipboard.writeText(text);message('提醒已复制，粘回原对话即可继续。');}
   catch{const body=document.querySelector('#node-body'),actions=document.querySelector('#node-actions'),heading=el('h2','复制续接提醒');heading.id='node-question';returnFocus=document.querySelector('#copy-reminder');body.replaceChildren(heading);actions.replaceChildren();const field=el('textarea',undefined,'field');field.readOnly=true;field.value=text;field.setAttribute('aria-label','续接提醒');body.append(el('p','复制下面的文字，粘回原对话。','w'),field);if(!dialog.open)dialog.showModal();field.select();}
 });
-setInterval(()=>{const late=document.querySelector('#long-wait');if(late)late.hidden=waitingSince===null||performance.now()-waitingSince<=60000;const elapsed=document.querySelector('#wait-elapsed');if(elapsed)elapsed.textContent=`已等待 ${Math.max(0,Math.floor((performance.now()-Number(elapsed.dataset.since))/1000))} 秒`;},500);
+setInterval(()=>{const notice=document.querySelector('#ai-wait-notice');if(notice&&assistantDisplay==='paused')notice.textContent=pauseText();const late=document.querySelector('#long-wait');if(late)late.hidden=waitingSince===null||performance.now()-waitingSince<=60000;const elapsed=document.querySelector('#wait-elapsed');if(elapsed)elapsed.textContent=`已等待 ${Math.max(0,Math.floor((performance.now()-Number(elapsed.dataset.since))/1000))} 秒`;},500);
 poll();

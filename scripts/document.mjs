@@ -42,8 +42,8 @@ export function validateDocument(file,tree,jobId=null,{chapterId=null,partial=fa
 }
 
 export class DocumentBridge{
-  constructor({getTree,save,file,stop}){
-    Object.assign(this,{getTree,save,file,stop});this.waiters=new Set();this.sequence=0;this.phase='idle';this.offeredRevision=null;this.jobId=null;this.error=null;this.startedAt=null;this.updatedAt=Date.now();this.stage='queued';this.readable=new Map();
+  constructor({getTree,save,file,stop,onEvent=()=>{}}){
+    Object.assign(this,{getTree,save,file,stop,onEvent});this.waiters=new Set();this.sequence=0;this.phase='idle';this.offeredRevision=null;this.jobId=null;this.error=null;this.startedAt=null;this.updatedAt=Date.now();this.stage='queued';this.readable=new Map();
     this.publishedAt=new Map();this.timingFile=file+'.chapter-timings.jsonl';
     const tree=getTree();
     if(tree.status==='complete'&&tree.nodes.every(n=>n.status==='answered')){
@@ -79,6 +79,7 @@ export class DocumentBridge{
           const at=Date.now();mkdirSync(dirname(this.timingFile),{recursive:true});
           appendFileSync(this.timingFile,JSON.stringify({event:'chapter_first_published',session_id:tree.session_id,revision:tree.revision,digest:fingerprint(tree),job_id:this.jobId,chapter_id:body.chapter_id,first_published_at:at,first_published_at_iso:new Date(at).toISOString(),generation_started_at:this.startedAt,elapsed_ms:at-this.startedAt})+'\n','utf8');
           this.publishedAt.set(body.chapter_id,at);
+          this.onEvent('chapter_first_published',{revision:tree.revision,job_id:this.jobId,chapter_id:body.chapter_id,first_published_at:at,elapsed_ms:at-this.startedAt});
         }
         this.readable.set(body.chapter_id,content);break;
       }

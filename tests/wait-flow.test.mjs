@@ -14,7 +14,7 @@ test('operational protocol output is suppressed without changing interview answe
 
 test('AI check age is memory-only, distinguishes never connected, and honors threshold and page-open grace',t=>{
  const tree=seed(),before=JSON.stringify(tree);let now=100000;t.mock.method(Date,'now',()=>now);const progress=new InterviewProgress(()=>tree);
- assert.equal(AI_CHECK_TIMEOUT_MS,30000);now+=120000;assert.deepEqual(progress.status().ai,{last_check_at:null,seconds_since_last_check:null,timeout_ms:30000});assert.equal(assistantConnection(progress.status().ai,120000),'connecting');
+ assert.equal(AI_CHECK_TIMEOUT_MS,30000);now+=120000;assert.deepEqual(progress.status().ai,{last_check_at:null,last_activity_at:null,source:null,seconds_since_last_check:null,timeout_ms:30000});assert.equal(assistantConnection(progress.status().ai,120000),'connecting');
  const checked=progress.checkIn().ai.last_check_at;now+=AI_CHECK_TIMEOUT_MS;assert.equal(progress.status().ai.last_check_at,checked);assert.equal(progress.status().ai.seconds_since_last_check,30);assert.equal(assistantConnection(progress.status().ai,120000),'connected');
  now++;assert.equal(assistantConnection(progress.status().ai,120000),'paused');assert.equal(assistantConnection(progress.status().ai,0),'connected','a freshly opened page gets a grace period');
  progress.checkIn();assert.equal(assistantConnection(progress.status().ai,120000),'connected');assert.equal(JSON.stringify(tree),before);

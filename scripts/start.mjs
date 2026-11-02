@@ -1,3 +1,4 @@
+import {isMain} from './entry.mjs';
 import {spawn} from 'node:child_process';
 import {readFileSync,openSync,closeSync,mkdirSync} from 'node:fs';
 import {dirname,resolve,join} from 'node:path';
@@ -27,7 +28,7 @@ export async function startService({stateFile,documentFile,port=0,sessionId}) {
   child.kill();throw Error('本机服务启动超时；原文件未改动。');
 }
 
-if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+if(isMain(import.meta.url)){
   const args=process.argv.slice(2),arg=(name,fallback)=>{const i=args.indexOf(name);return i<0?fallback:args[i+1];};
   if(args.includes('--help'))console.log('node scripts/start.mjs --state <tree.json> --session <session_id> [--document <task.html>] [--port 0]\nStarts a separate local service and exits after its receipt. Never creates/replaces tree.json.');
   else try{if(!arg('--state'))throw Error('--state required');console.log(JSON.stringify(await startService({stateFile:arg('--state'),documentFile:arg('--document'),sessionId:arg('--session'),port:Number(arg('--port',0))})));}

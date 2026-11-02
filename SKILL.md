@@ -22,8 +22,9 @@ description: 用本机网页逐轮澄清需求，将用户提交回传当前对�
 
 1. 首次使用读 [数据与 HTTP 合约](references/contract.md)，按真实需求创建首轮，通常 3–5 题，必要时增减；每道新题标 `chapter_id`（所属 root 节点，根题填自身 ID）。新访谈生成一次 UUID，恢复时保留。运行数据和输出放用户工作目录，不放技能包里。
 2. 读 [启动、短查询与恢复](references/runtime.md)，用独立进程启动服务并保留启动回执与原文件路径。按系统使用 [Windows 命令](references/commands-windows.md) 或 [macOS/Linux 命令](references/commands-posix.md)，打开打印的 URL。
-3. 保持当前任务活跃，每约 10 秒执行一次 `check.mjs` 短查询（总网络期限最多 3 秒）。**用户未点最终保存前，不得结束本轮回复；每次短查询后必须继续下一次。** 发现提交后读 `/context`，需要精确原文再读 `/state`；用原修订出追问，并逐题标 `chapter_id`。无实质新问题时，先预读已安装的 project-requirement-writer（否则读 [内置 writer 指引](references/writer-guide.md)）、[分章交付](references/progressive-writer.md) 和 `assets/writer-shell.html` 结构，再 offer；不发空轮或占位题。预读仅限规则／模板，需求内容与代码入口以用户保存冻结后的答案为准。
-4. 保存阶段继续短查询；用户保存后 claim，按冻结来源写文档。**每写完一章，立刻运行 `compose-document.mjs --preview --url <local-url>` 发布成功，再写下一章；不得攒多章一起发布。** 完整参数、计时与最终校验见 [分章交付](references/progressive-writer.md)。
-5. 对话中断后，用户粘贴网页“复制提醒”。先按 [恢复规则](references/runtime.md#恢复原会话) 读 `/state` 核对身份与 revision；服务不在时从原路径重启。提醒仅有会话编号、轮次、地址，不带答案或文件路径。它不能自动唤醒已结束的对话。
+3. 每约 10 秒运行 `check.mjs`，游标自动保存；**用户未点最终保存前不得结束本轮回复，每次短查询后必须继续下一次。** 出题、查代码、写文档前启动 `check.mjs --heartbeat`，结束后停掉；心跳不代替短查询。出题期间不读项目代码，只用用户回答和已有上下文；疑问记入“待核对”。用 `/context`、必要时 `/state` 和原修订出题，每题标 `chapter_id`。
+4. 在预计最后一轮用户作答、等待提交时，用 [runtime 的计时入口](references/runtime.md#集中查代码) 在心跳保护下集中查代码、处理“待核对”、准备章节结构。无新问题时先读已安装的 project-requirement-writer（否则 [内置指引](references/writer-guide.md)）、[分章交付](references/progressive-writer.md) 和 `assets/writer-shell.html` 结构，再 offer；不发空轮。规则／模板可预读，最终内容只认保存后的冻结答案。
+5. 等保存仍短查询；保存后 claim，不再新开代码调查。用 `render-chapter.mjs` 从冻结树渲染原话，AI 只写说明文字。**每写完一章，立刻运行 `compose-document.mjs --preview --url <local-url>` 发布成功，再写下一章；不得攒章。** 参数、计时和最终校验见分章交付。
+6. 恢复后第一步先运行一次 `check.mjs`，核对身份、实例和 revision，再做别的事；curl GET 不算轮询。服务不在时按 [恢复规则](references/runtime.md#恢复原会话) 从原文件重启后立即短查。复制提醒只含会话编号、轮次、地址，不含答案；它不能自动唤醒已结束的对话。
 
 开发或交付前读 [验证与计时](references/verification.md)。保留真实失败与未测项；CLI 安装成功、受控浏览器通过都不等于另一个助手真跑通过。

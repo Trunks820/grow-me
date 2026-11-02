@@ -1,15 +1,16 @@
 """AI-query silence and recovery using real check.mjs calls, not model timing."""
-import argparse,json,subprocess
+import argparse,json,subprocess,re,os
 from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
 from browser_acceptance import Service,seed,node,request,no_overflow,ai_check
 
 BASE=Path(__file__).resolve().parents[1]
-PAUSED='AI 对话好像已暂停。请回到聊天窗口发一句「继续」，或点「复制提醒」粘贴过去。你的答案已保存，不会丢。'
+PAUSED=re.compile(r'已 \d+ 秒没收到 AI 回应，回聊天窗口发"继续"')
 
 def run(work):
     work.mkdir(parents=True,exist_ok=True)
     report={'kind':'controlled UI/API; actual 30-second query silence, no AI model invocation','checks':{},'errors':[]}
+    heartbeat=None
     thinking=Service(work/'thinking',seed([node('A','已确认的需求',answered=True)]))
     queued=Service(work/'queued',seed([node('A','等待写入文档的需求',answered=True)]))
     def control(action,**extra):
@@ -26,7 +27,7 @@ def run(work):
                 page.goto(s.url);page.wait_for_load_state('networkidle')
                 expect(page.get_by_role('heading',name='等待 AI 对话连接',exact=True)).to_be_visible()
                 expect(page.locator('#copy-reminder')).not_to_have_class('small-action needs-attention')
-                assert PAUSED not in page.locator('#card').inner_text();assert '生长中' not in page.locator('#card').inner_text()
+                assert not PAUSED.search(page.locator('#card').inner_text());assert '生长中' not in page.locator('#card').inner_text()
                 assert request(s.url,'/progress')[1]['ai']['last_check_at'] is None
                 since.append(page.locator('#wait-elapsed').get_attribute('data-since'))
                 no_overflow(page)
@@ -49,19 +50,27 @@ def run(work):
             copied=pages[0].evaluate('window.copiedReminder');identity=json.loads(copied.split('\n')[-1])
             assert set(identity)=={'session_id','current_round','url'} and identity['session_id']==thinking.state()['session_id']
             assert thinking.state()['nodes'][0]['answer']['text'] not in copied
+            assert '第一步先运行一次 check.mjs' in copied and 'curl GET 不算轮询' in copied
             report['checks']['highlighted_copy_reminder_still_contains_only_locator_fields']=True
             fresh=browser.new_page(reduced_motion='reduce');fresh.clock.install();fresh.goto(thinking.url);fresh.wait_for_load_state('networkidle')
             expect(fresh.get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible()
-            assert PAUSED not in fresh.locator('#card').inner_text()
+            assert not PAUSED.search(fresh.locator('#card').inner_text())
             fresh.clock.fast_forward(31000);expect(fresh.locator('#ai-wait-notice')).to_have_text(PAUSED);fresh.close()
             report['checks']['fresh_page_grace_prevents_immediate_stale_timestamp_alarm']=True
             for index,(s,page,title) in enumerate(zip([thinking,queued],pages,['正在想下一轮的问题…','正在生成任务文档…'])):
-                ai_check(s);expect(page.get_by_role('heading',name=title,exact=True)).to_be_visible()
+                if index==1:
+                    heartbeat=json.loads(subprocess.check_output(['node',str(BASE/'scripts/check.mjs'),'--url',s.url,'--session',s.state()['session_id'],'--heartbeat'],text=True,encoding='utf-8'))
+                else:ai_check(s)
+                expect(page.get_by_role('heading',name=title,exact=True)).to_be_visible()
                 expect(page.locator('#ai-wait-notice')).to_have_count(0)
                 expect(page.locator('#copy-reminder')).to_have_class('small-action')
                 assert page.locator('#wait-elapsed').get_attribute('data-since')==since[index]
                 assert s.file.read_bytes()==originals[index]
-            report['checks']['resumed_checks_clear_warning_without_resetting_wait_or_answers']=True
+            report['checks']['resumed_check_and_heartbeat_clear_warning_without_resetting_wait_or_answers']=True
+            for s in [thinking,queued]:
+                events=[json.loads(line)['event'] for line in Path(str(s.file)+'.runtime-timings.jsonl').read_text(encoding='utf-8').splitlines()]
+                assert 'pause_shown' in events and 'pause_cleared' in events and 'ai_resumed' in events
+            report['checks']['pause_display_and_actual_resume_are_logged']=True
             # A stale receipt must not label an actively claimed document as paused.
             def stale_projection(route):
                 response=route.fetch();data=response.json();data['ai']['seconds_since_last_check']=31
@@ -77,7 +86,7 @@ def run(work):
             assert thinking.startup['url']==thinking.url and thinking.file.read_bytes()==originals[0]
             expect(pages[0].get_by_role('heading',name='等待 AI 对话连接',exact=True)).to_be_visible()
             assert request(thinking.url,'/progress')[1]['ai']['last_check_at'] is None
-            assert PAUSED not in pages[0].locator('#card').inner_text()
+            assert not PAUSED.search(pages[0].locator('#card').inner_text())
             ai_check(thinking);expect(pages[0].get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible()
             assert thinking.file.read_bytes()==originals[0]
             report['checks']['same_url_restart_clears_receipt_then_reconnects_without_rewriting_tree']=True
@@ -90,6 +99,9 @@ def run(work):
     except Exception as error:
         report['status']='failed';report['failure']=str(error);raise
     finally:
+        if heartbeat:
+            try:os.kill(heartbeat['pid'],15)
+            except OSError:pass
         thinking.close();queued.close();(work/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     return report
 

@@ -21,3 +21,12 @@ node "<skill>/scripts/check.mjs" --url "http://127.0.0.1:<old-port>" --session "
 ```
 
 macOS 和 Linux 共享命令写法，但只在实际运行过的系统记 passed，Linux 结果不代表 macOS。
+
+耗时工作前后（两条命令分别执行，不同时执行）：
+
+```text
+node "<skill>/scripts/check.mjs" --url "http://127.0.0.1:<port>" --session "<UUID>" --heartbeat
+node "<skill>/scripts/check.mjs" --url "http://127.0.0.1:<port>" --session "<UUID>" --heartbeat-stop "<回执heartbeat_id>"
+```
+
+短查询自动管理游标；不再手写 --after-*。恢复后第一步先 check.mjs；curl GET 仅用于读取内容，不是活跃查询。查代码只在最后一轮等待用户提交的窗口，经 runtime.md 的 work.mjs 入口记录每次起止。

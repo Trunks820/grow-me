@@ -17,3 +17,7 @@ tree.json
 .playwright/
 playwright-report/
 test-results/
+
+*.cursor.json
+*.runtime-timings.jsonl
+*.chapter-timings.jsonl

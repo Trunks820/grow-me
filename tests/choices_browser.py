@@ -12,7 +12,7 @@ def run(work):
         browser=p.chromium.launch(headless=True)
         for width,height,label in [(1440,1000,'desktop'),(390,844,'mobile')]:
             multi=node('channels','首版需要哪些通知渠道？',options=[{'id':'mail','label':'邮件通知'},{'id':'inbox','label':'站内通知'},{'id':'none','label':'都不需要','exclusive':True}])
-            multi.update(input='multi_choice',rationale='决定首版需要开发和验收的通知渠道。',recommendation={'option_ids':['mail'],'reason':'AI 建议先考虑邮件，但由用户自己选择。','source_ids':[]})
+            multi.update(input='multi_choice',rationale='决定首版需要开发和验收的通知渠道。第二句说明渠道影响成本。',recommendation={'option_ids':['mail'],'reason':'AI 建议先考虑邮件，但由用户自己选择。','source_ids':[]})
             service=Service(work/label,seed([multi,node('boundary','需要保留的原始说明？')]))
             detached=None;context=browser.new_context(viewport={'width':width,'height':height},reduced_motion='reduce')
             context.grant_permissions(['clipboard-read','clipboard-write'],origin=service.url)
@@ -22,7 +22,15 @@ def run(work):
                 page.goto(service.url);page.wait_for_load_state('networkidle');expect(page.locator('#card .why')).to_contain_text('决定首版')
                 boxes=page.get_by_role('checkbox');expect(boxes).to_have_count(3)
                 for box in boxes.all():expect(box).not_to_be_checked()
-                expect(page.locator('.recommendation-badge')).to_have_count(1);expect(page.locator('#confirm-answer')).to_be_disabled()
+                expect(page.locator('.recommendation-badge')).to_have_count(1);expect(page.locator('.recommendation-badge')).to_be_hidden();expect(page.locator('#confirm-answer')).to_be_disabled()
+                expect(page.locator('#card .why')).to_have_text('决定什么：决定首版需要开发和验收的通知渠道。')
+                expect(page.locator('.question-reason p')).to_be_hidden();expect(page.locator('.recommendation-info .w')).to_be_hidden()
+                page.screenshot(path=str(work/(label+'-collapsed-recommendation.png')),full_page=True)
+                page.locator('.question-reason > summary').click();expect(page.locator('.question-reason p')).to_contain_text('第二句')
+                page.locator('.recommendation-info > summary').click();expect(page.locator('.recommendation-badge')).to_be_visible()
+                expect(page.locator('.recommendation-label')).to_have_count(1)
+                for box in boxes.all():expect(box).not_to_be_checked()
+                page.locator('.recommendation-info > summary').click();expect(page.locator('.recommendation-badge')).to_be_hidden()
                 before=service.file.read_bytes();page.keyboard.press('1');page.keyboard.press('2')
                 expect(boxes.nth(0)).to_be_checked();expect(boxes.nth(1)).to_be_checked()
                 page.keyboard.press('3');expect(boxes.nth(2)).to_be_checked();expect(boxes.nth(0)).not_to_be_checked();expect(boxes.nth(1)).not_to_be_checked()
@@ -44,7 +52,7 @@ def run(work):
                 follow=node('follow','如何验收这两种通知？',deps=['channels'],round=2,options=[{'id':'both','label':'逐项验收'},{'id':'other','label':'其他方式'}])
                 follow.update(rationale='决定通知渠道的验收范围，避免只测其中一个。',recommendation={'option_ids':['both'],'reason':'依据你已选的渠道逐项核验。','source_ids':['channels']})
                 assert request(service.url,'/round',{'round':2,'expected_revision':current['revision'],'nodes':[follow]})[0]==200
-                expect(page.get_by_role('heading',name=follow['question'],exact=True)).to_be_visible();expect(page.locator('.recommendation-source')).to_contain_text('根据你第 1 轮说的')
+                expect(page.get_by_role('heading',name=follow['question'],exact=True)).to_be_visible();expect(page.locator('.recommendation-source')).to_be_hidden();page.locator('.recommendation-info > summary').click();expect(page.locator('.recommendation-source')).to_be_visible();expect(page.locator('.recommendation-source')).to_contain_text('根据你第 1 轮说的')
                 expect(page.get_by_role('radio').first).not_to_be_checked()
                 page.locator('.tree-node[data-node-id=channels]').click();page.get_by_role('button',name='修改回答',exact=True).click()
                 expect(page.get_by_role('checkbox').nth(0)).to_be_checked();expect(page.get_by_role('checkbox').nth(1)).to_be_checked()
@@ -69,7 +77,7 @@ def run(work):
                 expect(page.get_by_role('link',name='打开完整任务文档',exact=True)).to_be_visible();no_overflow(page)
                 assert service.file.read_bytes()==frozen
                 page.screenshot(path=str(work/(label+'-recovered-ready.png')),full_page=True)
-                report['checks'][label]={'multi_keyboard_mouse_exclusive_and_no_preselection':True,'why_and_source_round':True,'draft_then_batch_raw_text':True,'reminder_three_fields_no_answers':True,'stale_advice_not_answer':True,'killed_service_frozen_tree_recovery':True,'no_horizontal_overflow':True}
+                report['checks'][label]={'multi_keyboard_mouse_exclusive_and_no_preselection':True,'why_and_source_round':True,'default_collapsed_recommendation_and_rationale':True,'draft_then_batch_raw_text':True,'reminder_three_fields_no_answers':True,'stale_advice_not_answer':True,'killed_service_frozen_tree_recovery':True,'no_horizontal_overflow':True}
             finally:
                 context.close();service.close()
                 if detached:

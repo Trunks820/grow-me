@@ -1,6 +1,6 @@
+import {isMain} from './entry.mjs';
 import {readFileSync,writeFileSync,readdirSync,renameSync,mkdirSync} from 'node:fs';
 import {dirname,resolve} from 'node:path';
-import {fileURLToPath} from 'node:url';
 import {validateDocument} from './document.mjs';
 
 const escape=value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
@@ -51,4 +51,4 @@ async function main(){
   }
   console.log(JSON.stringify({file,preview,views:result.views,ready_chapters:result.ready_chapters,newly_published_chapters:newlyPublished,chapter_timings:current?.chapters.map(({id,first_published_at})=>({id,first_published_at}))??[],chapter_timing_file:current?.chapter_timing_file??null,warnings,parts:parts.length,assembly_ms:Math.round(performance.now()-started)}));
 }
-if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))main().catch(error=>{console.error(error.message);process.exitCode=1;});
+if(isMain(import.meta.url))main().catch(error=>{console.error(error.message);process.exitCode=1;});
