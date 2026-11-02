@@ -74,6 +74,16 @@ def main():
             # the settled paths, not screenshots taken during an animation.
             page.clock.install();page.emulate_media(reduced_motion='no-preference')
             page.get_by_role('button',name='重看生长',exact=True).click()
+            page.clock.pause_at(page.evaluate('new Date(Date.now()+20).toISOString()'))
+            bands=page.evaluate('''async tree=>{const {layoutTree}=await import('/tree.mjs');return layoutTree(tree).rounds;}''',tree)
+            for band in bands:
+              page.clock.run_for(band['duration']-100)
+              expect(page.locator('#tree-canvas')).to_have_attribute('data-visible-round',str(band['round']))
+              actual=page.locator('.tree-node[data-visible="true"]').evaluate_all('nodes=>nodes.map(n=>[n.dataset.nodeId,n.getAttribute("transform")])')
+              expected_stage=page.evaluate('''async ({tree,round})=>{const {layoutTree}=await import('/tree.mjs');return layoutTree({...tree,current_round:round,nodes:tree.nodes.filter(n=>n.round<=round)}).nodes.map(n=>[n.id,`translate(${n.bloomX} ${n.bloomY})`]);}''',{'tree':tree,'round':band['round']})
+              assert actual==expected_stage, (key,band['round'],'Replay used future crown positions')
+              page.clock.run_for(100)
+            case['replay_stages_match_live_layout']=True
             page.clock.fast_forward(25000);page.clock.fast_forward(1000)
             expect(page.locator('#tree-canvas')).to_have_attribute('data-growing','false')
             assert shape(page)==baseline;case['replay_stable']=True
