@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import {randomUUID} from 'node:crypto';
 import { InputError, assertWritable, validateTree, submitRound, editDecision, reopenDecision, publishRound, finish, roundResult } from './model.mjs';
 import { DocumentBridge } from './document.mjs';
-import { InterviewProgress, AI_CHECK_TIMEOUT_MS } from './progress.mjs';
+import { InterviewProgress, SHORT_QUERY_TIMEOUT_MS } from './progress.mjs';
 import { interviewContext } from './context.mjs';
 import {recommendationView} from './recommendations.mjs';
 import {RuntimeLog} from './runtime-log.mjs';
@@ -95,9 +95,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/state') return json(res, 200, tree);
     if (req.method === 'GET' && url.pathname === '/guidance') return json(res, 200, {session_id:tree.session_id,revision:tree.revision,
       recommendations:Object.fromEntries(tree.nodes.filter(n=>n.recommendation).map(n=>[n.id,recommendationView(tree,n)]))});
-    if (req.method === 'GET' && url.pathname === '/recovery') return json(res, 200, {session_id:tree.session_id,schema_version:tree.schema_version,
+    if (req.method === 'GET' && url.pathname === '/recovery') {const ai=progress.status().ai;return json(res, 200, {session_id:tree.session_id,schema_version:tree.schema_version,
       revision:tree.revision,current_round:tree.current_round,instance_id:instanceId,app_version:appVersion,read_only:tree.schema_version===1,
-      state_file:stateFile,document_file:documentFile,timing_file:runtimeLog.file,document_phase:documents.phase,heartbeat_ids:[...progress.heartbeats.keys()]});
+      state_file:stateFile,document_file:documentFile,timing_file:runtimeLog.file,document_phase:documents.phase,heartbeat_ids:[...progress.heartbeats.keys()],heartbeats:[...progress.heartbeats].map(([id,h])=>({id,owner_pid:h.ownerPid,lease_until:h.leaseUntil,last_pulse_at:h.lastPulseAt})),ai});}
     if (req.method === 'GET' && url.pathname === '/context') return json(res, 200, interviewContext(tree));
     if (req.method === 'GET' && url.pathname === '/wait') {
       const round = Number(url.searchParams.get('round'));
@@ -116,21 +116,26 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname === '/ai/check') {
         if (data.expected_session_id !== tree.session_id || data.expected_revision !== tree.revision || data.expected_instance_id !== instanceId) throw new InputError('query identity or revision changed; repeat the short check', 409);
         for(const key of ['after_sequence','after_revision'])if(data[key]!==undefined&&(!Number.isSafeInteger(data[key])||data[key]<0))throw new InputError('invalid event cursor',400);
-        return json(res, 200, progress.checkIn({afterSequence:data.after_sequence??0,afterRevision:data.after_revision}));
+        if(data.owner_pid!==undefined&&(!Number.isSafeInteger(data.owner_pid)||data.owner_pid<=0))throw new InputError('invalid owner pid',400);
+        return json(res, 200, progress.checkIn({afterSequence:data.after_sequence??0,afterRevision:data.after_revision,ownerPid:data.owner_pid}));
       }
       if (['/ai/heartbeat','/ai/telemetry','/ai/work'].includes(url.pathname)) {
         if(data.expected_session_id!==tree.session_id||data.expected_revision!==tree.revision||data.expected_instance_id!==instanceId)throw new InputError('runtime identity changed; repeat with current metadata',409);
         if(url.pathname==='/ai/heartbeat'){
           if(typeof data.heartbeat_id!=='string'||!/^[a-zA-Z0-9-]{1,80}$/.test(data.heartbeat_id)||!['pulse','stop'].includes(data.action??'pulse'))throw new InputError('invalid heartbeat',400);
+          const existing=progress.heartbeats.get(data.heartbeat_id);
+          if(data.action!=='stop'&&!progress.ended.has(data.heartbeat_id)&&(!Number.isSafeInteger(data.owner_pid)||data.owner_pid<=0))throw new InputError('heartbeat requires owner pid',400);
+          if(existing&&data.action!=='stop'&&existing.ownerPid!==data.owner_pid)throw new InputError('heartbeat owner changed',409);
+          if(data.reason!==undefined&&!['requested','owner_exited','terminated'].includes(data.reason))throw new InputError('invalid stop reason',400);
           const ended=closing||['ready','closed'].includes(documents.phase)||tree.schema_version===1;
           if(ended)progress.endHeartbeat(data.heartbeat_id,'session_finished');
-          const active=!ended&&progress.heartbeat(data.heartbeat_id,data.action);
-          return json(res,200,{session_id:tree.session_id,revision:tree.revision,instance_id:instanceId,active});
+          const active=!ended&&progress.heartbeat(data.heartbeat_id,data.action,{ownerPid:data.owner_pid,reason:data.reason});
+          return json(res,200,{session_id:tree.session_id,revision:tree.revision,instance_id:instanceId,active,lease_until:progress.heartbeats.get(data.heartbeat_id)?.leaseUntil??null});
         }
         if(url.pathname==='/ai/telemetry'){
           if(!['pause_shown','pause_cleared'].includes(data.event)||typeof data.page_id!=='string'||data.page_id.length>80)throw new InputError('invalid UI timing',400);
-          const age=progress.status().ai.seconds_since_last_check,eligible=progress.status().stage==='thinking'||documents.stage==='queued'&&['requested','generating'].includes(documents.phase);
-          if(data.event==='pause_shown'&&(!eligible||age===null||age*1000<=AI_CHECK_TIMEOUT_MS||data.last_activity_at!==progress.lastAiCheckAt))return json(res,200,{recorded:false});
+          const age=progress.status().ai.seconds_since_last_check,eligible=progress.status().stage==='thinking'||['requested','generating'].includes(documents.phase);
+          if(data.event==='pause_shown'&&(!eligible||age===null||age*1000<=SHORT_QUERY_TIMEOUT_MS||data.last_check_at!==progress.lastCheckAt))return json(res,200,{recorded:false});
           runtimeLog.append(data.event,{revision:tree.revision,page_id:data.page_id,seconds_without_ai:age});return json(res,200,{recorded:true});
         }
         if(typeof data.operation_id!=='string'||!/^[a-zA-Z0-9-]{1,80}$/.test(data.operation_id)||!['start','end'].includes(data.action))throw new InputError('invalid work timing',400);

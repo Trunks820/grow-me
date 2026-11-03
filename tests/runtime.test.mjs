@@ -7,7 +7,7 @@ import {createServer} from 'node:http';
 import {mkdtempSync,writeFileSync,readFileSync,rmSync,symlinkSync,existsSync,mkdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {validateTree,publishRound} from '../scripts/model.mjs';
 import {checkOnce} from '../scripts/check.mjs';
 import {fingerprint} from '../scripts/document.mjs';
@@ -18,10 +18,12 @@ const run=promisify(execFile),server=fileURLToPath(new URL('../scripts/server.mj
 const options=[{id:'a',label:'邮件通知'},{id:'b',label:'站内通知'},{id:'none',label:'都不需要',exclusive:true}];
 const node=(id='delivery',extra={})=>({id,question:'需要哪些通知方式？',rationale:'决定首版需要开发和验收哪些通知渠道。',input:'multi_choice',options:structuredClone(options),answer:null,depends_on:[],status:'pending',round:1,...extra});
 const tree=(nodes=[node()])=>({schema_version:2,session_id:'v2-regression',topic:'通知范围',revision:0,current_round:1,status:'active',nodes});
-async function service(t,seed=tree()){
+async function service(t,seed=tree(),{clock=false}={}){
   const root=mkdtempSync(join(tmpdir(),'grow-v2-')),file=join(root,'tree.json'),document=join(root,'task.html');writeFileSync(file,JSON.stringify(seed)+'\n');
+  const clockFile=join(root,'clock-offset'),preload=join(root,'test-clock.mjs');
+  if(clock){writeFileSync(clockFile,'0');writeFileSync(preload,`import {readFileSync} from 'node:fs';const realNow=Date.now;Date.now=()=>realNow()+Number(readFileSync(${JSON.stringify(clockFile)},'utf8'));`);}
   const children=[],detached=[];
-  async function start(){const child=spawn(process.execPath,[server,'--state',file,'--document',document]);children.push(child);let errors='';child.stderr.on('data',d=>errors+=d);return{child,...await Promise.race([once(child.stdout,'data').then(([d])=>JSON.parse(String(d))),once(child,'exit').then(()=>{throw Error(errors);})])};}
+  async function start(){const child=spawn(process.execPath,[...(clock?['--import',pathToFileURL(preload).href]:[]),server,'--state',file,'--document',document]);children.push(child);let errors='';child.stderr.on('data',d=>errors+=d);return{child,...await Promise.race([once(child.stdout,'data').then(([d])=>JSON.parse(String(d))),once(child,'exit').then(()=>{throw Error(errors);})])};}
   const started=await start();
   t.after(async()=>{
     for(const pid of detached){try{process.kill(pid);}catch{}for(let i=0;i<100;i++){try{process.kill(pid,0);}catch{break;}await new Promise(r=>setTimeout(r,20));}}
@@ -29,12 +31,12 @@ async function service(t,seed=tree()){
     // Windows can retain the killed process's cwd handle briefly after process.kill(0) stops seeing it.
     for(let i=0;i<50;i++){try{rmSync(root,{recursive:true,force:true});break;}catch(error){if(i===49||!['EPERM','EBUSY','ENOTEMPTY'].includes(error.code))throw error;await new Promise(r=>setTimeout(r,30));}}
   });
-  return{...started,root,file,document,start,track:pid=>detached.push(pid),async state(){return(await fetch(this.url+'/state')).json();},async post(path,data){return fetch(this.url+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expected_session_id:seed.session_id,...data})});}};
+  return{...started,root,file,document,start,setClockOffset:offset=>writeFileSync(clockFile,String(offset)),track:pid=>detached.push(pid),async state(){return(await fetch(this.url+'/state')).json();},async post(path,data){return fetch(this.url+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expected_session_id:seed.session_id,...data})});}};
 }
 
 import {startHeartbeat,stopHeartbeat} from '../scripts/heartbeat.mjs';
 import {runtimePost} from '../scripts/runtime-client.mjs';
-import {InterviewProgress} from '../scripts/progress.mjs';
+import {InterviewProgress,SHORT_QUERY_TIMEOUT_MS,HEARTBEAT_LEASE_MS} from '../scripts/progress.mjs';
 import {renderChapter} from '../scripts/render-chapter.mjs';
 import {composeDocument} from '../scripts/compose-document.mjs';
 import {validateDocument} from '../scripts/document.mjs';
@@ -92,7 +94,7 @@ test('detached heartbeat renews activity every 10s without reading or consuming 
  const first=(await(await fetch(s.url+'/progress')).json()).ai.last_activity_at;
  await submit(s);const bytes=readFileSync(s.file);
  await delay(10500);const ai=(await(await fetch(s.url+'/progress')).json()).ai;
- assert.ok(ai.last_activity_at>first);assert.equal(ai.source,'heartbeat');assert.ok(ai.seconds_since_last_check<3);
+ assert.equal(ai.last_check_at,first);assert.equal(ai.last_activity_at,first);assert.equal(ai.source,'check');assert.ok(ai.seconds_since_last_check>=10);assert.ok(ai.seconds_since_last_heartbeat<3);assert.equal(hb.owner_pid,process.pid);assert.equal(hb.lease_ms,180000);
  assert.deepEqual(readFileSync(s.file+'.cursor.json'),cursor);assert.deepEqual(readFileSync(s.file),bytes);assert.equal(logs(s).filter(e=>e.event==='submission_discovered').length,0);
  const found=await checkOnce(opts(s));assert.deepEqual(found.events.map(e=>e.kind),['submit']);assert.ok(found.timing.discovery_delay_ms>=10000);
  await stopHeartbeat(opts(s),hb.heartbeat_id);assert.equal((await runtimePost(opts(s),'/ai/heartbeat',{heartbeat_id:hb.heartbeat_id})).active,false);
@@ -108,10 +110,13 @@ test('heartbeat validates session/revision/instance and exits when service insta
  const until=Date.now()+13000;let alive=true;while(alive&&Date.now()<until){try{process.kill(hb.pid,0);await delay(100);}catch{alive=false;}}assert.equal(alive,false);
 });
 
-test('paused-to-online activity and killed heartbeat expiration log truthful transitions without writing the tree',()=>{
+test('only short checks clear silence; heartbeat expiry logs remain truthful without modifying the tree',()=>{
  const original=Date.now,events=[];let now=1000;Date.now=()=>now;
- try{const state=tree(),p=new InterviewProgress(()=>state,{log:{sequence:0,append:(event,detail)=>events.push({event,...detail})}});p.heartbeat('first');now+=31000;p.status();p.heartbeat('second');
- assert.deepEqual(events.map(e=>e.event),['heartbeat_start','heartbeat_end','heartbeat_start','ai_resumed']);assert.equal(events[1].reason,'expired_observed');assert.equal(events[1].last_pulse_at,1000);assert.equal(p.status().ai.source,'heartbeat');p.close();assert.equal(events.at(-1).reason,'session_closed');assert.equal(state.revision,0);
+ try{const state=tree(),p=new InterviewProgress(()=>state,{log:{sequence:0,after:()=>[],append:(event,detail)=>events.push({event,...detail})}});
+ p.checkIn();p.heartbeat('first','pulse',{ownerPid:7});now+=31000;p.status();p.heartbeat('second','pulse',{ownerPid:7});
+ assert.deepEqual(events.map(e=>e.event),['heartbeat_start','heartbeat_end','heartbeat_start']);assert.equal(events[1].reason,'expired_observed');assert.equal(events[1].last_pulse_at,1000);
+ now+=30001;p.heartbeat('third','pulse',{ownerPid:7});assert.equal(p.lastCheckAt,1000);assert.ok(p.status().ai.seconds_since_last_check>60);assert.equal(events.some(e=>e.event==='ai_resumed'),false);
+ p.checkIn();assert.equal(events.at(-1).event,'ai_resumed');assert.equal(events.at(-1).source,'check');p.close();assert.equal(events.at(-1).reason,'session_closed');assert.equal(state.revision,0);
  }finally{Date.now=original;}
 });
 
@@ -138,4 +143,47 @@ test('frozen chapter renderer preserves exact escaped text and selected options,
  const assembled=composeDocument(status,[a,b],{preview:true});writeFileSync(s.document+'.preview.html',assembled.html);validateDocument(s.document+'.preview.html',frozen,status.job_id,{partial:true,chapterId:'a'});
  await control(s,'chapter',{job_id:status.job_id,chapter_id:'a'});await delay(5);await control(s,'chapter',{job_id:status.job_id,chapter_id:'b'});await control(s,'chapter',{job_id:status.job_id,chapter_id:'a'});
  const published=logs(s).filter(e=>e.event==='chapter_first_published');assert.equal(published.length,2);assert.ok(published[1].first_published_at>published[0].first_published_at);
+});
+
+
+test('three-minute leases renew only on a short check from their owner; pulses and other owners cannot renew',()=>{
+ const original=Date.now,events=[];let now=1000;Date.now=()=>now;
+ try{const p=new InterviewProgress(()=>tree(),{log:{sequence:0,after:()=>[],append:(event,detail)=>events.push({event,...detail})}});
+ assert.equal(HEARTBEAT_LEASE_MS,180000);assert.equal(SHORT_QUERY_TIMEOUT_MS,60000);
+ p.heartbeat('a','pulse',{ownerPid:7});p.heartbeat('b','pulse',{ownerPid:8});const initial=p.heartbeats.get('a').leaseUntil;
+ for(let i=0;i<17;i++){now+=10000;p.heartbeat('a','pulse',{ownerPid:7});p.heartbeat('b','pulse',{ownerPid:8});}
+ assert.equal(p.lastCheckAt,null);assert.equal(p.heartbeats.get('a').leaseUntil,initial);
+ p.checkIn({ownerPid:7});assert.equal(p.heartbeats.get('a').leaseUntil,now+HEARTBEAT_LEASE_MS);assert.equal(p.heartbeats.get('b').leaseUntil,initial);
+ now+=10000;p.sweep();assert.ok(p.heartbeats.has('a'));assert.equal(p.heartbeats.has('b'),false);assert.equal(events.at(-1).reason,'lease_expired');
+ assert.equal(p.heartbeat('b','pulse',{ownerPid:8}),false);const lastHeartbeat=p.lastHeartbeatAt;p.checkIn({ownerPid:7});assert.equal(p.lastHeartbeatAt,lastHeartbeat);
+ }finally{Date.now=original;}
+});
+
+test('CLI short checks renew the default or explicitly matching owner, and recovery exposes both clocks',async t=>{
+ const s=await service(t),common=['--url',s.url,'--session','v2-regression'];
+ const hb=JSON.parse((await run(process.execPath,[checker,...common,'--heartbeat'])).stdout);s.track(hb.pid);assert.equal(hb.owner_pid,process.pid);
+ const first=await(await fetch(s.url+'/recovery')).json();assert.equal(first.ai.last_check_at,null);assert.equal(first.ai.seconds_since_last_check,null);assert.ok(first.ai.seconds_since_last_heartbeat>=0);
+ await delay(20);await run(process.execPath,[checker,...common]);let rec=await(await fetch(s.url+'/recovery')).json();const renewed=rec.heartbeats.find(h=>h.id===hb.heartbeat_id).lease_until;assert.ok(renewed>hb.lease_until);assert.equal(rec.ai.last_heartbeat_at,first.ai.last_heartbeat_at);
+ await run(process.execPath,[checker,...common,'--owner-pid',String(process.ppid)]);rec=await(await fetch(s.url+'/recovery')).json();assert.equal(rec.heartbeats.find(h=>h.id===hb.heartbeat_id).lease_until,renewed);
+ const explicit=JSON.parse((await run(process.execPath,[checker,...common,'--heartbeat','--owner-pid',String(process.ppid)])).stdout);s.track(explicit.pid);assert.equal(explicit.owner_pid,process.ppid);
+ await delay(20);await run(process.execPath,[checker,...common,'--owner-pid',String(process.ppid)]);rec=await(await fetch(s.url+'/recovery')).json();assert.ok(rec.heartbeats.find(h=>h.id===explicit.heartbeat_id).lease_until>explicit.lease_until);
+ assert.equal(rec.ai.last_check_at,(await(await fetch(s.url+'/progress')).json()).ai.last_check_at);
+});
+
+test('default parent owner exit stops a live heartbeat within one cycle and logs owner_exited',async t=>{
+ const s=await service(t),hostScript=join(s.root,'host.mjs');
+ writeFileSync(hostScript,`import {execFileSync} from 'node:child_process';console.log(execFileSync(process.execPath,${JSON.stringify([checker,'--url',s.url,'--session','v2-regression','--heartbeat'])},{encoding:'utf8'}).trim());setInterval(()=>{},1000);`);
+ const host=spawn(process.execPath,[hostScript],{stdio:['ignore','pipe','pipe'],windowsHide:true});t.after(()=>host.kill());
+ const hb=JSON.parse(String((await once(host.stdout,'data'))[0]));s.track(hb.pid);assert.equal(hb.owner_pid,host.pid);
+ await delay(1200);process.kill(hb.pid,0);const endedAt=Date.now();host.kill();await once(host,'exit');let alive=true;while(alive&&Date.now()-endedAt<10000){try{process.kill(hb.pid,0);await delay(50);}catch{alive=false;}}
+ assert.equal(alive,false);assert.ok(Date.now()-endedAt<10000);assert.equal(logs(s).filter(e=>e.event==='heartbeat_end').at(-1).reason,'owner_exited');
+});
+
+test('server lease expiry stops the real worker and logs lease_expired (controlled service clock)',async t=>{
+ const s=await service(t,tree(),{clock:true}),hb=await startHeartbeat(opts(s));s.track(hb.pid);const bytes=readFileSync(s.file);
+ // Advance server time only: no shorter production constants or fake heartbeat worker.
+ s.setClockOffset(HEARTBEAT_LEASE_MS+1);let alive=true;const until=Date.now()+12000;
+ while(alive&&Date.now()<until){try{process.kill(hb.pid,0);await delay(100);}catch{alive=false;}}
+ assert.equal(alive,false);const ends=logs(s).filter(e=>e.event==='heartbeat_end');assert.equal(ends.length,1);assert.equal(ends[0].reason,'lease_expired');assert.deepEqual(readFileSync(s.file),bytes);
+ assert.equal((await(await fetch(s.url+'/recovery')).json()).heartbeats.length,0);
 });

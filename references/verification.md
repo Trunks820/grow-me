@@ -6,7 +6,7 @@
 
 恢复覆盖：等待用户、已提交、黄叶、offered、requested/generating、ready；断线与真实终止进程分开测。重启使用同一原文件，核对 session/revision/原答案，当前 job 与旧 job 不混用。提醒只包含三个定位字段。错误地址不能改变别的访谈。短查询无变化时快速返回；记录实例变化。
 
-AI 查询中断回归：`tests/wait_flow_browser.py` 包含 `ai_presence_browser.py`，实际调用 check.mjs 后停查超过 30 秒，验证出题等待与文档 queued 都提示暂停并高亮复制提醒；恢复查询后提示消失，原等待计时不重置。覆盖从未来查、页面首次打开宽限、同端口重启恢复、桌面／390px 和已 claim 阶段不误报。Node 测试核对阈值、内存记录、普通 GET 不续命、身份／revision／instance 冲突不登记、tree.json 字节不变。此等待测试证明提示机制，不是模型性能测量。
+AI 查询中断回归：`tests/wait_flow_browser.py` 包含 `ai_presence_browser.py`，实际运行后台心跳并在 check.mjs 后停查超过 60 秒，验证出题等待、文档 queued 和已 claim 写作阶段仍提示暂停；N 是短查询秒数，不是心跳秒数。只有恢复短查询才消失，原等待计时不重置。覆盖从未短查但有心跳、页面初开宽限、同端口重启、桌面／390px、工作类型标签。Node 测试验证两个时间互不刷新、默认父 PID／显式 owner、只有匹配 owner 的 check 续租、真实宿主退出一个周期内停止。租期集成测试用隔离服务的受控时钟推进 3 分钟，运行真实 worker 与服务，不缩短生产常量，并核对 lease_expired 日志；另有边界单测。此测试不代表模型性能测量。
 
 至少一个非 Codex 助手独立读同一 SKILL，从首轮到保存文档，实际生成追问，处理上游修改与黄叶，通过复制提醒恢复，并覆盖服务退出。实际用户提交或以前明确确认的原话回放均须标来源；缺失答案不能编造。Codex 不暗中写题或代写该助手的文档。CLI 存在、测试夹具、语法检查都不算真跑。
 
@@ -50,12 +50,12 @@ cat outputs/task.html.chapter-timings.jsonl
 
 `/recovery.timing_file` 指向 `<tree.json>.runtime-timings.jsonl`；只保存事件元数据，不保存答案。每行有 event、Unix 毫秒 at、ISO at_iso、session_id、instance_id，以及相关 revision。`user_event` 有独立 sequence；check.mjs 把处理到的 revision/sequence/instance 写入 `<tree.json>.cursor.json`。AI 活跃状态仍只在内存，重启不从日志恢复“在线”。
 
-- `heartbeat_start/end`：后台工作起止；end 的 reason 区分主动停止、会话结束、过期观察。强杀后仅能知道 last_pulse_at，不能据此编造实际退出时刻。
-- `pause_shown/pause_cleared`：页面实际展示／收起提示，含 page_id；没有打开页面就没有此事件。`ai_resumed` 表示 check 或心跳在超过阈值后恢复，含 source 和 silence_ms。
+- `heartbeat_start/end`：后台工作起止；end 的 reason 区分 requested、session_closed、owner_exited、lease_expired 和 expired_observed，含 owner_pid 与 lease_until。强杀后仅能知道 last_pulse_at，不能据此编造实际退出时刻。
+- `pause_shown/pause_cleared`：页面实际展示／收起提示，含 page_id；没有打开页面就没有此事件。`ai_resumed` 仅表示 check 在超过 60 秒后恢复；心跳不能触发 AI 恢复事件，含 source 和 silence_ms。
 - `code_read_start/end`：work.mjs 包裹的每次命令，按 operation_id 配对；含 elapsed_ms、exit_code。宿主绕过入口的读取不可观测，未配对项标为中断。
 - `submission_discovered`：首次发现用户提交的 discovery_delay_ms；重复检查、AI 发布、waiting_for_save 不累加。与提交到新题的总等待分别报告，避免把轮询发现延迟算成模型生成耗时。
 - `chapter_first_published`：每章首次发布，含 job_id、chapter_id、first_published_at、elapsed_ms。既有 `<document>.chapter-timings.jsonl` 与 `/document/status.chapters[].first_published_at` 保留；重新发布不重置。
 
 Windows 查看：`Get-Content -LiteralPath '<tree.json>.runtime-timings.jsonl' | ConvertFrom-Json | Format-Table at_iso,event,sequence,chapter_id,elapsed_ms`。macOS/Linux 可逐行 `cat` 该文件，或用 Python 读取筛选 event。计时文件不能当成用户答案数据源。
 
-新增回归覆盖：symlink/junction CLI 输出、游标连续调用和实例恢复、仅用户事件、waiting_for_save、心跳不消费提交、心跳恢复页面、冻结树原话转义／多选与章节归属、代码读取起止。受控测试不证明 Claude Code 实际变快；真实跨助手用时仍由用户复测。
+新增回归覆盖：symlink/junction CLI 输出、游标连续调用和实例恢复、仅用户事件、waiting_for_save、心跳不消费提交、持续心跳不遮蔽暂停、短查询恢复页面、冻结树原话转义／多选与章节归属、代码读取起止。受控测试不证明 Claude Code 实际变快；真实跨助手用时仍由用户复测。

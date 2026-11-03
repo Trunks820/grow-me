@@ -14,9 +14,13 @@
 
 ## 耗时工作心跳
 
-出题、查代码、写文档前运行 `check.mjs --url <origin> --session <UUID> --heartbeat`。命令打印 `heartbeat_id` / PID 后立即退出；独立隐藏子进程每 10 秒读取轻量 /recovery 并 POST /ai/heartbeat，核对 session / revision / instance，**不读 /state、/context、/wait，不读取或消费用户事件，不碰游标**。每次工作结束运行 `check.mjs --url <origin> --session <UUID> --heartbeat-stop <heartbeat_id>`；可终止返回的 PID。心跳不代替后续 check：工作结束立即短查，处理期间产生的新提交。
+出题、查代码、写文档前运行 `check.mjs --url <origin> --session <UUID> --heartbeat`。命令打印 `heartbeat_id` / PID 后立即退出；独立隐藏子进程每 10 秒读取轻量 /recovery 并 POST /ai/heartbeat，核对 session / revision / instance，**不读 /state、/context、/wait，不读取或消费用户事件，不碰游标**。每次工作结束运行 `check.mjs --url <origin> --session <UUID> --heartbeat-stop <heartbeat_id>`；可终止返回的 PID。**心跳期间仍须每约 10 秒短查询，否则页面会提示暂停。** 心跳只报告当前工作类型，不能代替查询，也不证明 AI 仍在继续。工作结束立即短查，处理期间产生的新提交。
 
-间隔为 `progress.mjs: HEARTBEAT_INTERVAL_MS = 10_000`。ready、关闭服务、实例变化、服务不可达后自动结束；可传 `--owner-pid <宿主长寿命进程PID>`，宿主进程消失后退出（不要用即将退出的临时 shell PID）。宿主“结束一条回复”没有通用操作系统通知，无法仅凭 PID 精确判断。因此后台心跳最多保活 `heartbeat.mjs: HEARTBEAT_LEASE_MS = 900_000`（15 分钟），防止遗留进程永远掩盖暂停；超长工作应显式重新启动并结束旧心跳。正常停止立即登记；Windows 强杀无法执行 finally 时，服务 30 秒后登记 `expired_observed` 和最后脉冲时间，不伪造准确退出时刻。
+间隔为 `progress.mjs: HEARTBEAT_INTERVAL_MS = 10_000`，租期为 `HEARTBEAT_LEASE_MS = 180_000`（3 分钟，由 heartbeat.mjs 同名导出）。租期由服务内存管理：只有身份核对成功的 `/ai/check` 能把**相同 owner_pid** 的活动心跳续到查询时刻后 3 分钟；心跳脉冲、GET、其他 owner 的短查询均不能续租。到期后服务记 `heartbeat_end reason=lease_expired`，worker 在下一脉冲周期退出，旧 ID 不会复活。`/recovery.heartbeats[]` 返回 id / owner_pid / lease_until / last_pulse_at，便于核对。
+
+`check.mjs --heartbeat` 默认使用调用方父进程 `process.ppid` 作为 owner，回执返回 owner_pid；显式 `--owner-pid <PID>` 优先。普通 check.mjs 同样默认 process.ppid，自动给这个 owner 启动的心跳续租。若显式指定了 owner，后续短查询也传同一个 `--owner-pid`。宿主每次命令都新开临时 shell 时，应显式选择已知的稳定宿主 PID，不能假定每次 process.ppid 都相同。work.mjs 自有的心跳仍绑定 work 进程；超过 3 分钟的读取若需要续租，查询需明确用该 work PID，不能另起自动 check 循环掩盖宿主停顿。
+
+worker 每秒检查 owner 是否存在，退出后中止正在进行的心跳请求并登记 `owner_exited`，健康本机服务下在一个 10 秒周期内退出。ready、关闭服务、实例变化、服务不可达也会结束；主动停止记 requested。Windows 强杀 worker 无法执行 finally 时，服务仍按原 30 秒间隔观察规则记 expired_observed，保留最后脉冲时间，不伪造准确退出时刻。宿主结束一条回复但进程仍存活无法靠 PID 判断，**页面仍会在超过 60 秒未收到短查询时提示暂停，持续心跳也不能压住提示**。
 
 ## 集中查代码
 
@@ -32,11 +36,11 @@ node <skill>/scripts/work.mjs --url <origin> --session <UUID> --final-round -- <
 
 ## AI 查询中断提示
 
-常量 `scripts/progress.mjs` 的 `AI_CHECK_TIMEOUT_MS = 30_000` 控制提示阈值。`/progress.ai` 返回 `last_activity_at`（Unix 毫秒）、兼容别名 `last_check_at`、`source`、`seconds_since_last_check` 和 `timeout_ms`；从未收到 check／心跳时活跃时间和间隔为 null。活跃状态只在当前服务内存中，不写 tree.json、不递增 revision。普通 /state、/progress 和网页轮询不算 AI 查询，避免页面替已经停止的助手续命；手动读 /state 也不能替代 check.mjs。
+`scripts/progress.mjs` 中的 `AI_CHECK_TIMEOUT_MS = 30_000` 保留，继续作为心跳失联观察和新页面宽限的兼容间隔；新增 `SHORT_QUERY_TIMEOUT_MS = 60_000` 专门用于短查询暂停判定。`/progress.ai` 和 `/recovery.ai` 都返回独立的 `last_check_at` / `seconds_since_last_check`、`last_heartbeat_at` / `seconds_since_last_heartbeat`。前一组仅 /ai/check 刷新，后一组仅心跳脉冲刷新；没有收到相应事件时为 null。`last_activity_at` 兼容字段只映射短查询，`timeout_ms` 保留 30 秒，`short_query_timeout_ms` 为 60 秒。活跃时间只在当前服务内存中，不从日志恢复、不写 tree.json、不递增 revision。
 
-只在等待 AI 出题或等待 AI 接手文档的 queued 阶段，超过 30 秒没有 check 或心跳时隐藏“生长中／还在想”，提示“已 N 秒没收到 AI 回应，回聊天窗口发\"继续\"”，并高亮复制提醒；恢复后在下一次页面状态同步（通常 1 秒内）自动消失。等待用户答题、保存确认以及已 claim 的文档生成不套用此提示。它根据查询间隔提醒续接，不声称能读取模型的内部运行状态。
+等待 AI 出题以及文档 requested/queued、已 claim 的 generating 阶段，超过 60 秒未短查就隐藏“生长中／还在想”，提示“已 N 秒没收到 AI 回应，回聊天窗口发"继续"”，高亮复制提醒；N 取短查询间隔。心跳即使仍每 10 秒到达，也只展示“AI 正在出题／查代码／写文档”的工作标签，不清除暂停。只有短查询恢复，提示才在下一次页面状态同步（通常 1 秒内）消失。等用户答题或确认保存时不弹 AI 暂停提示。
 
-页面首次成功同步或检测到服务实例变化后有同样的 30 秒宽限，防止刚打开页面就被旧时间戳误报；使用服务器报告的时间差，避免两端时钟偏差。服务重启清空查询记录；从未来查过时始终显示“等待 AI 对话连接”，不显示暂停。即使宿主仍提前收尾，页面也会提示用户回聊天续接；不会自动唤醒已结束的 AI 对话。提醒只保证已提交／保存的答案，本地未提交草稿仍遵循原规则。
+页面首次成功同步或服务实例变化后保留原 30 秒宽限；用服务器时间差，避免两端时钟偏差。服务重启清空两组时间；从未短查过时显示“等待 AI 对话连接”，仅有心跳也不冒充已连接。普通 GET、页面轮询和心跳不能刷新 last_check_at。提醒只保证已提交／保存的答案；它不能自动唤醒已结束的对话。
 
 ## 恢复原会话
 

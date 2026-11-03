@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
-import {AI_CHECK_TIMEOUT_MS} from '../scripts/progress.mjs';import {assistantConnection} from '../assets/presentation.mjs';
+import {AI_CHECK_TIMEOUT_MS,SHORT_QUERY_TIMEOUT_MS} from '../scripts/progress.mjs';import {assistantConnection} from '../assets/presentation.mjs';
 import {mkdtempSync,writeFileSync,readFileSync,mkdirSync,rmSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';
 import {DocumentBridge,validateDocument} from '../scripts/document.mjs';import {composeDocument} from '../scripts/compose-document.mjs';import {InterviewProgress} from '../scripts/progress.mjs';import {interviewContext} from '../scripts/context.mjs';import {publicError} from '../assets/presentation.mjs';import {publishRound,reopenDecision,editDecision} from '../scripts/model.mjs';
 const node=(id,deps=[],round=1)=>({id,question:id+' 的问题',rationale:'受控测试：验证章节与等待边界。',input:'text',options:[],answer:{option_ids:[],text:'原文\n <>& event: message data: {}'},depends_on:deps,status:'answered',round});
@@ -14,8 +14,8 @@ test('operational protocol output is suppressed without changing interview answe
 
 test('AI check age is memory-only, distinguishes never connected, and honors threshold and page-open grace',t=>{
  const tree=seed(),before=JSON.stringify(tree);let now=100000;t.mock.method(Date,'now',()=>now);const progress=new InterviewProgress(()=>tree);
- assert.equal(AI_CHECK_TIMEOUT_MS,30000);now+=120000;assert.deepEqual(progress.status().ai,{last_check_at:null,last_activity_at:null,source:null,seconds_since_last_check:null,timeout_ms:30000});assert.equal(assistantConnection(progress.status().ai,120000),'connecting');
- const checked=progress.checkIn().ai.last_check_at;now+=AI_CHECK_TIMEOUT_MS;assert.equal(progress.status().ai.last_check_at,checked);assert.equal(progress.status().ai.seconds_since_last_check,30);assert.equal(assistantConnection(progress.status().ai,120000),'connected');
+ assert.equal(AI_CHECK_TIMEOUT_MS,30000);now+=120000;assert.deepEqual(progress.status().ai,{last_check_at:null,last_heartbeat_at:null,last_activity_at:null,source:null,seconds_since_last_check:null,seconds_since_last_heartbeat:null,heartbeat_active:false,heartbeat_activity:null,timeout_ms:30000,short_query_timeout_ms:60000});assert.equal(assistantConnection(progress.status().ai,120000),'connecting');
+ const checked=progress.checkIn().ai.last_check_at;assert.equal(SHORT_QUERY_TIMEOUT_MS,60000);now+=SHORT_QUERY_TIMEOUT_MS;assert.equal(progress.status().ai.last_check_at,checked);assert.equal(progress.status().ai.seconds_since_last_check,60);assert.equal(assistantConnection(progress.status().ai,120000),'connected');
  now++;assert.equal(assistantConnection(progress.status().ai,120000),'paused');assert.equal(assistantConnection(progress.status().ai,0),'connected','a freshly opened page gets a grace period');
  progress.checkIn();assert.equal(assistantConnection(progress.status().ai,120000),'connected');assert.equal(JSON.stringify(tree),before);
  assert.equal(assistantConnection(new InterviewProgress(()=>tree).status().ai,120000),'connecting','restart loses liveness, not saved answers');

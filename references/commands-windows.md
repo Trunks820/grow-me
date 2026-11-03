@@ -28,3 +28,5 @@ node "<skill>/scripts/check.mjs" --url "http://127.0.0.1:<port>" --session "<UUI
 ```
 
 短查询自动管理游标；不再手写 --after-*。恢复后第一步先 check.mjs；curl GET 仅用于读取内容，不是活跃查询。查代码只在最后一轮等待用户提交的窗口，经 runtime.md 的 work.mjs 入口记录每次起止。
+
+心跳期间仍每约 10 秒运行普通 check.mjs。默认 owner 为调用方父进程 PID；若启动时显式传 --owner-pid，后续短查询也传相同值来续 3 分钟租期。心跳不会消除超过 60 秒未短查的暂停提示。

@@ -22,15 +22,20 @@ const allConfirmed=()=>Boolean(state?.nodes.length)&&state.nodes.every(n=>n.stat
 const documentMatches=()=>documentState.source?.session_id===state.session_id&&documentState.source?.revision===state.revision;
 function assistantStatus(){
   const offered=documentState.phase==='offered'&&documentState.offered_revision===state?.revision;
-  const queued=state?.status==='complete'&&documentMatches()&&['requested','generating'].includes(documentState.phase)&&documentState.stage==='queued';
-  if(state?.schema_version!==2||!(isWaiting()&&!offered||queued))return 'inactive';
+  const writing=state?.status==='complete'&&documentMatches()&&['requested','generating'].includes(documentState.phase);
+  if(state?.schema_version!==2||!(isWaiting()&&!offered||writing))return 'inactive';
   return assistantConnection(aiActivity,performance.now()-aiOpenedAt);
+}
+function heartbeatNote(){
+  const text=aiActivity?.heartbeat_active?{questions:'AI 正在出题',code:'AI 正在查代码',document:'AI 正在写文档'}[aiActivity.heartbeat_activity]:null;
+  return text?'心跳报告：'+text+'（不代表对话仍在继续）':'';
 }
 function waitingHeader(title,progress){
   if(['paused','connecting'].includes(assistantDisplay)){
     const paused=assistantDisplay==='paused',notice=el('p',paused?pauseText():'请回到聊天窗口让 AI 继续，或点「复制提醒」粘贴过去。你的答案已保存。','ai-wait-notice');notice.id='ai-wait-notice';
     card.append(el('h2',paused?'等待 AI 对话续接':'等待 AI 对话连接','q'),notice);if(paused)card.append(el('p','也可以点「复制提醒」粘贴过去。你的答案已保存，不会丢。','w'));
   }else card.append(el('h2',title,'q'),el('p',progress,'growth-status'));
+  const note=el('p',heartbeatNote(),'w');note.id='heartbeat-work';note.hidden=!note.textContent;card.append(note);
 }
 
 async function post(path,body){
@@ -160,11 +165,11 @@ function render(){
       const decision=n.rationale.match(/^[\s\S]*?[。！？.!?](?:\s|$)?/)?.[0]??n.rationale;
       card.append(el('p','决定什么：'+decision.trim(),'why'));const reason=el('details',undefined,'question-reason');reason.append(el('summary','为什么问'),el('p',n.rationale,'w'));card.append(reason);
       if(n.status==='needs_review')card.append(el('p','本题或其上游已重新打开。请确认旧答案是否仍然有效。','review-note'));
-      inputs(n);
+      inputs(n);const note=el('p',heartbeatNote(),'w');note.id='heartbeat-work';note.hidden=!note.textContent;card.append(note);
     }else if(openQuestions().length)renderSummary();
     else renderWaiting();
   }
-  if(reportedPause!==(assistantDisplay==='paused')){reportedPause=assistantDisplay==='paused';post('/ai/telemetry',{event:reportedPause?'pause_shown':'pause_cleared',page_id:pageId,last_activity_at:aiActivity?.last_activity_at,expected_revision:state.revision,expected_instance_id:aiInstance}).catch(()=>{});}
+  if(reportedPause!==(assistantDisplay==='paused')){reportedPause=assistantDisplay==='paused';post('/ai/telemetry',{event:reportedPause?'pause_shown':'pause_cleared',page_id:pageId,last_check_at:aiActivity?.last_check_at,expected_revision:state.revision,expected_instance_id:aiInstance}).catch(()=>{});}
   card.dataset.currentId=currentId??'';updateTree();if(hadText&&!busy)card.querySelector('input:checked,textarea,input')?.focus({preventScroll:true});
   }catch(error){renderFailed=true;card.replaceChildren(el('h2','正在同步生长状态…','q'),el('p','生长中','growth-status'),elapsedLine(state.status==='complete'?documentSince:waitingSince),el('p','已提交答案仍在本机，将自动重新读取。','w'));message('页面状态正在同步，稍后会自动恢复。',true);console.error('State rendering failed');}finally{rendering=false;}
 }
@@ -224,6 +229,7 @@ async function refresh(force=false){
   if(key!==documentKey){documentKey=key;documentSince=key?performance.now()-Math.max(0,(doc.server_now??Date.now())-(doc.started_at??Date.now())):null;}
   document.querySelector('#connection').textContent=state.schema_version===1?'v1 历史访谈 · 只读':state.status==='complete'?(allConfirmed()?'已保存 · 本机文档预览':'保存状态与答案待核对'):'已连接本机';
   if(changed||docChanged||assistantDisplay!==assistantStatus()||force||renderFailed)render();
+  const note=document.querySelector('#heartbeat-work');if(note){note.textContent=heartbeatNote();note.hidden=!note.textContent;}
 }
 async function poll(){if(stopped)return;try{await refresh();}catch(error){if(!stopped){document.querySelector('#connection').textContent='连接已断开，正在重连；已提交答案仍在本机。';if(!state)message('暂时读不到问题，将自动重连。',true);}}if(!stopped)setTimeout(poll,1000);}
 document.querySelector('#copy-reminder').addEventListener('click',async()=>{
