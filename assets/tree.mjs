@@ -144,9 +144,9 @@ export function createDecisionTree(container,{onNode=()=>{},onFruit=()=>{}}={}){
   function showTip(id,event){const n=tree.nodes.find(n=>n.id===id);if(!n||!tooltip)return;tooltip.replaceChildren();const root=tree.nodes.find(r=>r.id===layout.nodes.find(p=>p.id===id).rootId);for(const[cls,text]of[['k',`第 ${n.round} 轮 · ${root.question}${n.status==='needs_review'?' · 需复核':''}`],['',n.question],['a',answerText(n)]]){const p=document.createElement('div');p.className=cls;p.textContent=text;tooltip.append(p);}tooltip.hidden=false;const box=event.currentTarget.getBoundingClientRect();tooltip.style.left=Math.max(8,Math.min(innerWidth-264,box.right+8))+'px';tooltip.style.top=Math.max(8,Math.min(innerHeight-tooltip.offsetHeight-8,box.top-10))+'px';}
   function fit(){if(!layout)return;const bounds=cameraFrame(tree,layout),w=bounds.width/zoom,h=bounds.height/zoom;canvas.setAttribute('viewBox',`${bounds.x+(bounds.width-w)/2} ${bounds.y+(bounds.height-h)/2} ${w} ${h}`);canvas.dataset.scale=String(zoom);}
   container.querySelectorAll('[data-tree-zoom]').forEach(b=>b.addEventListener('click',()=>{const m=b.dataset.treeZoom;zoom=m==='fit'?1:clamp(zoom*(m==='in'?1.3:1/1.3),.7,4);fit();}));
-  replayButton?.addEventListener('click',()=>{replayStarted=performance.now();zoom=1;hideTip();fit();kick();});
+  replayButton?.addEventListener('click',()=>{if(reduced.matches)return;replayStarted=performance.now();zoom=1;hideTip();fit();kick();});
   function draw(now){
-    frame=0;if(!layout)return;if(now-lastDraw<70){frame=requestAnimationFrame(draw);return;}lastDraw=now;
+    frame=0;if(!layout)return;if(!reduced.matches&&now-lastDraw<70){frame=requestAnimationFrame(draw);return;}lastDraw=now;
     const replay=replayStarted!==null&&!reduced.matches?replayFrame(layout,now-replayStarted):null,visibleRound=replay?.round??tree.current_round,local=replay?.local??now-growingAt,progress=reduced.matches?1:ease(local/550);
     const target=replay?roundLayouts.get(visibleRound)??layout:layout;
     const drawing=growingLayout(replay?roundLayouts.get(visibleRound-1):previousLayout,target,progress);
@@ -177,7 +177,7 @@ export function createDecisionTree(container,{onNode=()=>{},onFruit=()=>{}}={}){
     if(replayButton){replayButton.hidden=tree.status!=='complete'||!completionTarget||reduced.matches;replayButton.disabled=Boolean(replay?.playing);replayButton.textContent=replay?.playing?'生长回放中…':'重看生长';}
     if(replay&&!replay.playing)replayStarted=null;if(active||waiting)frame=requestAnimationFrame(draw);
   }
-  function kick(){if(!frame)frame=requestAnimationFrame(draw);}
+  function kick(){if(reduced.matches){if(frame)cancelAnimationFrame(frame);draw(performance.now());return;}if(!frame)frame=requestAnimationFrame(draw);}
   reduced.addEventListener('change',()=>{canvas.getAnimations({subtree:true}).forEach(a=>a.finish());if(reduced.matches){replayStarted=null;fruitingAt=-Infinity;completionFrom=completionTarget;newRound=0;}kick();});
   return{update(next,opts={}){const previous=tree,now=performance.now();tree=next;options=opts;if(!previous||previous.current_round!==tree.current_round)previousLayout=layout;layout=layoutTree(tree);
     roundLayouts=new Map(layout.rounds.map(({round})=>[round,round===tree.current_round?layout:layoutTree({...tree,current_round:round,nodes:tree.nodes.filter(n=>n.round<=round)})]));const target=(tree.status==='complete'||opts.finished)&&tree.nodes.length>0&&tree.nodes.every(n=>n.status==='answered')?1:0;
