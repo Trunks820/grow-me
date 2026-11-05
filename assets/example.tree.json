@@ -27,6 +27,134 @@
       "rationale": "示例题：确定首版入口和交付边界；实际访谈必须按真实需求重新写题与理由。"
     },
     {
+      "id": "audience",
+      "question": "首批用户是谁？",
+      "input": "single_choice",
+      "options": [
+        {
+          "id": "self",
+          "label": "我自己"
+        },
+        {
+          "id": "team",
+          "label": "小团队"
+        },
+        {
+          "id": "public",
+          "label": "公开用户"
+        }
+      ],
+      "answer": null,
+      "depends_on": [],
+      "status": "pending",
+      "round": 1,
+      "rationale": "示例题：确定首版入口和交付边界；实际访谈必须按真实需求重新写题与理由。"
+    },
+    {
+      "id": "goal",
+      "question": "第一版最想解决什么？",
+      "input": "single_choice",
+      "options": [
+        {
+          "id": "speed",
+          "label": "更快整理需求"
+        },
+        {
+          "id": "clarity",
+          "label": "想得更清楚"
+        }
+      ],
+      "answer": null,
+      "depends_on": [],
+      "status": "pending",
+      "round": 1,
+      "rationale": "示例题：确定首版入口和交付边界；实际访谈必须按真实需求重新写题与理由。"
+    },
+    {
+      "id": "device",
+      "question": "主要在哪种设备上用？",
+      "input": "single_choice",
+      "options": [
+        {
+          "id": "desktop",
+          "label": "电脑"
+        },
+        {
+          "id": "phone",
+          "label": "手机"
+        }
+      ],
+      "answer": null,
+      "depends_on": [],
+      "status": "pending",
+      "round": 1,
+      "rationale": "示例题：确定首版入口和交付边界；实际访谈必须按真实需求重新写题与理由。"
+    },
+    {
+      "id": "channels",
+      "question": "最希望通过哪个渠道收到提醒？",
+      "input": "single_choice",
+      "options": [
+        {
+          "id": "mail",
+          "label": "邮件"
+        },
+        {
+          "id": "inbox",
+          "label": "站内消息"
+        },
+        {
+          "id": "sms",
+          "label": "短信"
+        },
+        {
+          "id": "wechat",
+          "label": "微信"
+        },
+        {
+          "id": "group",
+          "label": "群公告"
+        },
+        {
+          "id": "push",
+          "label": "App 推送"
+        },
+        {
+          "id": "none",
+          "label": "都不需要"
+        }
+      ],
+      "answer": null,
+      "depends_on": [],
+      "status": "pending",
+      "round": 1,
+      "rationale": "示例题：确定首版入口和交付边界；实际访谈必须按真实需求重新写题与理由。"
+    },
+    {
+      "id": "deadline",
+      "question": "第一版希望多久上线？",
+      "input": "single_choice",
+      "options": [
+        {
+          "id": "week",
+          "label": "一周内"
+        },
+        {
+          "id": "month",
+          "label": "一个月内"
+        },
+        {
+          "id": "later",
+          "label": "不着急"
+        }
+      ],
+      "answer": null,
+      "depends_on": [],
+      "status": "pending",
+      "round": 1,
+      "rationale": "示例题：确定首版入口和交付边界；实际访谈必须按真实需求重新写题与理由。"
+    },
+    {
       "id": "budget",
       "question": "预算和补充说明",
       "input": "text",
