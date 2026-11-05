@@ -81,14 +81,15 @@ def native_camera(page,tree,zoom=1):
 
 
 def check_tail(page,id,kind):
+    page.wait_for_timeout(250)
     expect(page.locator('#bubble-link')).to_be_visible()
     expect(page.locator('#bubble-link')).to_have_attribute('data-target',id)
     expect(page.locator('#bubble-link')).to_have_attribute('data-kind',kind)
     fill=page.locator('.bubble-tail-fill')
     assert fill.evaluate('e=>getComputedStyle(e).fill')!='none'
-    d=fill.get_attribute('d');assert d.endswith('Z'),d
-    points=[float(n) for n in re.findall(r'-?\d+(?:\.\d+)?',d)]
-    tip=points[4:6];hit=page.locator(f'.tree-node[data-node-id="{id}"] .tree-hit').bounding_box()
+    d=fill.get_attribute('d');assert d.startswith('M') and d.endswith('Z') and d.count('M')==1,d
+    assert page.locator('.bubble-tail-edge').get_attribute('d')==d
+    link=page.locator('#bubble-link');tip=[float(link.get_attribute('data-tip-x')),float(link.get_attribute('data-tip-y'))];hit=page.locator(f'.tree-node[data-node-id="{id}"] .tree-hit').bounding_box()
     assert 5<=math.hypot(tip[0]-hit['x']-hit['width']/2,tip[1]-hit['y']-hit['height']/2)<=12,(tip,hit)
 
 
@@ -97,10 +98,10 @@ def answer_layout(page):
     scene=page.locator('.tree-viewport').bounding_box()
     heading=page.locator('#question-heading').bounding_box()
     assert heading['y']+heading['height']<=scene['y'],(heading,scene)
-    if page.locator('#node-dialog').get_attribute('data-placement')=='strip':
-        assert scene['y']+scene['height']<=box['y'],(scene,box)
-    else:
-        assert box['width']<=248 and box['height']<=240,box
+    expect(page.locator('#node-dialog')).to_have_attribute('data-placement','bubble')
+    if True:
+        assert 248<=box['width']<=300 or box['width']<=page.viewport_size['width']-40,box
+        assert box['height']<=page.viewport_size['height']*.5+1,box
         trunk=page.locator('.tree-trunk').bounding_box()
         assert min(box['x']+box['width'],trunk['x']+trunk['width'])<=max(box['x'],trunk['x']) or min(box['y']+box['height'],trunk['y']+trunk['height'])<=max(box['y'],trunk['y']), (box,trunk)
     viewport=page.viewport_size
@@ -139,7 +140,7 @@ def spoken_bud_layout(browser,out,report):
             page.screenshot(path=str(out/f'{label}-02-question.png'))
             expect(page.locator('#node-dialog')).to_have_attribute('data-placement','bubble')
             check_tail(page,'purpose','options')
-            assert float(page.locator('#node-dialog').evaluate('e=>getComputedStyle(e).borderTopLeftRadius').replace('px',''))>=24
+            assert float(page.locator('#node-dialog').evaluate('e=>getComputedStyle(e).borderTopLeftRadius').replace('px',''))>=16
             if label=='desktop':
                 page.screenshot(path=str(out/'desktop-tree-hidden.png'),style='#tree-canvas{visibility:hidden!important}')
             page.get_by_label('让报名有一个统一入口',exact=True).check()
@@ -179,6 +180,7 @@ def spoken_bud_layout(browser,out,report):
                 # Small visual area check, not a claim of physical-device keyboard coverage.
                 page.set_viewport_size({'width':390,'height':540})
                 page.wait_for_function("()=>document.querySelector('#node-dialog').getBoundingClientRect().bottom<=innerHeight")
+                page.wait_for_timeout(400)
                 answer_layout(page)
                 expect(page.get_by_role('textbox')).to_have_value('只留名字和联系方式。')
             confirm(page)
@@ -210,8 +212,8 @@ def long_content_layout(browser,out,report):
                     open_flower(page,question['id'])
                     expect(page.locator('#question-heading #node-question')).to_have_text(question['question'])
                     expect(page.locator('#node-dialog #node-question')).to_have_count(0)
-                    expect(page.locator('#node-dialog')).to_have_attribute('data-placement','strip')
-                    expect(page.locator('#bubble-link')).to_be_hidden()
+                    expect(page.locator('#node-dialog')).to_have_attribute('data-placement','bubble')
+                    check_tail(page,question['id'],'options')
                     answer_layout(page)
                     selected=question['options'][:2] if question['input']=='multi_choice' else question['options'][:1]
                     for option in selected:page.get_by_label(option['label'],exact=True).check()
@@ -222,7 +224,7 @@ def long_content_layout(browser,out,report):
                     expect(page.locator('#node-dialog')).not_to_be_visible()
                     expect(page.locator('#question-heading')).not_to_be_visible()
                     open_flower(page,question['id'])
-                    expect(page.locator('#node-dialog')).to_have_attribute('data-placement','strip')
+                    expect(page.locator('#node-dialog')).to_have_attribute('data-placement','bubble')
                     expect(page.locator('#question-heading #node-question')).to_have_text(question['question'])
                     for option in selected:expect(page.get_by_label(option['label'],exact=True)).to_be_checked()
                     expect(page.get_by_label('补充说明（可选）',exact=True)).to_have_value(note)
@@ -232,7 +234,7 @@ def long_content_layout(browser,out,report):
                     page.get_by_role('button',name='关闭',exact=True).click()
                     assert service.file.read_bytes()==source
             finally:page.close()
-        report['checks'].append('Separate long-question and 5-option fixtures use the bottom paper strip while the question stays at the top. Desktop/mobile selection and exact optional text survive closing/reopening, flowers remain pending, and tree.json is unchanged without confirmation or submission.')
+        report['checks'].append('Separate long-question and 5-option fixtures stay speech bubbles (taller, scrolling inside) while the question stays at the top. Desktop/mobile selection and exact optional text survive closing/reopening, flowers remain pending, and tree.json is unchanged without confirmation or submission.')
     finally:service.close()
 
 
@@ -311,7 +313,7 @@ def run(out):
             expect(page.locator('#next-question')).to_have_count(0)
             # An explicitly reopened local draft also stays the current question until confirmed.
             open_flower(page,'capacity',edit=True);next_question(page,'capacity');confirm(page)
-            report['checks'].append('Visible half-open buds; only the current bud breathes; Next never skips unconfirmed input and does not auto-open after confirmation. The question is above the tree; short options are in a narrow speech bubble by the flower; text/long choices use the paper strip; the tree never moves.')
+            report['checks'].append('Visible half-open buds; only the current bud breathes; Next never skips unconfirmed input and does not auto-open after confirmation. The question is above the tree; short options are in a narrow speech bubble by the flower; long questions wrap at the top and many options make the bubble taller; the tree never moves.')
             assert service.file.read_bytes()==source
             assert geometry==page.locator('.tree-branch').evaluate_all('a=>a.map(n=>n.getAttribute("d"))')
             report['checks'].append('Five consecutive answers; readonly readback; explicit draft edit; another two answers; note switching retains unconfirmed input; original bloom animation and branch geometry retained.')

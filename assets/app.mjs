@@ -206,8 +206,8 @@ function nodeTarget(id){return [...document.querySelectorAll('.tree-node')].find
 function closeNote(){dialog.close();noteId=null;currentId=null;questionHeading.hidden=true;document.querySelector('#bubble-link').setAttribute('hidden','');document.body.classList.remove('note-open');updateNavigation();}
 function showNote(){
   noteMotion?.cancel();if(!dialog.open)dialog.show();document.body.classList.add('note-open');questionHeading.hidden=!noteId;budGuide.hidden=true;dialog.scrollTop=0;positionNote();
-  if(!matchMedia('(prefers-reduced-motion: reduce)').matches)noteMotion=dialog.animate([{opacity:0,transform:'translateY(12px)'},{opacity:1,transform:'none'}],{duration:190,easing:'cubic-bezier(.2,.8,.3,1)'});
-  document.querySelector('#node-question')?.focus({preventScroll:true});syncNotePosition();
+  if(!matchMedia('(prefers-reduced-motion: reduce)').matches){noteMotion=dialog.animate([{opacity:0,transform:'scale(.96)'},{opacity:1,transform:'none'}],{duration:150,easing:'ease-out'});document.querySelector('#bubble-link').animate([{opacity:0},{opacity:1}],{duration:150,easing:'ease-out'});}
+  document.querySelector('#node-question')?.focus({preventScroll:true});syncNotePosition();setTimeout(syncNotePosition,120);
 }
 function editDraft(id){const value=drafts.get(id);if(value)working.set(id,structuredClone(value));openNode(id,nodeTarget(id),'edit');}
 function openNode(id,trigger,mode){
@@ -257,42 +257,56 @@ function positionNote(){
   if(!budGuide.hidden){
     const point=flowerPoint(budGuide.dataset.target);
     budGuide.style.visibility=point?'visible':'hidden';
-    if(point){const width=budGuide.offsetWidth,height=budGuide.offsetHeight,place=bubblePlace(point,width,height,budGuide.dataset.target,true)??bubblePlace(point,width,height,budGuide.dataset.target,true,true,true);budGuide.style.visibility=place?'visible':'hidden';if(place){budGuide.style.left=place.x+'px';budGuide.style.top=place.y+'px';drawBubbleTail(budGuide,place,point,20);}}
+    if(point){const width=budGuide.offsetWidth,height=budGuide.offsetHeight,place=bubblePlace(point,width,height,budGuide.dataset.target,true)??bubblePlace(point,width,height,budGuide.dataset.target,true,true,true);budGuide.style.visibility=place?'visible':'hidden';if(place){budGuide.style.left=place.x+'px';budGuide.style.top=place.y+'px';drawBubbleTail(budGuide,place,point,17);}}
   }
   if(!dialog.open)return;
   const n=state?.nodes.find(n=>n.id===noteId),point=n?flowerPoint(n.id):null;
-  // Long content has an explicit paper-strip fallback; short questions keep
-  // their speech shape. The question always stays at the top.
-  const long=!n||n.question.length>44||n.input==='text'||n.options.length>3||n.options.some(o=>o.label.length>34)||(noteMode==='read'&&answerText(n,drafts.get(n.id)??n.answer).length>90);
-  dialog.dataset.placement='bubble';dialog.style.width='';dialog.style.left='0px';dialog.style.top='0px';
-  let place=!long&&point?bubblePlace(point,dialog.offsetWidth,dialog.offsetHeight,n.id):null;
-  if(!long&&point&&!place){for(const width of [dialog.offsetWidth,208,188,168,148]){dialog.style.width=width+'px';place=bubblePlace(point,dialog.offsetWidth,dialog.offsetHeight,n.id)??bubblePlace(point,dialog.offsetWidth,dialog.offsetHeight,n.id,false,true);if(place)break;}}
-  if(!long&&point){
-    // A short question always remains a speech bubble, even in a dense crown.
-    place??=bubblePlace(point,dialog.offsetWidth,dialog.offsetHeight,n.id,false,true,true);
-    dialog.style.left=place.x+'px';dialog.style.top=place.y+'px';
-    drawBubbleTail(dialog,place,point,28);
-  }else{
-    dialog.dataset.placement='strip';dialog.style.width='';dialog.style.left='';dialog.style.top='';
+  // Every question is a speech bubble beside its bud; long question text wraps
+  // in the top heading and many options make the bubble taller (scrolls inside).
+  questionHeading.classList.toggle('long',!!n&&n.question.length>36);
+  dialog.dataset.placement='bubble';dialog.style.left='0px';dialog.style.top='0px';
+  const wide=n&&(n.options.some(o=>o.label.length>12)||n.input==='text'||noteMode==='read');
+  dialog.style.width=(wide&&innerWidth>=600?300:Math.min(248,innerWidth-40))+'px';
+  if(!point){dialog.style.left=Math.max(10,(innerWidth-dialog.offsetWidth)/2)+'px';dialog.style.top=Math.max(10,innerHeight-dialog.offsetHeight-20)+'px';return;}
+  let place=bubblePlace(point,dialog.offsetWidth,dialog.offsetHeight,n.id)??bubblePlace(point,dialog.offsetWidth,dialog.offsetHeight,n.id,false,true)??bubblePlace(point,dialog.offsetWidth,dialog.offsetHeight,n.id,false,true,true);
+  let w=dialog.offsetWidth,h=dialog.offsetHeight;dialog.style.maxHeight='';
+  const covers=p=>p.x-6<point.x&&point.x<p.x+w+6&&p.y-6<point.y&&point.y<p.y+h+6;
+  const tr=document.querySelector('.tree-trunk')?.getBoundingClientRect(),onTrunk=p=>tr&&p.x<tr.right&&p.x+w>tr.left&&p.y<tr.bottom&&p.y+h>tr.top;
+  // Cramped viewports (e.g. mobile keyboard open): try a slimmer bubble at the side first.
+  for(const width of [220,200,180,168,156]){if(!(covers(place)||onTrunk(place))||innerWidth>=600||n.options.length>4)break;dialog.style.width=width+'px';w=dialog.offsetWidth;h=dialog.offsetHeight;const p=bubblePlace(point,w,h,n.id)??bubblePlace(point,w,h,n.id,false,true);if(p&&!covers(p)&&!onTrunk(p)){place=p;break;}}
+  if(covers(place)||onTrunk(place)){
+    // Never sit on the bud: hang below it (or above), shrinking with inner scroll.
+    const limit=innerHeight-64,x=Math.max(10,Math.min(innerWidth-w-10,point.x-w/2)),top=Math.max(64,questionHeading.hidden?0:questionHeading.getBoundingClientRect().bottom+10);
+    const below=limit-(point.y+18),above=point.y-18-top;
+    const trunk=document.querySelector('.tree-trunk')?.getBoundingClientRect(),hitsTrunk=(y,hh)=>trunk&&x<trunk.right&&x+w>trunk.left&&y<trunk.bottom&&y+hh>trunk.top;
+    const under=trunk&&trunk.bottom>point.y?trunk.bottom+8:null;
+    const opts=[{y:point.y+18,room:below,down:true,pen:0},{y:null,room:above,down:false,pen:0},...(under&&point.y+18+60>under?[{y:under,room:limit-under,down:true,pen:.5}]:[])].map(o=>{const hh=Math.min(h,o.room),y=o.down?o.y:point.y-18-hh;return{...o,hh,y,score:(hitsTrunk(y,hh)?2:0)+(o.room>=h?0:1)+o.pen-o.room/1e4};}).filter(o=>o.room>40).sort((a,b)=>a.score-b.score);
+    const o=opts[0];if(o){if(o.hh<h){dialog.style.maxHeight=o.hh+'px';h=dialog.offsetHeight;}place={x,y:o.down?o.y:point.y-18-h};}
   }
+  dialog.style.left=place.x+'px';dialog.style.top=place.y+'px';
+  drawBubbleTail(dialog,place,point,18);
 }
+// One closed path: rounded body (radius r) with a small blunt tail that grows
+// out of the side facing the bud. No box-plus-triangle seams.
 function drawBubbleTail(element,place,point,radius){
-  const width=element.offsetWidth,height=element.offsetHeight,half=element===budGuide?8:13;
-  const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
-  const side=point.y<place.y?'top':point.y>place.y+height?'bottom':point.x<place.x?'left':'right';
-  let a,b,edge;
-  if(side==='top'||side==='bottom'){
-    const x=clamp(point.x,place.x+radius+half,place.x+width-radius-half),y=side==='top'?place.y+1:place.y+height-1;
-    a={x:x-half,y};b={x:x+half,y};edge={x,y};
-  }else{
-    const x=side==='left'?place.x+1:place.x+width-1,y=clamp(point.y,place.y+radius+half,place.y+height-radius-half);
-    a={x,y:y-half};b={x,y:y+half};edge={x,y};
-  }
-  const dx=point.x-edge.x,dy=point.y-edge.y,length=Math.hypot(dx,dy)||1;
-  const tip={x:point.x-dx/length*9,y:point.y-dy/length*9};
-  const curve=`M${a.x} ${a.y} Q${edge.x+dx*.18} ${edge.y+dy*.18} ${tip.x} ${tip.y} Q${edge.x+dx*.35} ${edge.y+dy*.35} ${b.x} ${b.y}`;
-  const link=document.querySelector('#bubble-link');link.querySelector('.bubble-tail-fill').setAttribute('d',curve+'Z');link.querySelector('.bubble-tail-edge').setAttribute('d',curve);
-  link.dataset.target=element===budGuide?budGuide.dataset.target:noteId;link.dataset.kind=element===budGuide?'guide':'options';link.removeAttribute('hidden');
+  const w=element.offsetWidth,h=element.offsetHeight,x0=place.x,y0=place.y,x1=x0+w,y1=y0+h,r=Math.min(radius,h/2,w/2),half=element===budGuide?6:7;
+  const clamp=(n,min,max)=>Math.max(min,Math.min(max,n)),f=n=>Math.round(n*10)/10;
+  const side=point.x<x0&&point.y>=y0-4&&point.y<=y1+4?'left':point.x>x1&&point.y>=y0-4&&point.y<=y1+4?'right':point.y<y0?'top':point.y>y1?'bottom':point.x<x0+w/2?'left':'right';
+  const horizontal=side==='left'||side==='right';
+  const c=horizontal?{x:side==='left'?x0:x1,y:clamp(point.y,y0+r+half,y1-r-half)}:{x:clamp(point.x,x0+r+half,x1-r-half),y:side==='top'?y0:y1};
+  let dx=point.x-c.x,dy=point.y-c.y;const dist=Math.hypot(dx,dy)||1;dx/=dist;dy/=dist;
+  const len=clamp(dist-9,8,90),tip={x:c.x+dx*len,y:c.y+dy*len};
+  // Traversal is clockwise: top L→R, right T→B, bottom R→L, left B→T.
+  const along={top:[1,0],right:[0,1],bottom:[-1,0],left:[0,-1]}[side];
+  const a={x:c.x-along[0]*half,y:c.y-along[1]*half},b={x:c.x+along[0]*half,y:c.y+along[1]*half};
+  const blunt=2.2,ta={x:tip.x-along[0]*blunt,y:tip.y-along[1]*blunt},tb={x:tip.x+along[0]*blunt,y:tip.y+along[1]*blunt};
+  const tail=`L${f(a.x)} ${f(a.y)} Q${f(c.x+dx*len*.55-along[0]*1)} ${f(c.y+dy*len*.55-along[1]*1)} ${f(ta.x)} ${f(ta.y)} Q${f(tip.x+dx*2)} ${f(tip.y+dy*2)} ${f(tb.x)} ${f(tb.y)} Q${f(c.x+dx*len*.35+along[0]*2)} ${f(c.y+dy*len*.35+along[1]*2)} ${f(b.x)} ${f(b.y)} `;
+  const t=side==='top'?tail:'',ri=side==='right'?tail:'',bo=side==='bottom'?tail:'',le=side==='left'?tail:'';
+  const d=`M${f(x0+r)} ${f(y0)} ${t}L${f(x1-r)} ${f(y0)} Q${f(x1)} ${f(y0)} ${f(x1)} ${f(y0+r)} ${ri}L${f(x1)} ${f(y1-r)} Q${f(x1)} ${f(y1)} ${f(x1-r)} ${f(y1)} ${bo}L${f(x0+r)} ${f(y1)} Q${f(x0)} ${f(y1)} ${f(x0)} ${f(y1-r)} ${le}L${f(x0)} ${f(y0+r)} Q${f(x0)} ${f(y0)} ${f(x0+r)} ${f(y0)} Z`;
+  const link=document.querySelector('#bubble-link');link.querySelector('.bubble-tail-fill').setAttribute('d',d);link.querySelector('.bubble-tail-edge').setAttribute('d',d);
+  link.dataset.target=element===budGuide?budGuide.dataset.target:noteId;link.dataset.kind=element===budGuide?'guide':'options';link.dataset.side=side;link.dataset.tipX=f(tip.x);link.dataset.tipY=f(tip.y);
+  element.dataset.side=side;element.style.transformOrigin=side==='left'?'0 50%':side==='right'?'100% 50%':side==='top'?'50% 0':'50% 100%';
+  link.removeAttribute('hidden');
 }
 function flowerPoint(id){const node=nodeTarget(id);if(!node||node.dataset.visible==='false')return null;const box=node.querySelector('.tree-hit').getBoundingClientRect();return{x:box.x+box.width/2,y:box.y+box.height/2};}
 function bubblePlace(point,width,height,id,guide=false,relaxed=false,fallback=false){
