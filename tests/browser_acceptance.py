@@ -41,6 +41,16 @@ def capture(page,out,name):
 def no_overflow(page):
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'),'page horizontal overflow'
 
+def open_question(page,id,edit=False):
+    page.locator(f'.tree-node[data-node-id="{id}"]').click()
+    expect(page.locator('#node-dialog')).to_have_attribute('data-node-id',id)
+    if edit:
+        page.get_by_role('button',name='改',exact=True).click()
+        expect(page.locator('#node-dialog')).to_have_attribute('data-mode','edit')
+
+def open_summary(page):
+    page.get_by_role('button',name='回看汇总，提交本轮',exact=True).click()
+
 def document_fixture(status):
     import html
     source=status['source'];esc=html.escape
@@ -57,17 +67,17 @@ def run_suite(work,scenario='all',layout_fixture='v7'):
             try:
                 ai_check(service)
                 page=browser.new_page(viewport={'width':1440,'height':900});page.on('pageerror',lambda e:report['errors'].append(str(e)))
-                page.clock.install();page.goto(service.url);page.wait_for_load_state('networkidle');expect(page.get_by_role('heading',name='界面视觉以哪一版为准？',exact=True)).to_be_visible();page.wait_for_timeout(1600)
-                assert page.evaluate('getComputedStyle(document.body).backgroundColor')=='rgb(239, 233, 220)'
+                page.clock.install();page.goto(service.url);page.wait_for_load_state('networkidle');expect(page.locator('#bud-guide')).to_have_text('点这里开始');expect(page.locator('#bud-guide')).to_be_visible();page.wait_for_timeout(1600)
+                assert page.evaluate('getComputedStyle(document.body).backgroundColor')=='rgb(242, 238, 229)'
                 assert page.locator('#tree-canvas text').count()==0
                 capture(page,work,'opening');before=service.file.read_bytes()
-                page.keyboard.press('1');page.keyboard.press('Enter');expect(page.locator('.tree-node[data-local=true]')).to_have_count(1);assert service.file.read_bytes()==before
+                open_question(page,'choice');page.keyboard.press('1');page.keyboard.press('Enter');expect(page.locator('.tree-node[data-local=true]')).to_have_count(1);assert service.file.read_bytes()==before;expect(page.locator('#bud-guide')).to_have_text('接着聊这朵')
                 page.wait_for_timeout(550);capture(page,work,'local-bloom')
-                area=page.get_by_label('本轮答案什么时候保存？',exact=True);area.fill('  ');expect(page.get_by_role('button',name='确认并下一题',exact=True)).to_be_disabled()
+                open_question(page,'text');area=page.get_by_role('textbox',name='本轮答案什么时候保存？',exact=True);area.fill('  ');expect(page.get_by_role('button',name='就这么定',exact=True)).to_be_disabled()
                 area.fill('先汇总，再手动提交整轮。\n 保留这行空格 ');page.keyboard.press('Control+Enter')
-                page.get_by_label('补充一个交互要求？',exact=True).fill('等待中可以修改。');page.get_by_role('button',name='确认并下一题',exact=True).click()
+                open_question(page,'extra');page.get_by_role('textbox',name='补充一个交互要求？',exact=True).fill('等待中可以修改。');page.get_by_role('button',name='就这么定',exact=True).click();open_summary(page)
                 expect(page.get_by_role('button',name='提交本轮答案',exact=True)).to_be_visible();assert service.file.read_bytes()==before
-                page.locator('.summary-list button').first.click();expect(page.get_by_label('按 v7 的纸底与墨枝',exact=True)).to_be_checked();page.get_by_role('button',name='确认并下一题',exact=True).click()
+                page.locator('.summary-list button').first.click();page.get_by_role('button',name='改',exact=True).click();expect(page.get_by_label('按 v7 的纸底与墨枝',exact=True)).to_be_checked();page.get_by_role('button',name='就这么定',exact=True).click();open_summary(page)
                 page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible()
                 saved=service.state();assert saved['revision']==1;assert saved['nodes'][1]['answer']['text']=='先汇总，再手动提交整轮。\n 保留这行空格 '
                 page.clock.fast_forward(61000);expect(page.locator('#long-wait')).to_be_visible();capture(page,work,'wait-over-60-seconds')
@@ -89,20 +99,20 @@ def run_suite(work,scenario='all',layout_fixture='v7'):
                 ai_check(service)
                 page=browser.new_page(viewport={'width':1440,'height':900});page.on('pageerror',lambda e:report['errors'].append(str(e)))
                 page.goto(service.url);page.wait_for_load_state('networkidle');page.wait_for_timeout(1400)
-                page.get_by_label('无关的新题',exact=True).fill('这份无关草稿应该保留')
+                open_question(page,'X');page.get_by_role('textbox',name='无关的新题',exact=True).fill('这份无关草稿应该保留')
                 page.locator('.tree-node[data-node-id=A]').click();expect(page.locator('#node-dialog')).to_be_visible();page.keyboard.press('Escape');expect(page.locator('.tree-node[data-node-id=A]')).to_be_focused()
-                page.locator('.tree-node[data-node-id=A]').click();page.get_by_role('button',name='修改回答',exact=True).click()
+                page.locator('.tree-node[data-node-id=A]').click();page.get_by_role('button',name='改',exact=True).click()
                 expect(page.locator('.tree-node[data-status=needs_review]')).to_have_count(4)
                 snap=service.state();assert [n['id'] for n in snap['nodes'] if n['status']=='needs_review']==['A','B','C','F'];assert snap['nodes'][3]['answer']['text']=='D 原答案'
                 capture(page,work,'review-yellow')
                 page.get_by_role('button',name='仍然有效',exact=True).click()
-                page.get_by_label('B 的问题',exact=True).fill('上游再次修改前的草稿')
+                open_question(page,'B',edit=True);page.get_by_role('textbox',name='B 的问题',exact=True).fill('上游再次修改前的草稿')
                 now=service.state();assert request(service.url,'/decision',{'id':'A','expected_revision':now['revision'],'answer':{'option_ids':[],'text':'A 再次修改'}})[0]==200
-                expect(page.get_by_label('B 的问题',exact=True)).to_have_value('B 原答案')
+                expect(page.get_by_role('textbox',name='B 的问题',exact=True)).to_have_value('B 原答案')
                 page.get_by_role('button',name='仍然有效',exact=True).click();expect(page.locator('.tree-node[data-node-id=C]')).to_have_attribute('data-status','needs_review')
-                page.get_by_role('button',name='仍然有效',exact=True).click();page.get_by_role('button',name='仍然有效',exact=True).click();expect(page.get_by_label('无关的新题',exact=True)).to_have_value('这份无关草稿应该保留')
-                page.get_by_role('button',name='确认并下一题',exact=True).click();page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible()
-                revision=service.state()['revision'];page.locator('.tree-node[data-node-id=A]').click();page.get_by_role('button',name='修改回答',exact=True).click();expect(page.locator('.tree-node[data-status=needs_review]')).to_have_count(4)
+                open_question(page,'C');page.get_by_role('button',name='仍然有效',exact=True).click();open_question(page,'F');page.get_by_role('button',name='仍然有效',exact=True).click();open_question(page,'X');expect(page.get_by_role('textbox',name='无关的新题',exact=True)).to_have_value('这份无关草稿应该保留')
+                page.get_by_role('button',name='就这么定',exact=True).click();open_summary(page);page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible()
+                revision=service.state()['revision'];page.locator('.tree-node[data-node-id=A]').click();page.get_by_role('button',name='改',exact=True).click();expect(page.locator('.tree-node[data-status=needs_review]')).to_have_count(4)
                 before=service.file.read_bytes();code,_=request(service.url,'/round',{'round':3,'expected_revision':revision,'nodes':[node('late',deps=['A'],round=3)]});assert code==409 and service.file.read_bytes()==before
                 assert page.get_by_role('button',name='保存并生成任务文档',exact=True).count()==0
                 report['checks']['transitive_shared_review_and_explicit_reconfirmation']=True;report['checks']['unrelated_draft_preserved']=True;report['checks']['already_reviewing_downstream_draft_invalidated_on_upstream_change']=True;report['checks']['waiting_edit_rejects_stale_round']=True
@@ -176,11 +186,11 @@ def run_actor(args):
                 page.set_viewport_size({'width':w,'height':h});no_overflow(page);capture(page,out,args.label+'-'+name)
                 if args.check_cards:assert page.locator('#card').is_visible() and page.locator('link[rel=stylesheet]').count()==1
             browser.close();return {'status':'passed','kind':'capture-only'}
-        capture(page,out,'round-1');navigation=page.evaluate('performance.timeOrigin');page.get_by_label('先做网页版',exact=True).check();page.get_by_role('button',name='确认并下一题',exact=True).click();page.get_by_role('textbox').fill(raw);page.get_by_role('button',name='确认并下一题',exact=True).click();time.sleep(args.submit_delay)
+        capture(page,out,'round-1');navigation=page.evaluate('performance.timeOrigin');page.locator('.tree-node[data-status=pending]').first.click();page.get_by_label('先做网页版',exact=True).check();page.get_by_role('button',name='就这么定',exact=True).click();page.locator('.tree-node[data-status=pending]').first.click();page.get_by_role('textbox').fill(raw);page.get_by_role('button',name='就这么定',exact=True).click();open_summary(page);time.sleep(args.submit_delay)
         report['submitted_at_epoch']=time.time();page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.locator('#wait-elapsed')).to_be_visible();print('BROWSER_SUBMITTED_ROUND_1',flush=True)
-        expect(page.locator('#meta')).to_contain_text('第 2 轮',timeout=300000);assert navigation==page.evaluate('performance.timeOrigin');assert nonce in page.locator('#card').inner_text() and '3000' in page.locator('#card').inner_text()
+        expect(page.locator('#meta')).to_contain_text('第 2 轮',timeout=300000);assert navigation==page.evaluate('performance.timeOrigin');page.locator('.tree-node[data-status=pending]').first.click();assert nonce in page.locator('#node-body').inner_text() and '3000' in page.locator('#node-body').inner_text()
         report['round2_visible_at_epoch']=time.time();report['submit_to_next_question_seconds']=report['round2_visible_at_epoch']-report['submitted_at_epoch'];capture(page,out,'new-branches')
-        page.get_by_role('textbox').fill('确认，预算保持 3000；第二轮回传成功。');page.get_by_role('button',name='确认并下一题',exact=True).click();page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.locator('#wait-elapsed')).to_be_visible();assert not report['errors'],report['errors'];report['checks']={'same_page':True,'unseen_feature_word_used_by_current_agent':True,'second_round_submitted':True};report['status']='passed';browser.close()
+        page.get_by_role('textbox').fill('确认，预算保持 3000；第二轮回传成功。');page.get_by_role('button',name='就这么定',exact=True).click();open_summary(page);page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.locator('#wait-elapsed')).to_be_visible();assert not report['errors'],report['errors'];report['checks']={'same_page':True,'unseen_feature_word_used_by_current_agent':True,'second_round_submitted':True};report['status']='passed';browser.close()
     (out/'browser-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8');return report
 
 def main():

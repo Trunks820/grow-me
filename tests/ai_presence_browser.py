@@ -98,7 +98,7 @@ def run(work):
             report['checks']['same_url_restart_clears_receipt_then_reconnects_without_rewriting_tree']=True
             pages[0].route('**/progress',stale_projection)
             code,_=request(thinking.url,'/round',{'expected_revision':thinking.state()['revision'],'round':2,'nodes':[node('B','用户待答的下一题',deps=['A'],round=2)]});assert code==200
-            expect(pages[0].get_by_role('heading',name='用户待答的下一题',exact=True)).to_be_visible();expect(pages[0].locator('#ai-wait-notice')).to_have_count(0)
+            expect(pages[0].locator('.tree-node[data-node-id=B]')).to_be_visible();pages[0].locator('.tree-node[data-node-id=B]').click();expect(pages[0].get_by_role('heading',name='用户待答的下一题',exact=True)).to_be_visible();expect(pages[0].locator('#ai-wait-notice')).to_have_count(0)
             report['checks']['pending_human_question_does_not_show_ai_pause']=True
             start_heartbeat(thinking);meta=request(thinking.url,'/recovery')[1]
             code,_=request(thinking.url,'/ai/work',{'expected_revision':thinking.state()['revision'],'expected_instance_id':meta['instance_id'],'action':'start','operation_id':'ui-code','final_round':True});assert code==200

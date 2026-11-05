@@ -71,7 +71,8 @@ npm run demo
 
 ## 已实现
 
-- 逐题确认立即在本地开花，整轮汇总后手动提交；未提交草稿刷新会丢失，离开前会提醒。
+- 点可见花苞答题：题干在顶部，短选项在花旁气泡，长内容使用下方宣纸条。点「就这么定」原地开花；再点花默认只读，点「改」才编辑。
+- 逐题确认仍是本地草稿，整轮汇总后手动提交；未提交草稿刷新会丢失，离开前会提醒。
 - `tree.json` 是唯一访谈数据源，所有写操作保留 revision 冲突检测。
 - 依赖追问从父枝曲线长出；同一份数据生成相同树形。
 - 修改答案后，所有下游依赖进入黄叶复核，逐题确认。
@@ -82,7 +83,7 @@ npm run demo
 - 文档包含「设计方案／开发清单／验收标准」三个视图，最终保存后访谈只读，文档失败可重试。
 - 桌面与窄屏布局、键盘操作、生长回放和减少动态效果支持。
 
-- V2 支持多选与互斥「都不需要」，题卡先显示一句「决定什么」，「为什么问」和推荐默认收起；推荐有理由、从不预选，旧依据失效后隐藏。
+- V2 支持多选与互斥「都不需要」，「为什么问这句」、推荐和可选补充默认收起；推荐有理由、从不预选，旧依据失效后隐藏。
 - 助手使用自动游标和约 10 秒一次的短查询，耗时工作独立发心跳，单次短查询网络期限最多 3 秒；端口与会话身份、revision 一起核对。
 
 ## 当前边界
@@ -112,6 +113,7 @@ npm test
 python -m pip install -r requirements-dev.txt
 python -m playwright install chromium
 python tests/browser_acceptance.py --work outputs/qa/browser
+python tests/bud_note_browser.py --work outputs/qa/bud-note
 python tests/wait_flow_browser.py --work outputs/qa/waiting
 python tests/seeded_growth.py --work outputs/qa/seeded
 python tests/choices_browser.py --work outputs/qa/choices

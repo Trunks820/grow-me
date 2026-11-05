@@ -1,10 +1,12 @@
 import {createDecisionTree} from './tree.mjs';
-import {primaryGraph,chapters,answerText} from './topics.mjs';
+import {chapters,answerText} from './topics.mjs';
 import {publicError,assistantConnection} from './presentation.mjs';
 import {selectionValid} from './answers.mjs';
 
-const card=document.querySelector('#card'),dialog=document.querySelector('#node-dialog');
+const card=document.querySelector('#card'),dialog=document.querySelector('#node-dialog'),questionHeading=document.querySelector('#question-heading'),budGuide=document.querySelector('#bud-guide');
 const drafts=new Map(),working=new Map();
+let noteId=null,noteMode='read',noteRevision=null,noteBusy=false,noteFrame=0,noteMotion=null,advanceId=null,lastAnsweredId=null,guideSeen=false;
+try{guideSeen=sessionStorage.getItem('grow-me:bud-guide-seen')==='1';}catch{}
 let guidance={};
 let aiActivity=null,aiInstance=null,aiOpenedAt=performance.now(),aiObservedAt=performance.now(),assistantDisplay='inactive',reportedPause=false;
 const pageId=crypto.randomUUID();
@@ -13,6 +15,12 @@ let state,documentState={phase:'idle'},currentId=null,busy=false,waitingSince=nu
 const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
 const message=(text,error=false)=>{const n=document.querySelector('#message');clearTimeout(messageTimer);n.textContent=text?publicError(text):'';n.setAttribute('role',error?'alert':'status');if(text)messageTimer=setTimeout(()=>{n.textContent='';},8000);};
 const view=createDecisionTree(document.querySelector('#decision-tree'),{onNode:openNode,onFruit:openFruit});
+// A visible, half-open question bud; branch geometry and the seeded renderer stay unchanged.
+document.querySelector('#tree-bud').innerHTML=`<path d="M0 6 Q1 3 0 1" fill="none" stroke="#827d58" stroke-width=".9"/>
+<path d="M0 4 C-3 1 -3 -4 0 -7 C3 -4 3 1 0 4Z" fill="#f8eed9" stroke="#9b8663" stroke-width=".65"/>
+<path d="M0 5 C-5 3 -6 -1 -5 -4 C-2 -4 0 0 0 5Z" fill="#c9b78d" stroke="#8e7e5e" stroke-width=".7"/>
+<path d="M0 5 C5 3 6 -1 5 -4 C2 -4 0 0 0 5Z" fill="#e4d3ae" stroke="#8e7e5e" stroke-width=".7"/>
+<path d="M-3 4 Q0 7 3 4" fill="none" stroke="#898261" stroke-width=".8"/>`;
 const ready=n=>n.depends_on.every(id=>state.nodes.find(n=>n.id===id)?.status==='answered');
 const valid=(n,a)=>ready(n)&&selectionValid(n,a);
 const openQuestions=()=>state.nodes.filter(n=>n.round===state.current_round&&n.status==='pending');
@@ -20,6 +28,38 @@ const reviews=()=>state.nodes.filter(n=>n.status==='needs_review');
 const isWaiting=()=>state?.schema_version===2&&state.status==='active'&&state.nodes.every(n=>n.status==='answered');
 const allConfirmed=()=>Boolean(state?.nodes.length)&&state.nodes.every(n=>n.status==='answered'&&n.answer!==null);
 const documentMatches=()=>documentState.source?.session_id===state.session_id&&documentState.source?.revision===state.revision;
+function navigationTarget(){
+  if(state?.schema_version!==2||state.status!=='active')return null;
+  const review=reviews(),active=state.nodes.find(n=>n.id===advanceId&&ready(n));
+  if(review.length)return active?.status==='needs_review'?active:review.find(ready)??null;
+  if(active?.status==='pending'&&active.round===state.current_round&&(!drafts.has(active.id)||working.has(active.id)))return active;
+  return openQuestions().find(n=>!drafts.has(n.id)&&ready(n))??null;
+}
+function updateNavigation(){
+  const target=navigationTarget();
+  for(const flower of document.querySelectorAll('.tree-node')){
+    const current=flower.dataset.nodeId===target?.id;flower.classList.toggle('is-next',current);
+    if(current)flower.setAttribute('aria-current','step');else flower.removeAttribute('aria-current');
+  }
+  const next=document.querySelector('#next-question');if(next){next.disabled=busy||!target;next.dataset.target=target?.id??'';}
+  budGuide.hidden=!target||dialog.open||stopped;budGuide.disabled=busy;
+  budGuide.dataset.target=target?.id??'';
+  budGuide.textContent=target?.status==='needs_review'?'这片叶子，再看看':guideSeen?'接着聊这朵':'点这里开始';
+  budGuide.setAttribute('aria-label',`${budGuide.textContent}${target?'：'+target.question:''}`);
+  syncNotePosition();
+}
+function nextQuestion(){
+  if(busy||stopped)return;const n=navigationTarget();if(!n)return;
+  const target=nodeTarget(n.id),box=target?.getBoundingClientRect(),frame=document.querySelector('.tree-viewport').getBoundingClientRect();
+  // Keep the current framing unless a manual zoom has put the destination outside the canvas.
+  if(box&&(box.left<frame.left||box.right>frame.right||box.top<frame.top||box.bottom>frame.bottom))document.querySelector('[data-tree-zoom=fit]').click();
+  openNode(n.id,target,n.id===advanceId&&working.has(n.id)?'edit':undefined);
+}
+function confirmed(id){
+  lastAnsweredId=id;
+  guideSeen=true;try{sessionStorage.setItem('grow-me:bud-guide-seen','1');}catch{}
+  if(advanceId===id)advanceId=null;
+}
 function assistantStatus(){
   const offered=documentState.phase==='offered'&&documentState.offered_revision===state?.revision;
   const writing=state?.status==='complete'&&documentMatches()&&['requested','generating'].includes(documentState.phase);
@@ -46,9 +86,9 @@ async function post(path,body){
   if(!response.ok)throw Error(publicError(result.error,'提交暂时失败，请重试。'));return result;
 }
 async function act(action){
-  if(busy)return;busy=true;card.querySelectorAll('button').forEach(b=>b.disabled=true);
-  try{await action();message('');if(!stopped)await refresh(true);}
-  catch(error){message(publicError(error.message)+'；已保留仍有效的草稿。',true);await refresh(true).catch(()=>{});}
+  if(busy)return false;busy=true;document.querySelectorAll('#card button,#node-dialog button').forEach(b=>b.disabled=true);
+  try{await action();message('');if(!stopped)await refresh(true);return true;}
+  catch(error){message(publicError(error.message)+'；已保留仍有效的草稿。',true);await refresh(true).catch(()=>{});return false;}
   finally{busy=false;if(!stopped)render();}
 }
 function button(label,action,primary=false){const b=el('button',label,primary?'primary':'');b.type='button';b.addEventListener('click',action);return b;}
@@ -59,26 +99,14 @@ function updateMeta(){
   document.querySelector('#meta').textContent=`${roundLabel} · ${state.topic}\n已确认 ${done} / ${state.nodes.length}${drafts.size?` · 本轮未提交 ${drafts.size}`:''}${reviews().length?` · 待复核 ${reviews().length}`:''}`;
   document.querySelector('#meta').dataset.revision=String(state.revision);card.dataset.revision=String(state.revision);
 }
-function updateTree(){const finished=documentState.phase==='offered'&&documentState.offered_revision===state.revision;view.update(state,{drafts,currentId,waiting:isWaiting()&&!finished&&assistantDisplay==='connected',finished,fruitStates:new Map(chapters(state).map(c=>[c.id,documentMatches()?(documentState.chapters?.find(x=>x.id===c.id)?.status??(documentState.phase==='ready'?'ready':'generating')):'generating']))});updateMeta();}
-function chooseCurrent(){
-  const review=reviews();
-  if(review.length){if(!review.some(n=>n.id===currentId&&ready(n)))currentId=(review.find(ready)||review[0]).id;return state.nodes.find(n=>n.id===currentId);}
-  const pending=openQuestions();
-  if(!pending.some(n=>n.id===currentId&&!drafts.has(n.id)))currentId=pending.find(n=>!drafts.has(n.id))?.id??null;
-  return state.nodes.find(n=>n.id===currentId);
-}
-function sourceLine(n){
-  if(!n.depends_on.length)return;
-  const line=el('p','追问来自：','source');
-  n.depends_on.forEach(id=>{const parent=state.nodes.find(n=>n.id===id);line.append(button(parent.question,()=>view.focusNode(id)));});card.append(line);
-}
-function inputs(n){
+function updateTree(){const finished=documentState.phase==='offered'&&documentState.offered_revision===state.revision;view.update(state,{drafts,currentId,waiting:isWaiting()&&!finished&&assistantDisplay==='connected',finished,fruitStates:new Map(chapters(state).map(c=>[c.id,documentMatches()?(documentState.chapters?.find(x=>x.id===c.id)?.status??(documentState.phase==='ready'?'ready':'generating')):'generating']))});updateMeta();updateNavigation();}
+function inputs(n,host){
   const value=working.get(n.id)??drafts.get(n.id)??n.answer??{option_ids:[],text:''};
   const form=el('form',undefined,'question-form');let read;
   if(n.input!=='text'){
     const multiple=n.input==='multi_choice',advice=guidance[n.id];let recommendation;
     if(advice){
-      const info=el('details',undefined,'recommendation-info');recommendation=info;info.append(el('summary','查看推荐（可选）'));
+      const info=el('details',undefined,'recommendation-info');recommendation=info;info.append(el('summary','查看推荐'));
       if(advice.stale)info.append(el('p','推荐依据已变／待复核，旧推荐已隐藏。','w'));
       else{
         info.append(el('p','AI 建议，不是你的决定','recommendation-label'),el('p',advice.reason.replace(/^AI 建议[，,]不是你的决定[：:，,。\s]*/,''),'w'));
@@ -88,40 +116,38 @@ function inputs(n){
       form.append(info);
     }
     const group=el('fieldset',undefined,'choice-group'),legend=el('legend',multiple?'选择一项或多项':'选择一项','sr-only');group.append(legend);
-    n.options.forEach((o,i)=>{const label=el('label',undefined,'option'),input=document.createElement('input');input.type=multiple?'checkbox':'radio';input.name='answer';input.value=o.id;input.checked=value.option_ids.includes(o.id);input.dataset.exclusive=String(Boolean(o.exclusive));const copy=el('span',o.label,'option-copy');
+    n.options.forEach((o,i)=>{const label=el('label',undefined,'option'),input=document.createElement('input');input.type=multiple?'checkbox':'radio';input.name='answer';input.value=o.id;input.checked=value.option_ids.includes(o.id);input.setAttribute('aria-label',o.label);input.dataset.exclusive=String(Boolean(o.exclusive));const copy=el('span',o.label,'option-copy');
       if(advice&&!advice.stale&&advice.option_ids.includes(o.id)){const badge=el('span','推荐','recommendation-badge');badge.hidden=true;copy.append(badge);}
       if(o.exclusive)copy.append(el('span','与其他选项互斥','exclusive-hint'));
       label.append(input,copy);group.append(label);input.dataset.shortcut=String(i+1);
     });
     recommendation?.addEventListener('toggle',()=>{for(const badge of group.querySelectorAll('.recommendation-badge'))badge.hidden=!recommendation.open;});
     group.addEventListener('change',event=>{const input=event.target;if(!multiple||!input.checked)return;for(const other of group.querySelectorAll('input'))if(other!==input&&(input.dataset.exclusive==='true'||other.dataset.exclusive==='true'))other.checked=false;});
-    const notes=el('details',undefined,'notes'),summary=el('summary','补充说明（可选）'),label=el('label','补充说明（可选）','sr-only'),area=el('textarea',undefined,'field');area.id='answer-note';label.htmlFor=area.id;area.value=value.text;notes.open=Boolean(value.text);notes.append(summary,label,area);form.append(group,notes);
+    const notes=el('details',undefined,'notes'),summary=el('summary','补一句'),label=el('label','补充说明（可选）','sr-only'),area=el('textarea',undefined,'field');area.id='answer-note';label.htmlFor=area.id;area.value=value.text;notes.open=Boolean(value.text);notes.append(summary,label,area);form.append(group,notes);
     read=()=>({option_ids:[...group.querySelectorAll('input:checked')].map(n=>n.value),text:area.value});
   }else{
     const label=el('label',n.question,'sr-only'),area=el('textarea',undefined,'field');area.id='answer-text';label.htmlFor=area.id;area.value=value.text;area.placeholder='写下你的想法';form.append(label,area);read=()=>({option_ids:[],text:area.value});
   }
-  const toolbar=el('div',undefined,'actions'),confirm=el('button',n.status==='needs_review'?'保存并确认此题':'确认并下一题','primary');confirm.type='submit';confirm.id='confirm-answer';toolbar.append(confirm);form.append(toolbar);
+  const tools=el('div',undefined,'note-tools');for(const selector of ['.notes','.recommendation-info']){const detail=form.querySelector(selector);if(detail)tools.append(detail);}form.append(tools);
+  const toolbar=el('div',undefined,'actions'),confirm=el('button','就这么定','primary');confirm.type='submit';confirm.id='confirm-answer';toolbar.append(el('span',n.status==='needs_review'?'保存修改 · 下游需复核':'整轮提交后保存','draft-hint'),confirm);form.append(toolbar);
   const update=()=>{if(rendering||!form.isConnected)return;working.set(n.id,read());confirm.disabled=busy||!valid(n,read());};
   form.addEventListener('input',update);form.addEventListener('change',update);confirm.disabled=busy||!valid(n,read());
-  if(!ready(n)){form.querySelectorAll('input,textarea').forEach(x=>x.disabled=true);card.append(el('p','请先确认上游答案。','review-note'));}
+  if(!ready(n)){form.querySelectorAll('input,textarea').forEach(x=>x.disabled=true);host.append(el('p','请先确认上游的黄叶，再回来回答这一句。','review-note'));}
   form.addEventListener('submit',event=>{event.preventDefault();if(confirm.disabled)return;const answer=read();
-    if(n.status==='needs_review')act(async()=>{await post('/decision',{id:n.id,expected_revision:state.revision,answer});currentId=null;});
-    else{drafts.set(n.id,structuredClone(answer));working.delete(n.id);currentId=null;message('');render();card.querySelector('input,textarea,button')?.focus({preventScroll:true});}
+    if(n.status==='needs_review')act(async()=>{await post('/decision',{id:n.id,expected_revision:state.revision,answer});confirmed(n.id);closeNote();});
+    else{drafts.set(n.id,structuredClone(answer));working.delete(n.id);confirmed(n.id);closeNote();message('');render();}
   });
-  card.append(form);
-  if(n.status==='needs_review'&&n.answer!==null){const keep=button('仍然有效',()=>act(async()=>{await post('/decision',{id:n.id,expected_revision:state.revision,answer:n.answer});currentId=null;}));keep.disabled=busy||!ready(n);card.append(keep);}
-  card.append(el('p',n.input==='text'?'Ctrl + Enter 确认':n.input==='multi_choice'?'按数字键勾选或取消，Enter 确认；互斥项单独选择。':'按数字键选择，Enter 确认','help'));
-  if(n.status!=='needs_review')card.append(el('p','花已开在本页；提交整轮后才保存。','draft-hint'));
+  host.append(form);
 }
-function renderSummary(){
+function renderSummary(host){
   const list=el('ul',undefined,'summary-list');
-  openQuestions().forEach(n=>{const row=el('li');row.append(el('div',n.question),el('div',answerText(n,drafts.get(n.id)),'answer'),button('修改',()=>editDraft(n.id)));list.append(row);});
-  card.append(el('p','本轮汇总','k'),el('h2','这一轮，先看看。','q'),list,el('p','本轮未提交 · 刷新或关闭会丢失这些草稿。','draft-hint'));
+  openQuestions().filter(n=>drafts.has(n.id)).forEach(n=>{const row=el('li');row.append(el('div',n.question),el('div',answerText(n,drafts.get(n.id)),'answer'),button('回看这朵花',()=>openNode(n.id,nodeTarget(n.id))));list.append(row);});
+  const title=el('h2','这一轮，先看看。','q');title.id='node-question';host.append(title,list,el('p','本轮未提交 · 刷新或关闭会丢失这些草稿。','draft-hint'));
   const submit=button('提交本轮答案',()=>act(async()=>{
     const round=state.current_round,revision=state.revision,answers=openQuestions().map(n=>({id:n.id,answer:drafts.get(n.id)}));
     if(!answers.every(a=>valid(state.nodes.find(n=>n.id===a.id),a.answer)))throw Error('请完整回答本轮问题');
-    await post('/submit',{round,expected_revision:revision,answers});waitingSince=performance.now();currentId=null;
-  }),true);submit.disabled=busy;card.append(submit);
+    await post('/submit',{round,expected_revision:revision,answers});waitingSince=performance.now();closeNote();
+  }),true);submit.disabled=busy||reviews().length>0||openQuestions().some(n=>!drafts.has(n.id));host.append(submit);
 }
 function renderWaiting(){
   card.append(el('p',`第 ${state.current_round} 轮 · 已确认`,'k'));waitingHeader('正在想下一轮的问题…','生长中');card.append(elapsedLine(waitingSince),el('p','可以点已答的花回看或修改。','w'));
@@ -154,51 +180,156 @@ function renderDocument(){
   }
 }
 function render(){
-  if(!state)return;rendering=true;renderFailed=false;try{const hadText=document.activeElement?.matches('textarea,input');
+  if(!state)return;rendering=true;renderFailed=false;try{
   assistantDisplay=assistantStatus();const reminder=document.querySelector('#copy-reminder');reminder.classList.toggle('needs-attention',assistantDisplay==='paused');if(assistantDisplay==='paused')reminder.setAttribute('aria-describedby','ai-wait-notice');else reminder.removeAttribute('aria-describedby');
   card.replaceChildren();
   if(state.schema_version===1){currentId=null;card.append(el('p','v1 历史访谈 · 只读','k'),el('h2','原来的回答，仍在这棵树上。','q'),el('p','可以点击花朵回看；未完成的旧访谈请用原 alpha 版本继续。不会自动迁移或补写历史理由。','w'));if(documentState.phase==='ready'){const a=el('a','打开原任务文档','doc-link');a.href='/document';a.target='_blank';a.rel='noopener';card.append(a);}card.append(button('结束预览',()=>act(async()=>{await post('/document/control',{action:'close',expected_revision:state.revision});stopped=true;document.querySelector('#connection').textContent='只读预览已结束；原访谈文件保持不变。';})));}
   else if(state.status==='complete'){currentId=null;if(allConfirmed())renderDocument();else card.append(el('p','状态待核对','k'),el('h2','保存状态与答案不一致。','q'),el('p',`当前只有 ${state.nodes.filter(n=>n.status==='answered').length} / ${state.nodes.length} 个问题已确认；请回到原对话核对 tree.json。`,'w'));}
   else{
-    const n=chooseCurrent();
-    if(n){const roundNodes=state.nodes.filter(x=>x.round===n.round);card.append(el('p',`第 ${n.round} 轮 · 本轮第 ${roundNodes.indexOf(n)+1} 题，共 ${roundNodes.length} 题${n.status==='needs_review'?' · 需复核':''}`,'k'));sourceLine(n);card.append(el('h2',n.question,'q'));
-      const decision=n.rationale.match(/^[\s\S]*?[。！？.!?](?:\s|$)?/)?.[0]??n.rationale;
-      card.append(el('p','决定什么：'+decision.trim(),'why'));const reason=el('details',undefined,'question-reason');reason.append(el('summary','为什么问'),el('p',n.rationale,'w'));card.append(reason);
-      if(n.status==='needs_review')card.append(el('p','本题或其上游已重新打开。请确认旧答案是否仍然有效。','review-note'));
-      inputs(n);const note=el('p',heartbeatNote(),'w');note.id='heartbeat-work';note.hidden=!note.textContent;card.append(note);
-    }else if(openQuestions().length)renderSummary();
-    else renderWaiting();
+    const pending=openQuestions(),review=reviews();
+    if(pending.length||review.length){
+      const count=pending.filter(n=>drafts.has(n.id)).length;
+      card.append(el('p',`${count?`本轮 ${count} 个草稿 · `:''}${pending.length-count} 枚花苞${review.length?` · ${review.length} 片黄叶待复核`:''}`,'scene-count'));
+      if(navigationTarget()){const next=button('下一题 →',nextQuestion);next.id='next-question';card.append(next);}
+      if(count){const summary=button(count===pending.length&&!review.length?'回看汇总，提交本轮':'查看本轮草稿',openSummary);card.append(summary);}
+      if(review.length)card.append(el('p','点黄叶回看；确认上游后，再复核下游。','w'));
+      const work=el('p',heartbeatNote(),'w');work.id='heartbeat-work';work.hidden=!work.textContent;card.append(work);
+    }else renderWaiting();
   }
   if(reportedPause!==(assistantDisplay==='paused')){reportedPause=assistantDisplay==='paused';post('/ai/telemetry',{event:reportedPause?'pause_shown':'pause_cleared',page_id:pageId,last_check_at:aiActivity?.last_check_at,expected_revision:state.revision,expected_instance_id:aiInstance}).catch(()=>{});}
-  card.dataset.currentId=currentId??'';updateTree();if(hadText&&!busy)card.querySelector('input:checked,textarea,input')?.focus({preventScroll:true});
+  card.dataset.currentId=currentId??'';card.dataset.scene=state.status==='complete'?'document':openQuestions().length||reviews().length?'questions':'waiting';updateTree();
+  if(dialog.open&&(noteRevision!==state.revision||noteBusy!==busy)){if(noteId)renderNote();else if(noteMode==='summary')renderSummaryNote();}
+  syncNotePosition();
   }catch(error){renderFailed=true;card.replaceChildren(el('h2','正在同步生长状态…','q'),el('p','生长中','growth-status'),elapsedLine(state.status==='complete'?documentSince:waitingSince),el('p','已提交答案仍在本机，将自动重新读取。','w'));message('页面状态正在同步，稍后会自动恢复。',true);console.error('State rendering failed');}finally{rendering=false;}
 }
-function editDraft(id){const value=drafts.get(id);if(value)working.set(id,structuredClone(value));drafts.delete(id);currentId=id;dialog.close();render();}
-function openNode(id,trigger){
-  const n=state.nodes.find(n=>n.id===id);if(!n)return;returnFocus=trigger;
-  const body=document.querySelector('#node-body'),actions=document.querySelector('#node-actions');body.replaceChildren();actions.replaceChildren();
-  const rootId=primaryGraph(state).find(e=>e.node.id===id).rootId,root=state.nodes.find(n=>n.id===rootId);
-  body.append(el('p',`第 ${n.round} 轮 · ${root.question}${n.status==='needs_review'?' · 需复核':''}`,'k'));
-  const heading=el('h2',n.question);heading.id='node-question';body.append(heading,el('p',n.rationale?'为什么问：'+n.rationale:'旧 v1 题未记录理由。','why'),el('p',answerText(n,drafts.get(id)??n.answer),'answer'));
-  if(drafts.has(id))body.append(el('p','本轮未提交','draft-hint'));
-  if(n.depends_on.length)body.append(el('p','依据：'+n.depends_on.map(id=>state.nodes.find(n=>n.id===id).question).join('；'),'w'));
-  if(state.schema_version===2&&state.status==='active'&&(n.answer!==null||drafts.has(id)||n.status==='needs_review'))actions.append(button('修改回答',()=>{
-    if(drafts.has(id))return editDraft(id);
-    dialog.close();act(async()=>{if(n.status!=='needs_review')await post('/reopen',{id,expected_revision:state.revision});currentId=id;});
-  }));
-  if(state.schema_version===2&&state.status==='active'&&n.status==='needs_review'&&n.answer!==null){const keep=button('仍然有效',()=>{dialog.close();act(async()=>{await post('/decision',{id,expected_revision:state.revision,answer:n.answer});currentId=null;});});keep.disabled=busy||!ready(n);actions.append(keep);}
-  if(!dialog.open)dialog.showModal();
+function nodeTarget(id){return [...document.querySelectorAll('.tree-node')].find(n=>n.dataset.nodeId===id);}
+function closeNote(){dialog.close();noteId=null;currentId=null;questionHeading.hidden=true;document.querySelector('#bubble-link').setAttribute('hidden','');document.body.classList.remove('note-open');updateNavigation();}
+function showNote(){
+  noteMotion?.cancel();if(!dialog.open)dialog.show();document.body.classList.add('note-open');questionHeading.hidden=!noteId;budGuide.hidden=true;dialog.scrollTop=0;positionNote();
+  if(!matchMedia('(prefers-reduced-motion: reduce)').matches)noteMotion=dialog.animate([{opacity:0,transform:'translateY(12px)'},{opacity:1,transform:'none'}],{duration:190,easing:'cubic-bezier(.2,.8,.3,1)'});
+  document.querySelector('#node-question')?.focus({preventScroll:true});syncNotePosition();
 }
+function editDraft(id){const value=drafts.get(id);if(value)working.set(id,structuredClone(value));openNode(id,nodeTarget(id),'edit');}
+function openNode(id,trigger,mode){
+  if(busy||stopped)return;const n=state.nodes.find(n=>n.id===id);if(!n)return;
+  noteId=currentId=id;returnFocus=nodeTarget(id)??trigger;
+  noteMode=mode??(state.schema_version===2&&state.status==='active'&&n.status==='pending'&&!drafts.has(id)?'edit':'read');
+  if((noteMode==='edit'||n.status==='needs_review')&&ready(n))advanceId=id;
+  renderNote();showNote();render();
+}
+async function modifyAnswer(id){
+  if(drafts.has(id))return editDraft(id);
+  const n=state.nodes.find(n=>n.id===id);if(!n)return;
+  if(n.status!=='needs_review'){
+    const ok=await act(async()=>{await post('/reopen',{id,expected_revision:state.revision});});
+    if(!ok||state.status!=='active'||state.nodes.find(n=>n.id===id)?.status!=='needs_review')return;
+  }
+  openNode(id,nodeTarget(id),'edit');
+}
+function renderNote(){
+  const n=state.nodes.find(n=>n.id===noteId);if(!n){closeNote();return;}
+  if(state.schema_version===1||state.status!=='active'||n.status==='answered')noteMode='read';
+  const body=document.querySelector('#node-body'),actions=document.querySelector('#node-actions');body.replaceChildren();actions.replaceChildren();questionHeading.replaceChildren();
+  const previous=state.nodes.find(p=>p.id===lastAnsweredId&&p.id!==n.id&&(drafts.has(p.id)||p.status==='answered'))??n.depends_on.map(id=>state.nodes.find(n=>n.id===id)).filter(n=>n?.answer).sort((a,b)=>b.round-a.round)[0];
+  if(previous){const text=answerText(previous,drafts.get(previous.id)??previous.answer),aside=el('details',undefined,'previous-answer'),summary=el('summary');summary.append(el('small','上一句'),el('span',text,'previous-excerpt'));aside.append(summary,el('blockquote',text));questionHeading.append(aside);aside.addEventListener('toggle',positionNote);}
+  const heading=el('h2',n.question);heading.id='node-question';heading.tabIndex=-1;questionHeading.append(heading);
+  if(n.status==='needs_review')body.append(el('p','上游或本题有改动，这个回答需要再确认。','review-note'));
+  if(noteMode==='edit')inputs(n,body);
+  else{
+    body.append(el('p',answerText(n,drafts.get(n.id)??n.answer)||'尚未回答。','answer'));
+    body.append(el('p',drafts.has(n.id)?'本轮草稿 · 尚未提交':n.status==='needs_review'?'旧回答 · 待复核':`第 ${n.round} 轮 · 已确认`,'draft-hint'));
+    if(state.schema_version===2&&state.status==='active')actions.append(button('改',()=>modifyAnswer(n.id)));
+  }
+  if(state.schema_version===2&&state.status==='active'&&n.status==='needs_review'&&n.answer!==null){const keep=button('仍然有效',()=>act(async()=>{await post('/decision',{id:n.id,expected_revision:state.revision,answer:n.answer});confirmed(n.id);closeNote();}));keep.disabled=busy||!ready(n);actions.append(keep);}
+  if(n.rationale){const reason=el('details',undefined,'question-reason');reason.append(el('summary','为什么问这句'),el('p',n.rationale));questionHeading.append(reason);reason.addEventListener('toggle',positionNote);}
+  for(const detail of body.querySelectorAll('.note-tools > details'))detail.addEventListener('toggle',positionNote);
+  noteRevision=state.revision;noteBusy=busy;dialog.dataset.mode=noteMode;dialog.dataset.nodeId=n.id;
+  if(busy)dialog.querySelectorAll('input,textarea,button').forEach(n=>n.disabled=true);else document.querySelector('#close-node').disabled=false;
+  positionNote();
+}
+function renderSummaryNote(){questionHeading.replaceChildren();questionHeading.hidden=true;const body=document.querySelector('#node-body');body.replaceChildren();document.querySelector('#node-actions').replaceChildren();renderSummary(body);document.querySelector('#node-question').tabIndex=-1;document.querySelector('#close-node').disabled=busy;noteRevision=state.revision;noteBusy=busy;dialog.dataset.mode='summary';delete dialog.dataset.nodeId;}
+function openSummary(event){if(busy)return;noteId=currentId=null;noteMode='summary';returnFocus=event?.currentTarget;renderSummaryNote();showNote();updateTree();}
+function positionNote(){
+  const viewport=window.visualViewport;
+  document.documentElement.style.setProperty('--visible-height',`${viewport?.height??innerHeight}px`);
+  document.documentElement.style.setProperty('--visible-top',`${viewport?.offsetTop??0}px`);
+  const link=document.querySelector('#bubble-link');link.setAttribute('hidden','');
+  if(!budGuide.hidden){
+    const point=flowerPoint(budGuide.dataset.target);
+    budGuide.style.visibility=point?'visible':'hidden';
+    if(point){const width=budGuide.offsetWidth,height=budGuide.offsetHeight,place=bubblePlace(point,width,height,budGuide.dataset.target,true)??bubblePlace(point,width,height,budGuide.dataset.target,true,true,true);budGuide.style.visibility=place?'visible':'hidden';if(place){budGuide.style.left=place.x+'px';budGuide.style.top=place.y+'px';drawBubbleTail(budGuide,place,point,20);}}
+  }
+  if(!dialog.open)return;
+  const n=state?.nodes.find(n=>n.id===noteId),point=n?flowerPoint(n.id):null;
+  // Long content has an explicit paper-strip fallback; short questions keep
+  // their speech shape. The question always stays at the top.
+  const long=!n||n.question.length>44||n.input==='text'||n.options.length>3||n.options.some(o=>o.label.length>34)||(noteMode==='read'&&answerText(n,drafts.get(n.id)??n.answer).length>90);
+  dialog.dataset.placement='bubble';dialog.style.width='';dialog.style.left='0px';dialog.style.top='0px';
+  let place=!long&&point?bubblePlace(point,dialog.offsetWidth,dialog.offsetHeight,n.id):null;
+  if(!long&&point&&!place){for(const width of [dialog.offsetWidth,208,188,168,148]){dialog.style.width=width+'px';place=bubblePlace(point,dialog.offsetWidth,dialog.offsetHeight,n.id)??bubblePlace(point,dialog.offsetWidth,dialog.offsetHeight,n.id,false,true);if(place)break;}}
+  if(!long&&point){
+    // A short question always remains a speech bubble, even in a dense crown.
+    place??=bubblePlace(point,dialog.offsetWidth,dialog.offsetHeight,n.id,false,true,true);
+    dialog.style.left=place.x+'px';dialog.style.top=place.y+'px';
+    drawBubbleTail(dialog,place,point,28);
+  }else{
+    dialog.dataset.placement='strip';dialog.style.width='';dialog.style.left='';dialog.style.top='';
+  }
+}
+function drawBubbleTail(element,place,point,radius){
+  const width=element.offsetWidth,height=element.offsetHeight,half=element===budGuide?8:13;
+  const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
+  const side=point.y<place.y?'top':point.y>place.y+height?'bottom':point.x<place.x?'left':'right';
+  let a,b,edge;
+  if(side==='top'||side==='bottom'){
+    const x=clamp(point.x,place.x+radius+half,place.x+width-radius-half),y=side==='top'?place.y+1:place.y+height-1;
+    a={x:x-half,y};b={x:x+half,y};edge={x,y};
+  }else{
+    const x=side==='left'?place.x+1:place.x+width-1,y=clamp(point.y,place.y+radius+half,place.y+height-radius-half);
+    a={x,y:y-half};b={x,y:y+half};edge={x,y};
+  }
+  const dx=point.x-edge.x,dy=point.y-edge.y,length=Math.hypot(dx,dy)||1;
+  const tip={x:point.x-dx/length*9,y:point.y-dy/length*9};
+  const curve=`M${a.x} ${a.y} Q${edge.x+dx*.18} ${edge.y+dy*.18} ${tip.x} ${tip.y} Q${edge.x+dx*.35} ${edge.y+dy*.35} ${b.x} ${b.y}`;
+  const link=document.querySelector('#bubble-link');link.querySelector('.bubble-tail-fill').setAttribute('d',curve+'Z');link.querySelector('.bubble-tail-edge').setAttribute('d',curve);
+  link.dataset.target=element===budGuide?budGuide.dataset.target:noteId;link.dataset.kind=element===budGuide?'guide':'options';link.removeAttribute('hidden');
+}
+function flowerPoint(id){const node=nodeTarget(id);if(!node||node.dataset.visible==='false')return null;const box=node.querySelector('.tree-hit').getBoundingClientRect();return{x:box.x+box.width/2,y:box.y+box.height/2};}
+function bubblePlace(point,width,height,id,guide=false,relaxed=false,fallback=false){
+  const frame=document.querySelector('.tree-viewport').getBoundingClientRect(),matrix=document.querySelector('#tree-canvas').getScreenCTM();if(!matrix)return null;
+  const minTop=questionHeading.hidden?frame.top:Math.max(64,questionHeading.getBoundingClientRect().bottom+10);
+  const ink=[...document.querySelectorAll('.tree-trunk,.tree-node')].filter(n=>n.dataset.nodeId!==id).map(n=>n.getBoundingClientRect());
+  const samples=view.getLayout().nodes.flatMap(n=>n.points.map(([x,y])=>({x:x*matrix.a+matrix.e,y:y*matrix.d+matrix.f})));
+  const gap=18,outward=point.x<innerWidth/2?-1:1,clampX=x=>Math.max(10,Math.min(innerWidth-width-10,x));
+  const sides=[18,42,66].flatMap(distance=>[outward,-outward].flatMap(side=>{const x=side>0?point.x+distance:point.x-width-distance;return[{x,y:point.y-height/2},{x,y:point.y+gap},{x,y:point.y-height-gap}];}));
+  const vertical=[18,42,66,90].flatMap(distance=>[point.x-width/2,point.x-width/2+24,point.x-width/2-24,point.x-width+10,point.x-10].flatMap(x=>[{x:clampX(x),y:Math.max(minTop,point.y-height-distance)},{x:clampX(x),y:point.y+distance}]));
+  const candidates=guide?[...vertical,...sides]:[...sides,...vertical];
+  if(relaxed){for(let y=minTop;y+height<=frame.bottom;y+=16)for(let x=10;x+width<=innerWidth-10;x+=16)candidates.push({x,y});}
+  const distance=p=>Math.hypot(Math.max(p.x-point.x,0,point.x-p.x-width),Math.max(p.y-point.y,0,point.y-p.y-height));
+  candidates.sort((a,b)=>distance(a)-distance(b));
+  const inFrame=p=>p.x>=10&&p.x+width<=innerWidth-10&&p.y>=minTop&&p.y+height<=frame.bottom;
+  const collisions=p=>ink.filter(b=>p.x<b.right+5&&p.x+width>b.left-5&&p.y<b.bottom+5&&p.y+height>b.top-5).length;
+  const best=candidates.find(p=>inFrame(p)&&!collisions(p)&&(relaxed||!samples.some(q=>q.x>p.x-6&&q.x<p.x+width+6&&q.y>p.y-6&&q.y<p.y+height+6)));
+  if(best||!fallback)return best;
+  // Tiny viewports may have no empty rectangle: retain the bubble outline and
+  // use the least obstructive location; the existing zoom controls stay usable.
+  return candidates.filter(inFrame).sort((a,b)=>collisions(a)-collisions(b))[0]??{x:clampX(point.x-width/2),y:Math.max(frame.top,frame.bottom-height)};
+}
+function syncNotePosition(){if(noteFrame)return;noteFrame=requestAnimationFrame(()=>{noteFrame=0;positionNote();if(document.querySelector('#tree-canvas').dataset.growing==='true')syncNotePosition();});}
 function openFruit(fruit){const ready=documentMatches()&&(documentState.phase==='ready'||documentState.chapters?.some(c=>c.id===fruit.id&&c.status==='ready'));if(!allConfirmed()||!ready){message('这个章节还在生成，完成后果子会成熟。');return;}window.open('/document'+(documentState.phase==='ready'?'':'?chapter='+encodeURIComponent(fruit.id))+'#'+fruit.anchor,'_blank','noopener');}
-document.querySelector('#close-node').addEventListener('click',()=>dialog.close());
-dialog.addEventListener('close',()=>returnFocus?.focus({preventScroll:true}));
-dialog.addEventListener('click',e=>{if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();}});
+document.querySelector('#close-node').addEventListener('click',closeNote);
+budGuide.addEventListener('click',nextQuestion);
+dialog.addEventListener('close',()=>{if(dialog.open)return;noteId=currentId=null;questionHeading.hidden=true;document.querySelector('#bubble-link').setAttribute('hidden','');document.body.classList.remove('note-open');returnFocus?.focus({preventScroll:true});if(state)updateTree();});
+window.addEventListener('resize',syncNotePosition);
+window.visualViewport?.addEventListener('resize',syncNotePosition);window.visualViewport?.addEventListener('scroll',syncNotePosition);
+document.querySelector('.tree-controls').addEventListener('click',syncNotePosition);
 window.addEventListener('beforeunload',event=>{if(state?.status==='active'&&(drafts.size||working.size)){event.preventDefault();event.returnValue='';}});
 document.addEventListener('keydown',event=>{
-  if(dialog.open||!state||busy)return;const inText=event.target.matches('textarea,input[type=text]');
-  if(inText){if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();card.querySelector('#confirm-answer')?.click();}return;}
-  if(/^[1-9]$/.test(event.key)){const input=card.querySelector(`[data-shortcut="${event.key}"]`);if(input&&!input.disabled){event.preventDefault();input.checked=input.type==='checkbox'?!input.checked:true;input.dispatchEvent(new Event('change',{bubbles:true}));input.focus();}}
-  else if(event.key==='Enter'&&event.target.matches('input[type=radio],input[type=checkbox]')){event.preventDefault();card.querySelector('#confirm-answer')?.click();}
+  if(!dialog.open||!state||busy)return;if(event.key==='Escape'){event.preventDefault();closeNote();return;}
+  if(noteMode!=='edit')return;const inText=event.target.matches('textarea,input[type=text]');
+  if(inText){if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();dialog.querySelector('#confirm-answer')?.click();}return;}
+  if(/^[1-9]$/.test(event.key)){const input=dialog.querySelector(`[data-shortcut="${event.key}"]`);if(input&&!input.disabled){event.preventDefault();input.checked=input.type==='checkbox'?!input.checked:true;input.dispatchEvent(new Event('change',{bubbles:true}));input.focus();}}
+  else if(event.key==='Enter'&&event.target.matches('input[type=radio],input[type=checkbox]')){event.preventDefault();dialog.querySelector('#confirm-answer')?.click();}
 });
 
 async function refresh(force=false){
@@ -207,7 +338,7 @@ async function refresh(force=false){
   if(!response.ok||!docResponse.ok||!progressResponse.ok||!adviceResponse.ok)throw Error('读取本机状态失败');
   const next=await response.json(),doc=await docResponse.json(),progress=progressResponse.ok?await progressResponse.json():null,advice=await adviceResponse.json();
   if(stopped)return;
-  if(state&&next.session_id!==state.session_id){stopped=true;card.querySelectorAll('input,button,textarea').forEach(n=>n.disabled=true);document.querySelector('#connection').textContent='此地址已换成另一个访谈。请复制提醒，恢复原会话后继续。';return;}
+  if(state&&next.session_id!==state.session_id){stopped=true;document.querySelectorAll('#card input,#card button,#card textarea,#node-dialog input,#node-dialog button,#node-dialog textarea').forEach(n=>n.disabled=true);document.querySelector('#connection').textContent='此地址已换成另一个访谈。请复制提醒，恢复原会话后继续。';return;}
   const instance=response.headers.get('x-grow-me-instance');
   if(!instance||[docResponse,progressResponse,adviceResponse].some(r=>r.headers.get('x-grow-me-instance')!==instance)||progress?.session_id!==next.session_id||progress.revision!==next.revision||advice.session_id!==next.session_id||advice.revision!==next.revision||doc.source?.session_id!==next.session_id||doc.source?.revision!==next.revision)throw Error('状态正在变更，稍后重读');
   if(sequence<appliedRefresh||(state&&next.revision<state.revision))return;
@@ -236,7 +367,7 @@ document.querySelector('#copy-reminder').addEventListener('click',async()=>{
   if(!state)return;
   const text='请继续 grow-me。恢复后的第一步先运行一次 check.mjs，核对会话身份、实例和 revision，再做别的事；curl GET 不算轮询。服务若已停止，先按原启动回执重启原会话并立即运行 check.mjs。\n'+JSON.stringify({session_id:state.session_id,current_round:state.current_round,url:location.origin});
   try{await navigator.clipboard.writeText(text);message('提醒已复制，粘回原对话即可继续。');}
-  catch{const body=document.querySelector('#node-body'),actions=document.querySelector('#node-actions'),heading=el('h2','复制续接提醒');heading.id='node-question';returnFocus=document.querySelector('#copy-reminder');body.replaceChildren(heading);actions.replaceChildren();const field=el('textarea',undefined,'field');field.readOnly=true;field.value=text;field.setAttribute('aria-label','续接提醒');body.append(el('p','复制下面的文字，粘回原对话。','w'),field);if(!dialog.open)dialog.showModal();field.select();}
+  catch{questionHeading.replaceChildren();questionHeading.hidden=true;const body=document.querySelector('#node-body'),actions=document.querySelector('#node-actions'),heading=el('h2','复制续接提醒');heading.id='node-question';heading.tabIndex=-1;noteId=currentId=null;noteMode='reminder';returnFocus=document.querySelector('#copy-reminder');body.replaceChildren(heading);actions.replaceChildren();const field=el('textarea',undefined,'field');field.readOnly=true;field.value=text;field.setAttribute('aria-label','续接提醒');body.append(el('p','复制下面的文字，粘回原对话。','w'),field);showNote();field.select();}
 });
 setInterval(()=>{const notice=document.querySelector('#ai-wait-notice');if(notice&&assistantDisplay==='paused')notice.textContent=pauseText();const late=document.querySelector('#long-wait');if(late)late.hidden=waitingSince===null||performance.now()-waitingSince<=60000;const elapsed=document.querySelector('#wait-elapsed');if(elapsed)elapsed.textContent=`已等待 ${Math.max(0,Math.floor((performance.now()-Number(elapsed.dataset.since))/1000))} 秒`;},500);
 poll();

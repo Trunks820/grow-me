@@ -2,7 +2,7 @@
 import argparse,json,subprocess,os,time
 from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
-from browser_acceptance import Service,seed,node,request,no_overflow,document_fixture,ai_check
+from browser_acceptance import Service,seed,node,request,no_overflow,document_fixture,ai_check,open_question,open_summary
 
 BASE=Path(__file__).resolve().parents[1]
 def run(work):
@@ -19,11 +19,11 @@ def run(work):
             page=context.new_page();page.on('pageerror',lambda e:report['errors'].append(str(e)))
             try:
                 ai_check(service)
-                page.goto(service.url);page.wait_for_load_state('networkidle');expect(page.locator('#card .why')).to_contain_text('决定首版')
+                page.goto(service.url);page.wait_for_load_state('networkidle');open_question(page,'channels');expect(page.locator('#node-question')).to_have_text(multi['question'])
                 boxes=page.get_by_role('checkbox');expect(boxes).to_have_count(3)
                 for box in boxes.all():expect(box).not_to_be_checked()
                 expect(page.locator('.recommendation-badge')).to_have_count(1);expect(page.locator('.recommendation-badge')).to_be_hidden();expect(page.locator('#confirm-answer')).to_be_disabled()
-                expect(page.locator('#card .why')).to_have_text('决定什么：决定首版需要开发和验收的通知渠道。')
+                expect(page.locator('.question-reason p')).to_have_text(multi['rationale'])
                 expect(page.locator('.question-reason p')).to_be_hidden();expect(page.locator('.recommendation-info .w')).to_be_hidden()
                 page.screenshot(path=str(work/(label+'-collapsed-recommendation.png')),full_page=True)
                 page.locator('.question-reason > summary').click();expect(page.locator('.question-reason p')).to_contain_text('第二句')
@@ -40,28 +40,30 @@ def run(work):
                 no_overflow(page);page.screenshot(path=str(work/(label+'-multi.png')),full_page=True)
                 page.keyboard.press('Tab');page.locator('#confirm-answer').click();expect(page.locator('.tree-node[data-local=true]')).to_have_count(1)
                 assert service.file.read_bytes()==before
-                raw='这是秘密原文，不得出现在复制提醒里。';page.get_by_role('textbox').fill(raw);page.locator('#confirm-answer').click()
+                raw='这是秘密原文，不得出现在复制提醒里。';open_question(page,'boundary');page.get_by_role('textbox').fill(raw);page.locator('#confirm-answer').click()
                 page.get_by_role('button',name='复制提醒',exact=True).click();copied=page.evaluate('navigator.clipboard.readText()');data=json.loads(copied.split('\n')[-1])
                 assert set(data)=={'session_id','current_round','url'} and data['session_id']==service.state()['session_id']
                 assert raw not in copied and notes not in copied and 'tree.json' not in copied and 'job_id' not in copied
                 page.evaluate("Object.defineProperty(navigator,'clipboard',{value:{writeText:async()=>{throw Error('clipboard denied')}},configurable:true})")
                 page.get_by_role('button',name='复制提醒',exact=True).click();expect(page.get_by_role('dialog')).to_be_visible();assert page.get_by_label('续接提醒',exact=True).input_value()==copied.replace('\r\n','\n')
+                expect(page.locator('#node-question')).to_have_count(1)
+                expect(page.locator('#node-dialog #node-question')).to_have_text('复制续接提醒')
                 page.get_by_role('button',name='关闭',exact=True).click();expect(page.get_by_role('button',name='复制提醒',exact=True)).to_be_focused()
-                page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.locator('#card')).to_contain_text('正在想下一轮的问题')
+                open_summary(page);page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.locator('#card')).to_contain_text('正在想下一轮的问题')
                 current=service.state();assert current['nodes'][0]['answer']=={'option_ids':['mail','inbox'],'text':notes}
                 follow=node('follow','如何验收这两种通知？',deps=['channels'],round=2,options=[{'id':'both','label':'逐项验收'},{'id':'other','label':'其他方式'}])
                 follow.update(rationale='决定通知渠道的验收范围，避免只测其中一个。',recommendation={'option_ids':['both'],'reason':'依据你已选的渠道逐项核验。','source_ids':['channels']})
                 assert request(service.url,'/round',{'round':2,'expected_revision':current['revision'],'nodes':[follow]})[0]==200
-                expect(page.get_by_role('heading',name=follow['question'],exact=True)).to_be_visible();expect(page.locator('.recommendation-source')).to_be_hidden();page.locator('.recommendation-info > summary').click();expect(page.locator('.recommendation-source')).to_be_visible();expect(page.locator('.recommendation-source')).to_contain_text('根据你第 1 轮说的')
+                open_question(page,'follow');expect(page.get_by_role('heading',name=follow['question'],exact=True)).to_be_visible();expect(page.locator('.recommendation-source')).to_be_hidden();page.locator('.recommendation-info > summary').click();expect(page.locator('.recommendation-source')).to_be_visible();expect(page.locator('.recommendation-source')).to_contain_text('根据你第 1 轮说的')
                 expect(page.get_by_role('radio').first).not_to_be_checked()
-                page.locator('.tree-node[data-node-id=channels]').click();page.get_by_role('button',name='修改回答',exact=True).click()
+                page.get_by_role('button',name='回看依据',exact=True).click();page.get_by_role('button',name='改',exact=True).click()
                 expect(page.get_by_role('checkbox').nth(0)).to_be_checked();expect(page.get_by_role('checkbox').nth(1)).to_be_checked()
-                page.get_by_role('checkbox').nth(2).check();page.get_by_role('button',name='保存并确认此题',exact=True).click()
-                expect(page.locator('.recommendation-info')).to_contain_text('旧推荐已隐藏');expect(page.locator('.recommendation-badge')).to_have_count(0)
+                page.get_by_role('checkbox').nth(2).check();page.get_by_role('button',name='就这么定',exact=True).click();open_question(page,'follow',edit=True)
+                page.locator('.recommendation-info > summary').click();expect(page.locator('.recommendation-info')).to_contain_text('旧推荐已隐藏');expect(page.locator('.recommendation-badge')).to_have_count(0)
                 for radio in page.get_by_role('radio').all():expect(radio).not_to_be_checked()
                 assert service.state()['nodes'][0]['answer']['option_ids']==['none']
                 page.screenshot(path=str(work/(label+'-stale-recommendation.png')),full_page=True)
-                page.get_by_role('radio').nth(1).check();page.get_by_role('button',name='保存并确认此题',exact=True).click();expect(page.locator('#card')).to_contain_text('生长中')
+                page.get_by_role('radio').nth(1).check();page.get_by_role('button',name='就这么定',exact=True).click();expect(page.locator('#card')).to_contain_text('生长中')
                 revision=service.state()['revision'];assert request(service.url,'/document/control',{'action':'offer','expected_revision':revision})[0]==200
                 page.get_by_role('button',name='保存并生成任务文档',exact=True).click();expect(page.locator('#card')).to_contain_text('正在生成任务文档')
                 frozen=service.file.read_bytes();identity=service.state()['session_id'];original_url=service.url;original_document=service.startup['document_file'];service.close()

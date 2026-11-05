@@ -1,6 +1,8 @@
 # 验证与计时
 
-运行 npm test 保留已有场景；再运行 tests/browser_acceptance.py、tests/wait_flow_browser.py、tests/seeded_growth.py 和 tests/choices_browser.py。开发依赖见 requirements-dev.txt。运行命令的 Windows 用 python，macOS/Linux 用 python3。
+运行 npm test 保留已有场景；再运行 tests/browser_acceptance.py、tests/bud_note_browser.py、tests/wait_flow_browser.py、tests/seeded_growth.py 和 tests/choices_browser.py。开发依赖见 requirements-dev.txt。运行命令的 Windows 用 python，macOS/Linux 用 python3。
+
+`tests/bud_note_browser.py` 验证可见花苞引导、顶部题干与指向花心的气泡、确认后原地开花、只读回看与明确修改、整轮提交及上游修改后的复核；覆盖桌面、紧凑桌面和手机视口。另核对原生 `cameraFrame()`、手动缩放与看全树，防止答题界面再次覆盖树的取景。
 
 新协议测试覆盖：v2 多选至少一项、显式互斥“都不需要”、单选仍恰好一项、文本不带选项；重复／未知 ID／互斥混选拒绝且不落盘；初始与追问理由必填；推荐不预选、有理由和可核对来源、来源变化隐藏；所有原文保留。v1 只读回看与旧文档来源不变，不能自动补字段。
 
