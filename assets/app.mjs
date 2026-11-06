@@ -35,6 +35,15 @@ function navigationTarget(){
   if(active?.status==='pending'&&active.round===state.current_round&&(!drafts.has(active.id)||working.has(active.id)))return active;
   return openQuestions().find(n=>!drafts.has(n.id)&&ready(n))??null;
 }
+function guideText(target){
+  if(!guideSeen)return '点这里开始';
+  const pending=openQuestions(),draftCount=pending.filter(n=>drafts.has(n.id)).length,remaining=pending.length-draftCount;
+  if(draftCount===1)return '接着聊这朵';
+  if(remaining===1)return '就差这朵了';
+  const phrases=['顺便定下这个','这块你怎么想？','还有个细节','看下这块怎么定','这规矩定一下'];
+  const hash=[...(target?.id??'')].reduce((s,c)=>s+c.charCodeAt(0),0);
+  return phrases[hash%phrases.length];
+}
 function updateNavigation(){
   const target=navigationTarget();
   for(const flower of document.querySelectorAll('.tree-node')){
@@ -44,7 +53,7 @@ function updateNavigation(){
   const next=document.querySelector('#next-question');if(next){next.disabled=busy||!target;next.dataset.target=target?.id??'';}
   budGuide.hidden=!target||dialog.open||stopped;budGuide.disabled=busy;
   budGuide.dataset.target=target?.id??'';
-  budGuide.textContent=target?.status==='needs_review'?'这片叶子，再看看':guideSeen?'接着聊这朵':'点这里开始';
+  budGuide.textContent=target?.status==='needs_review'?'这片叶子，再看看':guideText(target);
   budGuide.setAttribute('aria-label',`${budGuide.textContent}${target?'：'+target.question:''}`);
   syncNotePosition();
 }
@@ -94,10 +103,18 @@ async function act(action){
 function button(label,action,primary=false){const b=el('button',label,primary?'primary':'');b.type='button';b.addEventListener('click',action);return b;}
 function docAction(action){return act(async()=>{await post('/document/control',{action,expected_revision:state.revision,job_id:documentState.job_id});});}
 function updateMeta(){
-  const done=state.nodes.filter(n=>n.status==='answered').length;
-  const roundLabel=state.status==='complete'?`共完成 ${new Set(state.nodes.map(n=>n.round)).size} 轮`:`第 ${state.current_round} 轮 · 总轮数随回答确定`;
-  document.querySelector('#meta').textContent=`${roundLabel} · ${state.topic}\n已确认 ${done} / ${state.nodes.length}${drafts.size?` · 本轮未提交 ${drafts.size}`:''}${reviews().length?` · 待复核 ${reviews().length}`:''}`;
-  document.querySelector('#meta').dataset.revision=String(state.revision);card.dataset.revision=String(state.revision);
+  const meta=document.querySelector('#meta'),total=state.nodes.length,done=state.nodes.filter(n=>n.status==='answered').length,review=reviews().length,complete=state.status==='complete';
+  // Topic first (what this tree is about), then where we are, then a hairline of progress.
+  const progress=el('span',undefined,'meta-progress');
+  progress.append(el('span',complete?`共完成 ${new Set(state.nodes.map(n=>n.round)).size} 轮`:`第 ${state.current_round} 轮`,'meta-round'));
+  if(!complete)progress.append(el('span',' · 总轮数随回答确定','meta-note'));
+  progress.append(el('span',` · 已确认 ${done} / ${total}`));
+  if(drafts.size)progress.append(el('span',` · 本轮未提交 ${drafts.size}`,'meta-draft'));
+  if(review)progress.append(el('span',` · 待复核 ${review}`,'meta-review'));
+  const bar=el('span',undefined,'meta-bar');bar.setAttribute('aria-hidden','true');
+  bar.style.setProperty('--done',String(total?done/total:0));bar.style.setProperty('--reach',String(total?Math.min(1,(done+drafts.size)/total):0));
+  meta.replaceChildren(el('span',state.topic,'meta-topic'),progress,bar);meta.title=state.topic;
+  meta.dataset.revision=String(state.revision);card.dataset.revision=String(state.revision);
 }
 function updateTree(){const finished=documentState.phase==='offered'&&documentState.offered_revision===state.revision;view.update(state,{drafts,currentId,waiting:isWaiting()&&!finished&&assistantDisplay==='connected',finished,fruitStates:new Map(chapters(state).map(c=>[c.id,documentMatches()?(documentState.chapters?.find(x=>x.id===c.id)?.status??(documentState.phase==='ready'?'ready':'generating')):'generating']))});updateMeta();updateNavigation();}
 function inputs(n,host){
@@ -142,12 +159,16 @@ function inputs(n,host){
 function renderSummary(host){
   const list=el('ul',undefined,'summary-list');
   openQuestions().filter(n=>drafts.has(n.id)).forEach(n=>{const row=el('li');row.append(el('div',n.question),el('div',answerText(n,drafts.get(n.id)),'answer'),button('回看这朵花',()=>openNode(n.id,nodeTarget(n.id))));list.append(row);});
-  const title=el('h2','这一轮，先看看。','q');title.id='node-question';host.append(title,list,el('p','本轮未提交 · 刷新或关闭会丢失这些草稿。','draft-hint'));
+  const title=el('h2',`第 ${state.current_round} 轮 · 答案核对`,'q');title.id='node-question';host.append(title,list,el('p','本轮未提交 · 刷新或关闭会丢失这些草稿。','draft-hint'));
   const submit=button('提交本轮答案',()=>act(async()=>{
     const round=state.current_round,revision=state.revision,answers=openQuestions().map(n=>({id:n.id,answer:drafts.get(n.id)}));
     if(!answers.every(a=>valid(state.nodes.find(n=>n.id===a.id),a.answer)))throw Error('请完整回答本轮问题');
     await post('/submit',{round,expected_revision:revision,answers});waitingSince=performance.now();closeNote();
-  }),true);submit.disabled=busy||reviews().length>0||openQuestions().some(n=>!drafts.has(n.id));host.append(submit);
+  }),true);
+  submit.className='primary seal-btn';
+  submit.setAttribute('aria-label','提交本轮答案');
+  submit.innerHTML='<span class="seal-mark">盖章</span><span class="seal-text">定了 · 接着长 ↗</span>';
+  submit.disabled=busy||reviews().length>0||openQuestions().some(n=>!drafts.has(n.id));host.append(submit);
 }
 function renderWaiting(){
   card.append(el('p',`第 ${state.current_round} 轮 · 已确认`,'k'));waitingHeader('正在想下一轮的问题…','生长中');card.append(elapsedLine(waitingSince),el('p','可以点已答的花回看或修改。','w'));
@@ -158,7 +179,7 @@ function elapsedLine(since){const line=el('p','', 'wait-elapsed');line.id='wait-
 function chapterList(){
   const list=el('ul',undefined,'chapters');
   chapters(state).forEach(c=>{const li=el('li'),ready=documentMatches()&&(documentState.phase==='ready'||documentState.chapters?.some(x=>x.id===c.id&&x.status==='ready'));
-    if(ready){const a=el('a',c.title+' · 可阅读');a.href='/document'+(documentState.phase==='ready'?'':'?chapter='+encodeURIComponent(c.id))+'#'+c.anchor;a.target='_blank';a.rel='noopener';li.append(a);}
+    if(ready){const a=el('a');a.append(el('span',c.title,'chapter-title'),el('span',' · 可阅读','chapter-state'));a.href='/document'+(documentState.phase==='ready'?'':'?chapter='+encodeURIComponent(c.id))+'#'+c.anchor;a.target='_blank';a.rel='noopener';li.append(a);}
     else li.append(el('span',c.title),el('span',documentState.phase==='failed'?' · 待重试':' · 生成中','chapter-pending'));list.append(li);
   });return list;
 }
@@ -168,9 +189,10 @@ function renderDocument(){
     if(!documentMatches()){card.append(el('h2','正在同步任务文档…','q'),el('p','正在核对当前访谈与文档的版本。','w'));return;}
     card.append(el('h2','问过的，都结成了果。','q'),el('p',`${state.nodes.length} 个问题已确认 · ${chapters(state).length} 颗果子，点击打开对应章节。`,'w'));
     card.append(chapterList());
-    const link=el('a','打开完整任务文档','doc-link');link.href='/document';link.target='_blank';link.rel='noopener';card.append(link);
-    const download=el('a','保存 HTML 文件'),downloadLine=el('p');download.href='/document?download=1';download.download='task.html';downloadLine.append(download);card.append(downloadLine);
-    card.append(button('结束预览',()=>act(async()=>{await post('/document/control',{action:'close',expected_revision:state.revision});stopped=true;document.querySelector('#connection').textContent='预览已结束；任务 HTML 已保存在本机。';}),false));
+    const actions=el('div',undefined,'doc-actions');
+    const link=el('a','打开完整任务文档','doc-link');link.href='/document';link.target='_blank';link.rel='noopener';
+    const download=el('a','保存 HTML 文件','doc-secondary');download.href='/document?download=1';download.download='task.html';
+    actions.append(link,download,button('结束预览',()=>act(async()=>{await post('/document/control',{action:'close',expected_revision:state.revision});stopped=true;document.querySelector('#connection').textContent='预览已结束；任务 HTML 已保存在本机。';}),false));card.append(actions);
   }else if(phase==='failed'){
     card.append(el('h2','文档暂时没生成。','q'),el('p',publicError(documentState.error,'文档生成遇到问题，请重试。'),'w'),chapterList(),button('重试生成文档',()=>docAction('retry'),true),el('p','答案已经保存，不用重新答。','w'));
   }else{
@@ -188,10 +210,25 @@ function render(){
   else{
     const pending=openQuestions(),review=reviews();
     if(pending.length||review.length){
-      const count=pending.filter(n=>drafts.has(n.id)).length;
+      const count=pending.filter(n=>drafts.has(n.id)).length,ready=count===pending.length&&!review.length;
       card.append(el('p',`${count?`本轮 ${count} 个草稿 · `:''}${pending.length-count} 枚花苞${review.length?` · ${review.length} 片黄叶待复核`:''}`,'scene-count'));
       if(navigationTarget()){const next=button('下一题 →',nextQuestion);next.id='next-question';card.append(next);}
-      if(count){const summary=button(count===pending.length&&!review.length?'回看汇总，提交本轮':'查看本轮草稿',openSummary);card.append(summary);}
+      if(count){
+        if(ready){
+          const prompt=el('div',undefined,'seal-prompt');
+          const meta=el('div',undefined,'seal-meta');
+          meta.append(el('span',`第 ${state.current_round} 轮齐了`,'seal-round'),el('span','敲空格或轻触盖章','seal-hint'));
+          const summary=button('回看汇总，提交本轮',openSummary,true);
+          summary.className='primary seal-btn';
+          summary.setAttribute('aria-label','回看汇总，提交本轮');
+          summary.innerHTML='<span class="seal-mark">盖章</span><span class="seal-text">接着长 ↗</span>';
+          prompt.append(meta,summary);
+          card.append(prompt);
+        }else{
+          const summary=button('查看本轮草稿',openSummary,false);
+          card.append(summary);
+        }
+      }
       if(review.length)card.append(el('p','点黄叶回看；确认上游后，再复核下游。','w'));
       const work=el('p',heartbeatNote(),'w');work.id='heartbeat-work';work.hidden=!work.textContent;card.append(work);
     }else renderWaiting();
@@ -266,8 +303,12 @@ function positionNote(){
   questionHeading.classList.toggle('long',!!n&&n.question.length>36);
   dialog.dataset.placement='bubble';dialog.style.left='0px';dialog.style.top='0px';
   const wide=n&&(n.options.some(o=>o.label.length>12)||n.input==='text'||noteMode==='read');
-  dialog.style.width=(wide&&innerWidth>=600?300:Math.min(248,innerWidth-40))+'px';
-  if(!point){dialog.style.left=Math.max(10,(innerWidth-dialog.offsetWidth)/2)+'px';dialog.style.top=Math.max(10,innerHeight-dialog.offsetHeight-20)+'px';return;}
+  // Round summary and the copy-reminder fallback have no bud and carry more text.
+  dialog.style.width=(!n?Math.min(360,innerWidth-32):wide&&innerWidth>=600?300:Math.min(248,innerWidth-40))+'px';
+  if(!point){
+    if(noteMode==='summary'&&innerWidth>=768){dialog.style.left='auto';dialog.style.right='44px';dialog.style.top='auto';dialog.style.bottom='36px';return;}
+    dialog.style.left=Math.max(10,(innerWidth-dialog.offsetWidth)/2)+'px';dialog.style.top=Math.max(10,innerHeight-dialog.offsetHeight-20)+'px';return;
+  }
   let place=bubblePlace(point,dialog.offsetWidth,dialog.offsetHeight,n.id)??bubblePlace(point,dialog.offsetWidth,dialog.offsetHeight,n.id,false,true)??bubblePlace(point,dialog.offsetWidth,dialog.offsetHeight,n.id,false,true,true);
   let w=dialog.offsetWidth,h=dialog.offsetHeight;dialog.style.maxHeight='';
   const covers=p=>p.x-6<point.x&&point.x<p.x+w+6&&p.y-6<point.y&&point.y<p.y+h+6;
@@ -339,7 +380,20 @@ window.visualViewport?.addEventListener('resize',syncNotePosition);window.visual
 document.querySelector('.tree-controls').addEventListener('click',syncNotePosition);
 window.addEventListener('beforeunload',event=>{if(state?.status==='active'&&(drafts.size||working.size)){event.preventDefault();event.returnValue='';}});
 document.addEventListener('keydown',event=>{
-  if(!dialog.open||!state||busy)return;if(event.key==='Escape'){event.preventDefault();closeNote();return;}
+  if(!state||busy)return;
+  if(event.key==='Escape'){if(dialog.open){event.preventDefault();closeNote();}return;}
+  if((event.code==='Space'||event.key===' ')&&!dialog.open&&!event.target.matches('textarea,input')){
+    const seal=card.querySelector('.seal-btn');
+    if(seal&&!seal.disabled){event.preventDefault();seal.click();return;}
+  }
+  if(!dialog.open)return;
+  if(noteMode==='summary'){
+    if(event.key==='Enter'||event.code==='Space'){
+      const submit=dialog.querySelector('.seal-btn,.primary');
+      if(submit&&!submit.disabled&&!event.target.matches('button')){event.preventDefault();submit.click();}
+    }
+    return;
+  }
   if(noteMode!=='edit')return;const inText=event.target.matches('textarea,input[type=text]');
   if(inText){if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();dialog.querySelector('#confirm-answer')?.click();}return;}
   if(/^[1-9]$/.test(event.key)){const input=dialog.querySelector(`[data-shortcut="${event.key}"]`);if(input&&!input.disabled){event.preventDefault();input.checked=input.type==='checkbox'?!input.checked:true;input.dispatchEvent(new Event('change',{bubbles:true}));input.focus();}}
