@@ -2,9 +2,9 @@
 
 把逐轮澄清搬到本机网页：回答一题，树上开一朵花；追问沿着依赖长出枝条；修改上游答案，相关问题变成需要复核的黄叶；保存后，果子通向文档里的主题章节。
 
-**V2 试用版 · v0.2.0-alpha.2 · MIT 开源。** 使用 v2 访谈协议。旧 v1 访谈在此版本中只读，继续答题请使用 [V1 试用版](https://github.com/Trunks820/grow-me/releases/tag/v0.1.0-alpha.1)；不会自动迁移。
+**V2 试用版 · v0.2.0-alpha.3 · MIT 开源。** 使用 v2 访谈协议。旧 v1 访谈在此版本中只读，继续答题请使用 [V1 试用版](https://github.com/Trunks820/grow-me/releases/tag/v0.1.0-alpha.1)；不会自动迁移。
 
-[下载 V2 ZIP](https://github.com/Trunks820/grow-me/releases/download/v0.2.0-alpha.2/grow-me-v0.2.0-alpha.2.zip) · [版本说明](https://github.com/Trunks820/grow-me/releases/tag/v0.2.0-alpha.2) · [SHA-256 校验](https://github.com/Trunks820/grow-me/releases/download/v0.2.0-alpha.2/grow-me-v0.2.0-alpha.2.sha256)
+[下载 V2 ZIP](https://github.com/Trunks820/grow-me/releases/download/v0.2.0-alpha.3/grow-me-v0.2.0-alpha.3.zip) · [版本说明](https://github.com/Trunks820/grow-me/releases/tag/v0.2.0-alpha.3) · [SHA-256 校验](https://github.com/Trunks820/grow-me/releases/download/v0.2.0-alpha.3/grow-me-v0.2.0-alpha.3.sha256)
 
 界面与接口回归已通过，跨助手真实闭环和模型生成速度仍在验收中。欢迎带着真实需求试用并反馈等待时间。
 
