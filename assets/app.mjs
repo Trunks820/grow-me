@@ -235,7 +235,8 @@ function assistantStatus() {
     state?.status === 'complete' &&
     documentMatches() &&
     ['requested', 'generating'].includes(documentState.phase);
-  if (state?.schema_version !== 2 || !((isWaiting() && !saveOffered()) || writing)) return 'inactive';
+  if (state?.schema_version !== 2 || !((isWaiting() && !saveOffered()) || writing))
+    return 'inactive';
   return assistantConnection(aiActivity, performance.now() - aiOpenedAt);
 }
 function heartbeatNote() {
@@ -361,21 +362,24 @@ function updateTree() {
       ? { ...n, answer: { ...answer, option_ids: [], text: displayAnswer(n, answer) } }
       : n;
   });
-  view.update({ ...state, nodes }, {
-    drafts,
-    currentId,
-    waiting: isWaiting() && !finished && assistantDisplay === 'connected',
-    finished,
-    fruitStates: new Map(
-      chapters(state).map(c => [
-        c.id,
-        documentMatches()
-          ? (documentState.chapters?.find(x => x.id === c.id)?.status ??
-            (documentState.phase === 'ready' ? 'ready' : 'generating'))
-          : 'generating'
-      ])
-    )
-  });
+  view.update(
+    { ...state, nodes },
+    {
+      drafts,
+      currentId,
+      waiting: isWaiting() && !finished && assistantDisplay === 'connected',
+      finished,
+      fruitStates: new Map(
+        chapters(state).map(c => [
+          c.id,
+          documentMatches()
+            ? (documentState.chapters?.find(x => x.id === c.id)?.status ??
+              (documentState.phase === 'ready' ? 'ready' : 'generating'))
+            : 'generating'
+        ])
+      )
+    }
+  );
   for (const n of nodes) {
     if (n.status === 'needs_review' || !isDeferred(n.answer)) continue;
     const marker = nodeTarget(n.id),
@@ -626,9 +630,9 @@ function openPlanConfirmation() {
   delete dialog.dataset.nodeId;
   document.querySelector('#close-node').disabled = false;
   document.querySelector('#node-actions').replaceChildren();
-  document.querySelector('#node-body').replaceChildren(
-    ...planConfirmation(pending.length - answers.length, confirm, closeNote)
-  );
+  document
+    .querySelector('#node-body')
+    .replaceChildren(...planConfirmation(pending.length - answers.length, confirm, closeNote));
   showNote();
   updateNavigation();
 }

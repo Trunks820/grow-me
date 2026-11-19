@@ -17,10 +17,14 @@ const same = (part, status) =>
   part.source.revision === status.source.revision &&
   part.source.digest === status.source.digest &&
   part.source.job_id === status.job_id;
-const frozenQuestions = tree => new Map(
-  (tree?.nodes ?? []).filter(node => isDeferred(node.answer)).map(node => [node.id, node.question])
-);
-const questionId = id => /^[a-z\d_-]+$/i.test(id) ? 'deferred-' + id : 'deferred~' + chapterAnchor(id);
+const frozenQuestions = tree =>
+  new Map(
+    (tree?.nodes ?? [])
+      .filter(node => isDeferred(node.answer))
+      .map(node => [node.id, node.question])
+  );
+const questionId = id =>
+  /^[a-z\d_-]+$/i.test(id) ? 'deferred-' + id : 'deferred~' + chapterAnchor(id);
 
 function deferredLists(status, chapterParts, tree) {
   const frozen = frozenQuestions(tree);
@@ -33,17 +37,27 @@ function deferredLists(status, chapterParts, tree) {
       ...known.map(id => ({ id: questionId(id), text: frozen.get(id), anchor: chapter.anchor })),
       ...(part.deferred_questions ?? [])
         .filter(question => !texts.has(question))
-        .map((text, index) => ({ id: `pending-${chapter.anchor}-${index + 1}`, text, anchor: chapter.anchor }))
+        .map((text, index) => ({
+          id: `pending-${chapter.anchor}-${index + 1}`,
+          text,
+          anchor: chapter.anchor
+        }))
     ];
   });
-  const list = entries => entries.length
-    ? `<section class="deferred-questions"><h3>待确认</h3><ul>${entries.join('')}</ul></section>`
-    : '';
+  const list = entries =>
+    entries.length
+      ? `<section class="deferred-questions"><h3>待确认</h3><ul>${entries.join('')}</ul></section>`
+      : '';
   return {
-    definitions: list(items.map(({ id, text, anchor }) =>
-      `<li id="${escape(id)}" data-kind="question"><a href="#${escape(anchor)}">${escape(text)}</a></li>`
-    )),
-    links: list(items.map(({ text, anchor }) => `<li><a href="#${escape(anchor)}">${escape(text)}</a></li>`))
+    definitions: list(
+      items.map(
+        ({ id, text, anchor }) =>
+          `<li id="${escape(id)}" data-kind="question"><a href="#${escape(anchor)}">${escape(text)}</a></li>`
+      )
+    ),
+    links: list(
+      items.map(({ text, anchor }) => `<li><a href="#${escape(anchor)}">${escape(text)}</a></li>`)
+    )
   };
 }
 
@@ -69,7 +83,9 @@ export function composeDocument(status, parts, { preview = false, tree = null } 
       if (
         part.deferred_questions !== undefined &&
         (!Array.isArray(part.deferred_questions) ||
-          part.deferred_questions.some(question => typeof question !== 'string' || !question.trim()))
+          part.deferred_questions.some(
+            question => typeof question !== 'string' || !question.trim()
+          ))
       )
         throw Error('待确认清单需要问题文本');
       chapterParts.set(part.chapter_id, part);
@@ -143,9 +159,23 @@ export function composeDocument(status, parts, { preview = false, tree = null } 
 function validateHandoff(file, tree, jobId) {
   validateDocument(file, tree, jobId);
   const questions = [...frozenQuestions(tree)].map(([id, question]) => [questionId(id), question]);
-  const validation = spawnSync(process.platform === 'win32' ? 'python' : 'python3', [
-    '-B', '-X', 'utf8', fileURLToPath(new URL('./validate_task.py', import.meta.url)), file, '--handoff'
-  ], { input: JSON.stringify(questions), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, windowsHide: true });
+  const validation = spawnSync(
+    process.platform === 'win32' ? 'python' : 'python3',
+    [
+      '-B',
+      '-X',
+      'utf8',
+      fileURLToPath(new URL('./validate_task.py', import.meta.url)),
+      file,
+      '--handoff'
+    ],
+    {
+      input: JSON.stringify(questions),
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+      windowsHide: true
+    }
+  );
   if (validation.error) throw Error('无法运行全文校验：' + validation.error.message);
   if (![0, 1].includes(validation.status) || !validation.stdout) throw Error('全文校验程序未完成');
   const report = JSON.parse(validation.stdout);
@@ -173,7 +203,8 @@ async function main() {
     existing = args.includes('--existing');
   if (!status.job_id || !['requested', 'generating'].includes(status.phase))
     throw Error('需要当前冻结访谈的生成任务');
-  if (existing && (preview || args.includes('--parts'))) throw Error('--existing 单独用于校验已有全文');
+  if (existing && (preview || args.includes('--parts')))
+    throw Error('--existing 单独用于校验已有全文');
   const checkCurrent = async () => {
     const response = await fetch(value('--url') + '/document/status');
     if (!response.ok) throw Error('无法核对当前生成任务');
@@ -189,10 +220,14 @@ async function main() {
   };
   const online = args.includes('--url');
   let current = online && preview ? await checkCurrent() : null;
-  const parts = existing ? [] : readdirSync(value('--parts'))
-      .filter(n => n.endsWith('.json'))
-      .map(n => JSON.parse(readFileSync(resolve(value('--parts'), n), 'utf8'))),
-    result = existing ? { views: [], ready_chapters: [] } : composeDocument(status, parts, { preview, tree });
+  const parts = existing
+      ? []
+      : readdirSync(value('--parts'))
+          .filter(n => n.endsWith('.json'))
+          .map(n => JSON.parse(readFileSync(resolve(value('--parts'), n), 'utf8'))),
+    result = existing
+      ? { views: [], ready_chapters: [] }
+      : composeDocument(status, parts, { preview, tree });
   const file = status.source.document_file + (preview ? '.preview.html' : ''),
     temp = file + '.' + process.pid + '.tmp',
     manifestFile = resolve(dirname(file), 'task.manifest.json'),

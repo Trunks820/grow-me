@@ -10,16 +10,29 @@ import { isMain } from './entry.mjs';
 export { HEARTBEAT_LEASE_MS } from './progress.mjs';
 const run = promisify(execFile);
 const AI_TOOL_PROCESSES = new Set([
-  'claude', 'claude-code', 'codex', 'codex-cli', 'cursor', 'cursor-agent', 'antigravity', 'agy'
+  'claude',
+  'claude-code',
+  'codex',
+  'codex-cli',
+  'cursor',
+  'cursor-agent',
+  'antigravity',
+  'agy'
 ]);
 
 async function readProcessTable() {
   const options = { encoding: 'utf8', timeout: 5000, windowsHide: true };
   if (process.platform === 'win32') {
-    const { stdout } = await run('powershell.exe', [
-      '-NoProfile', '-NonInteractive', '-Command',
-      'Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress'
-    ], options);
+    const { stdout } = await run(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        'Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress'
+      ],
+      options
+    );
     return [JSON.parse(stdout)].flat().map(row => ({
       pid: row.ProcessId,
       ppid: row.ParentProcessId,
@@ -27,11 +40,14 @@ async function readProcessTable() {
     }));
   }
   const { stdout } = await run('ps', ['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'comm='], options);
-  return Array.from(stdout.matchAll(/^[ \t]*(\d+)[ \t]+(\d+)[ \t]+(.+)$/gm), ([, pid, ppid, name]) => ({
-    pid: Number(pid),
-    ppid: Number(ppid),
-    name: name.trim()
-  }));
+  return Array.from(
+    stdout.matchAll(/^[ \t]*(\d+)[ \t]+(\d+)[ \t]+(.+)$/gm),
+    ([, pid, ppid, name]) => ({
+      pid: Number(pid),
+      ppid: Number(ppid),
+      name: name.trim()
+    })
+  );
 }
 
 export function findAiOwnerPid(processes, pid = process.pid) {
@@ -39,7 +55,11 @@ export function findAiOwnerPid(processes, pid = process.pid) {
   const seen = new Set([pid]);
   let parent = byPid.get(byPid.get(pid)?.ppid);
   while (parent && !seen.has(parent.pid)) {
-    const name = parent.name.split(/[\\/]/).at(-1).toLowerCase().replace(/\.exe$/, '');
+    const name = parent.name
+      .split(/[\\/]/)
+      .at(-1)
+      .toLowerCase()
+      .replace(/\.exe$/, '');
     if (AI_TOOL_PROCESSES.has(name)) return parent.pid;
     seen.add(parent.pid);
     parent = byPid.get(parent.ppid);

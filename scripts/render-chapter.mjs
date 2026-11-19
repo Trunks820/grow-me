@@ -42,7 +42,9 @@ export function renderChapter(status, tree, chapterId, explanation) {
     /^\s*(?:event:|data:|\{)/.test(explanation)
   )
     throw Error('需要已写好的说明性 HTML');
-  const confirmed = [], deferred = [], deferredQuestions = [];
+  const confirmed = [],
+    deferred = [],
+    deferredQuestions = [];
   for (const n of chapter.nodes) {
     const pending = isDeferred(n.answer),
       selected = n.answer.option_ids.map(id => n.options.find(o => o.id === id)),

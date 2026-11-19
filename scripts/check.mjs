@@ -30,8 +30,7 @@ async function requestJson(url, path, { instanceId, waiting, ...options }) {
   const instance = response.headers.get('x-grow-me-instance');
   if (instanceId && instance !== instanceId)
     throw new CheckError('identity', '等待期间服务实例已变；请先短查核对。');
-  if (response.status === 409)
-    throw new CheckError('changed', '查询期间状态已变，请重新短查询。');
+  if (response.status === 409) throw new CheckError('changed', '查询期间状态已变，请重新短查询。');
   if (!response.ok || !response.headers.get('content-type')?.includes('application/json'))
     throw new CheckError('protocol', '服务响应异常；先核对地址，未继续写入。');
   try {

@@ -142,7 +142,8 @@ try {
       const state = await get('/state');
       const doc = await get('/document/status');
       const progress = await get('/progress');
-      const allAnswered = state.status === 'active' && state.nodes.every(n => n.status === 'answered');
+      const allAnswered =
+        state.status === 'active' && state.nodes.every(n => n.status === 'answered');
 
       // Round 1 answered -> wait 2s -> grow Round 2 branches!
       if (!progress.plan_requested && allAnswered && state.current_round === 1) {
@@ -247,9 +248,7 @@ try {
           view: 'chapter',
           chapter_id: chapter.id,
           title: titles[i] ?? chapter.title,
-          deferred_questions: chapter.nodes
-            .filter(n => isDeferred(n.answer))
-            .map(n => n.question),
+          deferred_questions: chapter.nodes.filter(n => isDeferred(n.answer)).map(n => n.question),
           html:
             `<p>本章节汇总了围绕该核心主题推导的详细方案与边界约束。</p>` +
             chapter.nodes

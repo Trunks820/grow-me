@@ -25,11 +25,11 @@ import { RuntimeLog } from './runtime-log.mjs';
 
 // Chromium main: net/base/port_util.cc kRestrictedPorts, copied 2026-11-19 (excluding 0).
 const BROWSER_RESTRICTED_PORTS = new Set([
-  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101,
-  102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427,
-  465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990,
-  993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668,
-  6669, 6697, 10080
+  1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102,
+  103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465,
+  512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993,
+  995, 1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669,
+  6697, 10080
 ]);
 const PORT_ATTEMPTS = 10;
 
@@ -43,7 +43,9 @@ export async function selectBrowserPort(bind, close) {
     if (!isBrowserRestrictedPort(port)) return port;
     await close();
   }
-  throw new Error(`自动选端口连续 ${PORT_ATTEMPTS} 次都分配到浏览器会拒绝打开的端口，请重试或用 --port 指定其他端口。`);
+  throw new Error(
+    `自动选端口连续 ${PORT_ATTEMPTS} 次都分配到浏览器会拒绝打开的端口，请重试或用 --port 指定其他端口。`
+  );
 }
 
 async function main() {
@@ -470,7 +472,10 @@ async function main() {
               tree.nodes.some(n => n.status === 'needs_review') ||
               data.final_round !== true
             )
-              throw new InputError('code reading belongs to the final-round user-answer window', 409);
+              throw new InputError(
+                'code reading belongs to the final-round user-answer window',
+                409
+              );
             if (progress.work.has(data.operation_id))
               throw new InputError('work already started', 409);
             progress.work.set(data.operation_id, Date.now());
@@ -491,7 +496,8 @@ async function main() {
           }
           return json(res, 200, { ok: true });
         }
-        if (!(url.pathname === '/document/control' && data.action === 'close')) assertWritable(tree);
+        if (!(url.pathname === '/document/control' && data.action === 'close'))
+          assertWritable(tree);
         if (url.pathname === '/document/control') {
           const result = documents.control(data);
           if (['save', 'retry'].includes(data.action)) progress.userEvent(data.action);
