@@ -147,7 +147,7 @@ test('motion does not depend on animation or transition events',()=>{
     const source=readFileSync(join(root,file),'utf8');
     assert.equal(/animationend|transitionend|webkitAnimationEnd|<animate[\s>]/i.test(source),false,file);
   }
-  for(const file of['assets/style.css','assets/writer-shell.html'])assert.match(readFileSync(join(root,file),'utf8'),/@media\(prefers-reduced-motion:reduce\)\{[^}]*animation:none!important/);
+  for(const file of['assets/style.css','assets/writer-shell.html'])assert.match(readFileSync(join(root,file),'utf8'),/@media\s*\(\s*prefers-reduced-motion\s*:\s*reduce\s*\)\s*\{[^}]*animation\s*:\s*none\s*!\s*important/);
   assert.match(readFileSync(join(root,'assets/tree.mjs'),'utf8'),/matchMedia\('\(prefers-reduced-motion: reduce\)'\)/);
   assert.match(readFileSync(join(root,'assets/writer-shell.html'),'utf8'),/matchMedia\('\(prefers-reduced-motion: reduce\)'\)/);
 });
