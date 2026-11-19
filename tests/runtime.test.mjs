@@ -14,17 +14,18 @@ import {assistantConnection} from '../assets/presentation.mjs';
 import {fingerprint} from '../scripts/document.mjs';
 import {chapters} from '../assets/topics.mjs';
 import {recommendationDigest} from '../scripts/recommendations.mjs';
+import {isBrowserRestrictedPort,selectBrowserPort} from '../scripts/server.mjs';
 
 const run=promisify(execFile),server=fileURLToPath(new URL('../scripts/server.mjs',import.meta.url)),checker=fileURLToPath(new URL('../scripts/check.mjs',import.meta.url));
 const options=[{id:'a',label:'邮件通知'},{id:'b',label:'站内通知'},{id:'none',label:'都不需要',exclusive:true}];
 const node=(id='delivery',extra={})=>({id,question:'需要哪些通知方式？',rationale:'决定首版需要开发和验收哪些通知渠道。',input:'multi_choice',options:structuredClone(options),answer:null,depends_on:[],status:'pending',round:1,...extra});
 const tree=(nodes=[node()])=>({schema_version:2,session_id:'v2-regression',topic:'通知范围',revision:0,current_round:1,status:'active',nodes});
-async function service(t,seed=tree(),{clock=false,waitMs=25000}={}){
+async function service(t,seed=tree(),{clock=false,waitMs=25000,imports=[]}={}){
   const root=mkdtempSync(join(tmpdir(),'grow-v2-')),file=join(root,'tree.json'),document=join(root,'task.html');writeFileSync(file,JSON.stringify(seed)+'\n');
   const clockFile=join(root,'clock-offset'),preload=join(root,'test-clock.mjs');
   if(clock){writeFileSync(clockFile,'0');writeFileSync(preload,`import {readFileSync} from 'node:fs';const realNow=Date.now;Date.now=()=>realNow()+Number(readFileSync(${JSON.stringify(clockFile)},'utf8'));`);}
   const children=[],detached=[];
-  async function start(){const child=spawn(process.execPath,[...(clock?['--import',pathToFileURL(preload).href]:[]),server,'--state',file,'--document',document,'--wait-ms',String(waitMs)]);children.push(child);let errors='';child.stderr.on('data',d=>errors+=d);return{child,...await Promise.race([once(child.stdout,'data').then(([d])=>JSON.parse(String(d))),once(child,'exit').then(()=>{throw Error(errors);})])};}
+  async function start(){const child=spawn(process.execPath,[...imports.flatMap(specifier=>['--import',specifier]),...(clock?['--import',pathToFileURL(preload).href]:[]),server,'--state',file,'--document',document,'--wait-ms',String(waitMs)]);children.push(child);let errors='';child.stderr.on('data',d=>errors+=d);return{child,...await Promise.race([once(child.stdout,'data').then(([d])=>JSON.parse(String(d))),once(child,'exit').then(()=>{throw Error(errors);})])};}
   const started=await start();
   t.after(async()=>{
     for(const pid of detached){try{process.kill(pid);}catch{}for(let i=0;i<100;i++){try{process.kill(pid,0);}catch{break;}await new Promise(r=>setTimeout(r,20));}}
@@ -34,6 +35,61 @@ async function service(t,seed=tree(),{clock=false,waitMs=25000}={}){
   });
   return{...started,root,file,document,start,setClockOffset:offset=>writeFileSync(clockFile,String(offset)),track:pid=>detached.push(pid),async state(){return(await fetch(this.url+'/state')).json();},async post(path,data){return fetch(this.url+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expected_session_id:seed.session_id,...data})});}};
 }
+
+test('browser port check excludes automatic selection and ordinary ports', () => {
+  assert.equal(isBrowserRestrictedPort(6566), true);
+  assert.equal(isBrowserRestrictedPort(10080), true);
+  assert.equal(isBrowserRestrictedPort(0), false);
+  assert.equal(isBrowserRestrictedPort(8080), false);
+});
+
+test('automatic port selection stops after repeated restricted assignments', async () => {
+  let bindCount = 0, closeCount = 0;
+  await assert.rejects(selectBrowserPort(async () => {
+    assert.equal(bindCount, closeCount);
+    bindCount++;
+    return 6566;
+  }, async () => { closeCount++; }), /自动选端口连续 10 次.*请重试/);
+  assert.equal(bindCount, 10);
+  assert.equal(closeCount, bindCount);
+});
+
+test('server retries the injected restricted port and reports the live port', async t => {
+  const source = `
+    import {Server} from 'node:http';
+    const realListen = Server.prototype.listen, realAddress = Server.prototype.address;
+    let listenCount = 0;
+    Server.prototype.listen = function (...args) {
+      listenCount++;
+      return realListen.apply(this, args);
+    };
+    Server.prototype.address = function () {
+      const address = realAddress.call(this);
+      return listenCount === 1 && address ? {...address, port: 6566} : address;
+    };
+  `;
+  const started = await service(t, tree(), {
+    imports: ['data:text/javascript,' + encodeURIComponent(source)]
+  });
+  assert.equal(isBrowserRestrictedPort(started.port), false);
+  assert.equal(Number(new URL(started.url).port), started.port);
+  assert.equal((await started.state()).session_id, started.session_id);
+});
+
+test('server rejects an explicitly requested restricted port without a startup receipt', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'grow-port-'));
+  t.after(() => rmSync(root, {recursive: true, force: true}));
+  const file = join(root, 'tree.json');
+  writeFileSync(file, JSON.stringify(tree()));
+  await assert.rejects(run(process.execPath, [server, '--state', file, '--port', '6566'], {
+    timeout: 3000
+  }), error => {
+    assert.equal(error.code, 1);
+    assert.match(error.stderr, /浏览器会拒绝打开这个端口.*请换一个/);
+    assert.equal(error.stdout, '');
+    return true;
+  });
+});
 
 import {findAiOwnerPid,startHeartbeat,stopHeartbeat} from '../scripts/heartbeat.mjs';
 import {runtimePost} from '../scripts/runtime-client.mjs';

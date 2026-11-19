@@ -2,6 +2,8 @@
 
 所有脚本路径相对 SKILL.md，运行时请换成绝对路径。准备真实 v2 首轮后，用 `start.mjs --state <原文件> --session <UUID> --document <HTML路径>`。它先校验原文件，启动独立后台 Node 服务，打印启动回执后退出；不会创建或覆盖 tree.json。保留 URL、PID、原 state_file、document_file、session_id；这些是进程定位信息，不是另一份答案存储。Windows 后台窗口隐藏。
 
+默认 `--port 0` 由系统分配空闲端口；如果浏览器会拦截这个端口，服务会换一个，只打印最终可用的地址。手动指定了浏览器会拦截的端口时，服务不会启动，请换一个端口。
+
 ## 短查询与等待
 
 `check.mjs --url <origin> --session <UUID>` 是一次性命令：先 GET /state 验证身份，再读文档、进度和恢复元数据；核对 session / revision / instance 后 POST /ai/check。全部网络请求共用最多 3 秒期限。输出状态和新用户事件的元数据，不打印答案。
