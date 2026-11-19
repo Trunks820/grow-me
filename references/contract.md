@@ -11,9 +11,11 @@ The machine-readable format is [tree.schema.json](tree.schema.json). The runtime
 | Root | `schema_version: 2`, `session_id`, `topic`, `revision`, `current_round`, `status`, `nodes` |
 | Node | `id`, `question`, required `rationale`, optional `recommendation` / `chapter_id`, `input`, `options`, `answer`, `depends_on`, `status`, `round` |
 | Option | Stable `id`, visible `label`; multi_choice may have one `exclusive: true` option |
-| Answer | `option_ids: []` plus `text: ""`; preserves free-text whitespace, newlines and Unicode |
+| Answer | Required `option_ids` and `text`, optional boolean `deferred`. Preserve free-text whitespace, newlines and Unicode. |
 
-Root status is `active` or `complete`. Node status is `pending` (待答), `answered` (已答), or `needs_review` (待复核). `input` is `single_choice`, `multi_choice` or `text`. Multi-choice answers select at least one known option; an exclusive “都不需要” must be selected alone. Empty selection is unanswered, never an implicit “none”. Text nodes have an empty options array; single-choice answers select exactly one known option and may include a text note. An unanswered node has `answer: null`. A node needing review retains its previous answer, including null if it had never been answered.
+Root status is `active` or `complete`. Node status is `pending` (待答), `answered` (已提交), or `needs_review` (待复核). A `pending` node has `answer: null`. Review retains the previous answer, including null. For confirmed answers, `single_choice` selects one known option, `multi_choice` selects at least one, and `text` requires nonblank text with no option IDs. An exclusive “都不需要” must be selected alone.
+
+`{ "option_ids": [], "text": "", "deferred": true }` submits a question as 待定. Notes are optional. Any selected IDs still follow the input's rules and are tentative. `answered` counts both confirmed and deferred submissions for round completion and save. Omitted or false `deferred` uses the ordinary answer rules.
 
 `chapter_id` is optional v2 document metadata, naming a root question reachable through this question's dependencies; roots name themselves. New question authors supply it each round. Explicit values directly determine document membership, including a chosen root for a multi-dependency question; missing values fall back to the original primary-root projection without backfilling the file. It never changes parent branches, review dependencies or geometry. `/context` projects the resolved ID and `/document/status.source.chapters[].node_ids` supplies frozen membership. V1 schema and read-only behavior are unchanged.
 
@@ -21,21 +23,23 @@ Root status is `active` or `complete`. Node status is `pending` (待答), `answe
 
 Every v2 initial/follow-up question has a nonblank `rationale` explaining the decision it controls. No generated default reason is inserted by the service. Recommendations are optional `recommendation: {option_ids, reason, source_ids, source_digest?}`. IDs must belong to this question; source_ids must name earlier submitted answers. Sources need not become depends_on links or change tree shape.
 
-`/round` computes source_digest itself, ignoring a caller-supplied digest. The fixed UTF-8 encoding is JSON.stringify(source_ids.map(id => ({id, answer:{option_ids,text}}))), keeping source order and exact text. `assets/answers.mjs` defines the canonical encoding. Required digests are 64 lowercase SHA-256 hex characters. New source-less AI suggestions can omit the digest.
+`/round` computes `source_digest`. The UTF-8 JSON encodes `{id, answer: {option_ids, text}}` in source ID order, including `deferred: true` after `text` for deferred sources. `assets/answers.mjs` defines the encoding. Required digests are 64 lowercase SHA-256 hex characters. New source-less AI suggestions can omit the digest.
 
 GET /guidance and /context derive recommendation freshness without changing the tree. A source in review or a changed answer makes advice stale and hides its option IDs; the actual user selection is never overwritten. Source round and quoted answer come from the original tree. Rationale, advice and inferred content are AI metadata, not user confirmation; only selected IDs/notes are the answer. Render as text, not HTML.
 
 ## Legacy compatibility
 
+Resume v0.2 v2 files directly. Existing answers are valid without `deferred`.
+
 New service recognizes [the original v1 schema](tree-v1.schema.json) for read-only history. No mutation, answer/round publication, document retry or metadata backfill is accepted for v1; a valid existing source-bound HTML is still readable. Finish active v1 interviews with v0.1.0-alpha.1. No automatic migration or rewriting of old document digests occurs.
 
-Changing A's answer marks every transitive downstream node `needs_review`, including shared-dependency branches. Unrelated nodes, questions and answers are preserved. Confirming the same answer does not invalidate descendants again. The service does not recompute decisions. Prerequisites must be confirmed before publishing a dependent new question or confirming a dependent old answer.
+Changing A's answer marks every transitive downstream node `needs_review`, including shared-dependency branches. Unrelated nodes, questions and answers are preserved. Keeping the same answer does not invalidate descendants again. The service does not recompute decisions. Prerequisites must be submitted and out of review before publishing or answering a dependent question. When drafting new questions, treat a deferred prerequisite as an open decision.
 
 Pressing **改** first calls `/reopen`: A itself and all downstream nodes immediately become `needs_review`, before an edited answer is saved. Old answers remain available as reference or for explicit reconfirmation. Unrelated in-page drafts survive this state refresh; drafts on the reopened branch are cleared. No second persistent data source is created.
 
 ### Leaving needs_review
 
-The user can confirm an existing answer directly in the page with **仍然有效**; AI republication is not required. This posts the exact retained answer to `/decision` with the current revision. Once all prerequisites are answered, the node becomes `answered`. Its descendants are left exactly as they are: for A → B → C, changing A marks B and C `needs_review`; confirming B restores only B, and C remains `needs_review` until explicitly reviewed. A node without a previous answer must be answered, not merely confirmed. Editing the answer instead follows the ordinary downstream-invalidation rule. The AI must not interpret a pending review as user confirmation.
+Use **仍然有效** to keep a confirmed answer or **仍待定** to keep a deferred answer. Both post the exact retained answer to `/decision` with the current revision and restore `answered` when prerequisites are ready. For A → B → C, changing A marks B and C `needs_review`. Keeping B restores only B. Review C separately. A node without a previous answer needs a new submission. Treat answers in review as unresolved.
 
 `revision` increments on every successful mutation. Every v2 POST sends `expected_session_id` and `expected_revision`. Identity is verified against /state before generation; the service rejects wrong/missing session IDs even if revisions happen to match. HTTP 409 means the client must reread state. Mutations validate before writing; state is saved by replacing one file atomically. While the service is running, use its API, not external edits to `tree.json`.
 
@@ -60,7 +64,7 @@ All POST table payloads below also require `expected_session_id`. JSON request b
 
 Normal wait timeout returns HTTP 200 and `{status:"pending", round, revision, review_ids:[]}`; curl exits 0. Answer return is `{status:"answered", round, revision, answers:[{id,question,answer,selected_options:[{id,label}]}]}`. Already-submitted answers can be read again; waits are not destructive. Finish releases outstanding waits as `closed`. A curl `--max-time` expiry instead exits 28: transport timeout is distinct from a normal `pending` reply.
 
-Any unresolved `needs_review`, including an old node outside the requested round, holds `/wait` pending and blocks `/round`. After receiving an answer batch, the AI must reread `/context` before generating another round, fetching `/state` when an abridged earlier answer needs exact detail.
+Any unresolved `needs_review`, including an old node outside the requested round, holds `/wait` pending and blocks `/round`. After receiving an answer batch, reread `/context` and check `/state` for `answer.deferred`, including earlier rounds. `selected_options` on a deferred answer lists tentative selections. Continue with other substantive questions or offer to save. Do not repeat a question because the user deferred it.
 
 ## Short queries, recovery and evidence
 
@@ -76,9 +80,9 @@ The server retains compatibility last_submission {revision,round,at,cause} in me
 
 The approved visual basis is v7.html / VISUAL-SPEC.md: paper #efe9dc, tapered ink #2f2c26, per-round watercolor, five white petals, yellow leaves and hanging fruit. The old Claude prototype is an interaction reference. Production contains no prototype questions, simulated answers, fast-forward or fake-generation controls.
 
-The workbench presents one question. Confirming locally blooms a memory draft. After the summary the human submits the entire round; until then tree.json and revision are unchanged. Dirty drafts warn on refresh/close, and are intentionally not a persistent browser store. Saved answers recover through /state. The current conversation authors each next round, ordinarily 3–5 questions with a soft count. Published candidates keep the revision captured before generation.
+The workbench presents one question. A confirmed draft blooms and a deferred draft shows a pause symbol. The user submits both kinds together from the round summary. Dirty drafts warn on refresh/close. Saved answers recover through /state. The current conversation authors each next round, ordinarily 3–5 questions with a soft count. Published candidates keep the revision captured before generation.
 
-Waiting loops a visual extension, without adding rounds/nodes or cumulative tree height. The exact waiting text is “正在想下一轮的问题…”, then after 60 seconds “还在想，可以先回看已答的花”. The card always displays “生长中” and elapsed seconds, including after the last yellow leaf is explicitly reconfirmed. Timers use a process-local server start timestamp and a browser monotonic clock, survive polling and reconnect, and reset for a genuinely new wait/job. Transport loss reconnects. The human can edit during waiting; all transitive dependencies participate in review. A changed upstream also invalidates in-progress review drafts even when their status was already needs_review; unrelated drafts survive. Reduced motion keeps text and stops movement.
+Waiting loops a visual extension, without adding rounds/nodes or cumulative tree height. The exact waiting text is “正在想下一轮的问题…”, then after 60 seconds “还在想，可以先回看本轮回答”. The card always displays “生长中” and elapsed seconds, including after the last yellow leaf is reviewed. Timers use a process-local server start timestamp and a browser monotonic clock, survive polling and reconnect, and reset for a genuinely new wait/job. Transport loss reconnects. The human can edit during waiting. All transitive dependencies participate in review. A changed upstream also invalidates in-progress review drafts even when their status was already needs_review. Unrelated drafts survive. Reduced motion keeps text and stops movement.
 
 ### Document and projection endpoints
 

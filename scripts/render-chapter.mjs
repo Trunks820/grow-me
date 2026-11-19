@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fingerprint } from './document.mjs';
 import { validateTree } from './model.mjs';
+import { isDeferred } from '../assets/answers.mjs';
 import { chapters } from '../assets/topics.mjs';
 import { isMain } from './entry.mjs';
 
@@ -41,12 +42,28 @@ export function renderChapter(status, tree, chapterId, explanation) {
     /^\s*(?:event:|data:|\{)/.test(explanation)
   )
     throw Error('需要已写好的说明性 HTML');
-  const answers = chapter.nodes
-    .map(n => {
-      const selected = n.answer.option_ids.map(id => n.options.find(o => o.id === id));
-      return `<section data-source-node="${escape(n.id)}"><h4>${escape(n.question)}</h4>${selected.length ? '<p>用户选择：</p><ul>' + selected.map(o => `<li>${escape(o.label)}</li>`).join('') + '</ul>' : ''}${n.answer.text ? `<p>用户原话：</p><pre class="frozen-answer" style="white-space:pre-wrap;overflow-wrap:anywhere;font:inherit">${escape(n.answer.text)}</pre>` : ''}</section>`;
-    })
-    .join('\n');
+  const confirmed = [], deferred = [], deferredQuestions = [];
+  for (const n of chapter.nodes) {
+    const pending = isDeferred(n.answer),
+      selected = n.answer.option_ids.map(id => n.options.find(o => o.id === id)),
+      options = selected.length
+        ? `<p>${pending ? '暂选' : '用户选择'}</p><ul>${selected.map(o => `<li>${escape(o.label)}</li>`).join('')}</ul>`
+        : '',
+      note = n.answer.text
+        ? `<p>${pending ? '补充说明' : '用户原话'}</p><pre class="frozen-answer" style="white-space:pre-wrap;overflow-wrap:anywhere;font:inherit">${escape(n.answer.text)}</pre>`
+        : '',
+      section = `<section data-source-node="${escape(n.id)}"><h4>${escape(n.question)}</h4>${options}${note}</section>`;
+    if (pending) {
+      deferred.push(section);
+      deferredQuestions.push(n.question);
+    } else confirmed.push(section);
+  }
+  const answers = confirmed.length
+      ? `<section class="frozen-answers"><h3>已提交的决定</h3>${confirmed.join('\n')}</section>`
+      : '',
+    pending = deferred.length
+      ? `<section class="deferred-answers"><h3>待确认</h3>${deferred.join('\n')}</section>`
+      : '';
   return {
     source: {
       session_id: tree.session_id,
@@ -57,7 +74,8 @@ export function renderChapter(status, tree, chapterId, explanation) {
     view: 'chapter',
     chapter_id: chapterId,
     title: binding.title,
-    html: `<section class="frozen-answers"><h3>已提交的决定</h3>${answers}</section><section class="writer-explanation"><h3>方案说明（AI）</h3>${explanation}</section>`
+    ...(deferredQuestions.length ? { deferred_questions: deferredQuestions } : {}),
+    html: `${answers}${pending}<section class="writer-explanation"><h3>方案说明（AI）</h3>${explanation}</section>`
   };
 }
 if (isMain(import.meta.url)) {

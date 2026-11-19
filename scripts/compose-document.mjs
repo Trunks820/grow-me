@@ -32,6 +32,12 @@ export function composeDocument(status, parts, { preview = false } = {}) {
         chapterParts.has(part.chapter_id)
       )
         throw Error('章节不存在或重复');
+      if (
+        part.deferred_questions !== undefined &&
+        (!Array.isArray(part.deferred_questions) ||
+          part.deferred_questions.some(question => typeof question !== 'string' || !question.trim()))
+      )
+        throw Error('待确认清单需要问题文本');
       chapterParts.set(part.chapter_id, part);
     } else {
       if (!['design', 'plan', 'acceptance'].includes(part.view) || views.has(part.view))
@@ -43,6 +49,14 @@ export function composeDocument(status, parts, { preview = false } = {}) {
     throw Error('最终文档需要三个视图和全部章节');
   const design = views.get('design'),
     pending = '<p class="small">本部分仍在生成；完成的主题章节已可阅读。</p>';
+  const deferred = status.source.chapters.flatMap(c =>
+    (chapterParts.get(c.id)?.deferred_questions ?? []).map(
+      question => `<li><a href="#${c.anchor}">${escape(question)}</a></li>`
+    )
+  );
+  const deferredList = deferred.length
+    ? `<section class="deferred-questions"><h3>待确认</h3><ul>${deferred.join('')}</ul></section>`
+    : '';
   const chapters = status.source.chapters
     .map(c => {
       const part = chapterParts.get(c.id);
@@ -55,18 +69,18 @@ export function composeDocument(status, parts, { preview = false } = {}) {
     UPDATED: escape(design?.updated ?? ''),
     SUMMARY: escape(
       design?.summary ??
-        (preview ? '正在生成；已完成章节可以先阅读。' : '本次已确认回答与方案记录。')
+        (preview ? '正在生成；已完成章节可以先阅读。' : '本次访谈的回答与方案记录。')
     ),
     POSITION: preview ? '文档生成中，尚未完成最终校验。' : '全文已组装，验收状态以正文为准。',
     NEXT: preview ? '可从树上的成熟果子打开已完成主题。' : '阅读方案、开发清单与验收标准。',
     CONTEXT: escape('访谈 ' + status.source.session_id + ' / revision ' + status.source.revision),
-    DECISIONS: design?.decisions ?? '',
+    DECISIONS: deferredList + (design?.decisions ?? ''),
     DESIGN: chapters + (design?.html ?? pending),
     REQUIREMENTS: '',
     CONSTRAINTS: '',
-    PLAN: views.get('plan')?.html ?? pending,
+    PLAN: deferredList + (views.get('plan')?.html ?? pending),
     HANDOFF: '',
-    ACCEPTANCE: views.get('acceptance')?.html ?? pending
+    ACCEPTANCE: deferredList + (views.get('acceptance')?.html ?? pending)
   };
   let html = readFileSync(new URL('../assets/writer-shell.html', import.meta.url), 'utf8').replace(
     /\{\{([A-Z]+)\}\}/g,

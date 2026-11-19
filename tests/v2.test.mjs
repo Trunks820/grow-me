@@ -11,6 +11,8 @@ import {fileURLToPath} from 'node:url';
 import {validateTree,publishRound} from '../scripts/model.mjs';
 import {checkOnce} from '../scripts/check.mjs';
 import {fingerprint} from '../scripts/document.mjs';
+import {renderChapter} from '../scripts/render-chapter.mjs';
+import {composeDocument} from '../scripts/compose-document.mjs';
 import {chapters} from '../assets/topics.mjs';
 import {recommendationDigest} from '../scripts/recommendations.mjs';
 
@@ -31,6 +33,99 @@ async function service(t,seed=tree()){
   });
   return{...started,root,file,document,start,track:pid=>detached.push(pid),async state(){return(await fetch(this.url+'/state')).json();},async post(path,data){return fetch(this.url+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expected_session_id:seed.session_id,...data})});}};
 }
+
+function legacyV2() {
+  return JSON.parse(readFileSync(new URL('fixtures/legacy-v2.tree.json', import.meta.url), 'utf8'));
+}
+
+async function generateTask(s, revision) {
+  const control = body => s.post('/document/control', body);
+  assert.equal((await control({ action: 'offer', expected_revision: revision })).status, 200);
+  const saved = await control({ action: 'save', expected_revision: revision });
+  assert.equal(saved.status, 200);
+  const requested = await saved.json();
+  const job = { expected_revision: revision + 1, job_id: requested.job_id };
+  const claimed = await control({ action: 'claim', ...job });
+  assert.equal(claimed.status, 200);
+  const status = await claimed.json(),
+    frozen = JSON.parse(readFileSync(s.file, 'utf8'));
+  assert.equal(frozen.status, 'complete');
+  assert.equal(frozen.revision, revision + 1);
+  const chapter = renderChapter(status, frozen, 'signup', '<p>统一报名入口的方案说明。</p>');
+  const source = chapter.source;
+  const parts = [
+    chapter,
+    { source, view: 'design', html: '<article id="R1" data-kind="requirement">统一报名入口</article>' },
+    { source, view: 'plan', html: '<article id="W1" data-kind="work" data-requirements="R1" data-criteria="AC1"><span data-field="status">planned</span>提供报名入口</article>' },
+    { source, view: 'acceptance', html: '<article id="AC1" data-kind="criterion" data-requirements="R1"><span data-field="status">unverified</span>可以从统一入口报名</article>' }
+  ];
+  writeFileSync(s.document, composeDocument(status, parts).html, 'utf8');
+  assert.equal((await control({ action: 'ready', ...job })).status, 200);
+  const output = await fetch(s.url + '/document');
+  assert.equal(output.status, 200);
+  return { frozen, chapter, html: await output.text() };
+}
+
+test('AC3 a deferred round submits and renders unresolved questions in all three document views', async t => {
+  const seed = legacyV2(),
+    note = '  还要核对 <发送时间>\n保留原话  ',
+    deferred = { option_ids: [], text: '', deferred: true };
+  seed.nodes.push(
+    node('timing', { question: '哪天开放报名？', input: 'text', options: [], depends_on: ['signup'], round: 2 }),
+    node('delivery', { depends_on: ['signup'], round: 2 })
+  );
+  const s = await service(t, seed),
+    submit = answers => s.post('/submit', { round: 2, expected_revision: seed.revision, answers }),
+    answers = [
+      { id: 'confirmation', answer: deferred },
+      { id: 'timing', answer: { ...deferred, text: note } },
+      { id: 'delivery', answer: { ...deferred, option_ids: ['a'] } }
+    ];
+  const before = readFileSync(s.file);
+  for (const answer of [{ ...deferred, deferred: 'true' }, { ...deferred, deferred: false }]) {
+    assert.equal((await submit([{ id: 'confirmation', answer }, ...answers.slice(1)])).status, 400);
+    assert.deepEqual(readFileSync(s.file), before);
+  }
+  assert.equal((await submit(answers)).status, 200);
+  const round = await (await fetch(s.url + '/wait?round=2')).json();
+  assert.equal(round.status, 'answered');
+  assert.deepEqual(round.answers.map(({ id, answer }) => ({ id, answer })), answers);
+
+  const { frozen, chapter, html } = await generateTask(s, seed.revision + 1);
+  assert.equal(frozen.schema_version, 2);
+  const [confirmedBody, deferredBody] = chapter.html.split('<section class="deferred-answers">');
+  assert.match(confirmedBody, /data-source-node="signup"/);
+  assert.doesNotMatch(confirmedBody, /data-source-node="(?:confirmation|timing|delivery)"/);
+  assert.match(deferredBody, /^<h3>待确认<\/h3>/);
+  assert.match(deferredBody, /暂选<\/p><ul><li>邮件通知<\/li>/);
+  assert.match(deferredBody, /  还要核对 &lt;发送时间&gt;\n保留原话  /);
+  const [, ...views] = html.split(/<section id="(?:design|plan|acceptance)-view"/);
+  assert.equal(views.length, 3);
+  for (const view of views) {
+    const list = view.match(/<section class="deferred-questions">[\s\S]*?<\/section>/)?.[0];
+    assert.match(list, /class="deferred-questions"><h3>待确认<\/h3>/);
+    for (const n of seed.nodes.slice(1)) assert.ok(list.includes(`>${n.question}</a>`), n.question);
+  }
+});
+
+test('AC6 a half-answered v0.2 v2 tree resumes, saves and generates a validated document', async t => {
+  const seed = legacyV2(), s = await service(t, seed);
+  assert.deepEqual(await s.state(), seed);
+  const answer = { option_ids: ['page'], text: '页面要显示活动日期。' };
+  assert.equal((await s.post('/submit', {
+    round: seed.current_round,
+    expected_revision: seed.revision,
+    answers: [{ id: 'confirmation', answer }]
+  })).status, 200);
+  const { frozen, html } = await generateTask(s, seed.revision + 1);
+  assert.deepEqual(frozen.nodes, [seed.nodes[0], { ...seed.nodes[1], answer, status: 'answered' }]);
+  assert.equal(frozen.session_id, seed.session_id);
+  assert.equal(frozen.schema_version, seed.schema_version);
+  assert.match(html, /  统一报名入口\n方便读者找到报名页  /);
+  assert.match(html, /在页面显示成功/);
+  assert.match(html, /页面要显示活动日期。/);
+  assert.doesNotMatch(html, /class="deferred-questions"/);
+});
 
 test('v2 multi-choice preserves several selections and exact notes; invalid/exclusive combinations never write',async t=>{
   const s=await service(t),bytes=readFileSync(s.file),text='  原文\n都不需要不是未回答：<>&" 🌱  ';

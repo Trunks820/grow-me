@@ -102,6 +102,19 @@
         },
         "text": {
           "type": "string"
+        },
+        "deferred": {
+          "type": "boolean",
+          "description": "True submits the question as unresolved. Option IDs and text may both be empty."
+        }
+      }
+    },
+    "confirmedAnswer": {
+      "type": "object",
+      "not": {
+        "required": ["deferred"],
+        "properties": {
+          "deferred": { "const": true }
         }
       }
     },
@@ -274,30 +287,18 @@
           "then": {
             "properties": {
               "answer": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "allOf": [
-                      {
-                        "$ref": "#/$defs/answer"
-                      },
-                      {
-                        "properties": {
-                          "option_ids": {
-                            "maxItems": 0
-                          },
-                          "text": {
-                            "type": "string",
-                            "minLength": 1,
-                            "pattern": "\\S"
-                          }
-                        }
-                      }
-                    ]
+                "properties": {
+                  "option_ids": { "maxItems": 0 }
+                },
+                "if": { "$ref": "#/$defs/confirmedAnswer" },
+                "then": {
+                  "properties": {
+                    "text": {
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    }
                   }
-                ]
+                }
               },
               "options": {
                 "maxItems": 0,
@@ -326,26 +327,15 @@
           "then": {
             "properties": {
               "answer": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "allOf": [
-                      {
-                        "$ref": "#/$defs/answer"
-                      },
-                      {
-                        "properties": {
-                          "option_ids": {
-                            "minItems": 1,
-                            "maxItems": 1
-                          }
-                        }
-                      }
-                    ]
+                "properties": {
+                  "option_ids": { "maxItems": 1 }
+                },
+                "if": { "$ref": "#/$defs/confirmedAnswer" },
+                "then": {
+                  "properties": {
+                    "option_ids": { "minItems": 1 }
                   }
-                ]
+                }
               },
               "options": {
                 "minItems": 1,
@@ -392,25 +382,12 @@
           "then": {
             "properties": {
               "answer": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "allOf": [
-                      {
-                        "$ref": "#/$defs/answer"
-                      },
-                      {
-                        "properties": {
-                          "option_ids": {
-                            "minItems": 1
-                          }
-                        }
-                      }
-                    ]
+                "if": { "$ref": "#/$defs/confirmedAnswer" },
+                "then": {
+                  "properties": {
+                    "option_ids": { "minItems": 1 }
                   }
-                ]
+                }
               },
               "options": {
                 "minItems": 1

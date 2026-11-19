@@ -6,6 +6,7 @@ Use this guide when `project-requirement-writer` is not installed. If it is avai
 
 - Keep user decisions, AI proposals and unresolved questions visibly distinct. Read all selected option labels, including an exclusive “都不需要”, and preserve notes exactly. Rationale explains why a question was asked; recommendation is AI metadata. An unselected recommendation is never a confirmed requirement. Mark source-stale advice as expired rather than restoring it as a decision. Preserve original answers once in the chapter assigned by frozen `source.chapters[].node_ids` (explicit `chapter_id`, or the legacy primary root when absent) and link cross-topic dependencies.
 - Each root from `/document/status.source.chapters` gets the supplied anchor in design-view. A readable chapter title may summarize the question; IDs and source bindings must remain exact.
+- Keep `answer.deferred: true` under 待确认 in all three views. Link to the generated chapter for tentative choices and notes. Leave implementation and acceptance decisions that depend on them open.
 - The overview states the goal, current position, next action and meaningful pending choices. Do not present a generated plan as human approval.
 - Use stable requirement IDs (`R1`…), work IDs (`W1`…) and criterion IDs (`AC1`…). Agree these IDs before writing independent views, so links do not drift.
 

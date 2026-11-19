@@ -36,4 +36,18 @@ for value in [None,'',' \n ',42,[]]:
     assert list(validator.iter_errors(candidate)),repr(value);count+=1
 old['nodes'][0]['chapter_id']=old['nodes'][0]['id']
 assert list(validator.iter_errors(old)),'v1 must not accept chapter_id';count+=1
+
+for input_type in ['text', 'single_choice', 'multi_choice']:
+    candidate = copy.deepcopy(sample)
+    node = candidate['nodes'][0]
+    node.update(input=input_type, status='answered', answer={'option_ids': [], 'text': '', 'deferred': True})
+    if input_type == 'text':
+        node['options'] = []
+    validator.validate(candidate)
+    count += 1
+    for value in [False, 'true', None]:
+        node['answer']['deferred'] = value
+        assert list(validator.iter_errors(candidate)), (input_type, value)
+        count += 1
+
 print(json.dumps({'status':'passed','schema_cases':count,'note':'Runtime/API tests additionally enforce ID relationships, dependency cycles, source binding and exclusive selections.'}))

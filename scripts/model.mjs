@@ -24,9 +24,17 @@ export function assertWritable(tree) {
     409
   );
 }
-export function validateAnswer(node, answer) {
+export function validateAnswer(node, answer, modern = true) {
   requireValue(
-    keys(answer, ['option_ids', 'text']) && selectionValid(node, answer),
+    keys(answer, modern ? ['option_ids', 'text', 'deferred'] : ['option_ids', 'text']),
+    'invalid answer fields'
+  );
+  requireValue(
+    answer.deferred === undefined || typeof answer.deferred === 'boolean',
+    'deferred must be a boolean'
+  );
+  requireValue(
+    selectionValid(node, answer),
     node.input === 'multi_choice'
       ? 'choose listed options; an exclusive option must be selected alone'
       : node.input === 'single_choice'
@@ -133,7 +141,7 @@ export function validateTree(tree) {
     requireValue(['pending', 'answered', 'needs_review'].includes(n.status), 'invalid node status');
     requireValue(n.status !== 'pending' || n.answer === null, 'pending node must have null answer');
     requireValue(n.status !== 'answered' || n.answer !== null, 'answered node needs an answer');
-    if (n.answer !== null) validateAnswer(n, n.answer);
+    if (n.answer !== null) validateAnswer(n, n.answer, modern);
     if (modern && n.recommendation != null) {
       const r = n.recommendation;
       requireValue(
@@ -209,7 +217,7 @@ function ready(tree, node) {
   requireValue(Array.isArray(node.depends_on), 'depends_on must be an array');
   requireValue(
     node.depends_on.every(id => tree.nodes.find(n => n.id === id)?.status === 'answered'),
-    'confirm prerequisites first',
+    'submit prerequisites first',
     409
   );
 }

@@ -1,7 +1,7 @@
 import { createDecisionTree } from './tree.mjs';
 import { chapters, answerText } from './topics.mjs';
 import { publicError, assistantConnection, assistantSilenceSeconds } from './presentation.mjs';
-import { selectionValid } from './answers.mjs';
+import { isDeferred, selectionValid } from './answers.mjs';
 
 const card = document.querySelector('#card'),
   dialog = document.querySelector('#node-dialog'),
@@ -72,6 +72,15 @@ document.querySelector('#tree-bud').innerHTML =
 <path d="M0 5 C-5 3 -6 -1 -5 -4 C-2 -4 0 0 0 5Z" fill="#c9b78d" stroke="#8e7e5e" stroke-width=".7"/>
 <path d="M0 5 C5 3 6 -1 5 -4 C2 -4 0 0 0 5Z" fill="#e4d3ae" stroke="#8e7e5e" stroke-width=".7"/>
 <path d="M-3 4 Q0 7 3 4" fill="none" stroke="#898261" stroke-width=".8"/>`;
+document.querySelector('#tree-canvas defs').insertAdjacentHTML(
+  'beforeend',
+  `<g id="tree-deferred"><circle r="5.7" fill="#e5e8e4" stroke="#566d70" stroke-width="1"/>
+<path d="M-1.5 -2.1v4.2m3 -4.2v4.2" fill="none" stroke="#566d70" stroke-width="1.2" stroke-linecap="round"/></g>`
+);
+function displayAnswer(node, answer = node.answer) {
+  const text = answerText(node, answer);
+  return isDeferred(answer) ? ['待定', text].filter(Boolean).join('\n') : text;
+}
 const ready = n =>
   n.depends_on.every(id => state.nodes.find(n => n.id === id)?.status === 'answered');
 const valid = (n, a) => ready(n) && selectionValid(n, a);
@@ -82,7 +91,7 @@ const isWaiting = () =>
   state?.schema_version === 2 &&
   state.status === 'active' &&
   state.nodes.every(n => n.status === 'answered');
-const allConfirmed = () =>
+const allSubmitted = () =>
   Boolean(state?.nodes.length) &&
   state.nodes.every(n => n.status === 'answered' && n.answer !== null);
 const documentMatches = () =>
@@ -160,7 +169,7 @@ function nextQuestion() {
     document.querySelector('[data-tree-zoom=fit]').click();
   openNode(n.id, target, n.id === advanceId && working.has(n.id) ? 'edit' : undefined);
 }
-function confirmed(id) {
+function handleAnswer(id) {
   lastAnsweredId = id;
   guideSeen = true;
   try {
@@ -260,7 +269,9 @@ function docAction(action) {
 function updateMeta() {
   const meta = document.querySelector('#meta'),
     total = state.nodes.length,
-    done = state.nodes.filter(n => n.status === 'answered').length,
+    submitted = state.nodes.filter(n => n.status === 'answered'),
+    done = submitted.length,
+    deferred = submitted.filter(n => isDeferred(n.answer)).length,
     review = reviews().length,
     complete = state.status === 'complete';
   // Topic first (what this tree is about), then where we are, then a hairline of progress.
@@ -275,7 +286,8 @@ function updateMeta() {
     )
   );
   if (!complete) progress.append(el('span', ' · 总轮数随回答确定', 'meta-note'));
-  progress.append(el('span', ` · 已确认 ${done} / ${total}`));
+  progress.append(el('span', ` · 已确认 ${done - deferred} / ${total}`));
+  if (deferred) progress.append(el('span', ` · 待定 ${deferred}`));
   if (drafts.size) progress.append(el('span', ` · 本轮未提交 ${drafts.size}`, 'meta-draft'));
   if (review) progress.append(el('span', ` · 待复核 ${review}`, 'meta-review'));
   const bar = el('span', undefined, 'meta-bar');
@@ -290,7 +302,13 @@ function updateMeta() {
 function updateTree() {
   const finished =
     documentState.phase === 'offered' && documentState.offered_revision === state.revision;
-  view.update(state, {
+  const nodes = state.nodes.map(n => {
+    const answer = drafts.get(n.id) ?? n.answer;
+    return isDeferred(answer)
+      ? { ...n, answer: { ...answer, option_ids: [], text: displayAnswer(n, answer) } }
+      : n;
+  });
+  view.update({ ...state, nodes }, {
     drafts,
     currentId,
     waiting: isWaiting() && !finished && assistantDisplay === 'connected',
@@ -305,6 +323,18 @@ function updateTree() {
       ])
     )
   });
+  for (const n of nodes) {
+    if (n.status === 'needs_review' || !isDeferred(n.answer)) continue;
+    const marker = nodeTarget(n.id),
+      symbol = marker.querySelector('.tree-symbol');
+    marker.dataset.status = 'deferred';
+    marker.setAttribute(
+      'aria-label',
+      `第 ${n.round} 轮，${n.question}，待定${drafts.has(n.id) ? '，本轮未提交' : ''}`
+    );
+    symbol.setAttribute('href', '#tree-deferred');
+    for (const animation of symbol.getAnimations()) animation.cancel();
+  }
   updateMeta();
   updateNavigation();
 }
@@ -409,7 +439,9 @@ function inputs(n, host) {
   }
   form.append(tools);
   const toolbar = el('div', undefined, 'actions'),
+    defer = button('待定', () => saveAnswer({ ...read(), deferred: true })),
     confirm = el('button', '就这么定', 'primary');
+  defer.disabled = busy || !ready(n);
   confirm.type = 'submit';
   confirm.id = 'confirm-answer';
   toolbar.append(
@@ -418,40 +450,43 @@ function inputs(n, host) {
       n.status === 'needs_review' ? '保存修改 · 下游需复核' : '整轮提交后保存',
       'draft-hint'
     ),
+    defer,
     confirm
   );
   form.append(toolbar);
   const update = () => {
     if (rendering || !form.isConnected) return;
-    working.set(n.id, read());
-    confirm.disabled = busy || !valid(n, read());
+    const answer = read();
+    working.set(n.id, answer);
+    confirm.disabled = busy || !valid(n, answer);
   };
   form.addEventListener('input', update);
   form.addEventListener('change', update);
   confirm.disabled = busy || !valid(n, read());
   if (!ready(n)) {
     form.querySelectorAll('input,textarea').forEach(x => (x.disabled = true));
-    host.append(el('p', '请先确认上游的黄叶，再回来回答这一句。', 'review-note'));
+    host.append(el('p', '请先处理上游的黄叶，再回来作答。', 'review-note'));
   }
   form.addEventListener('submit', event => {
     event.preventDefault();
-    if (confirm.disabled) return;
-    const answer = read();
+    if (!confirm.disabled) saveAnswer(read());
+  });
+  function saveAnswer(answer) {
     if (n.status === 'needs_review')
       act(async () => {
         await post('/decision', { id: n.id, expected_revision: state.revision, answer });
-        confirmed(n.id);
+        handleAnswer(n.id);
         closeNote();
       });
     else {
       drafts.set(n.id, structuredClone(answer));
       working.delete(n.id);
-      confirmed(n.id);
+      handleAnswer(n.id);
       closeNote();
       message('');
       render();
     }
-  });
+  }
   host.append(form);
 }
 function renderSummary(host) {
@@ -459,11 +494,14 @@ function renderSummary(host) {
   openQuestions()
     .filter(n => drafts.has(n.id))
     .forEach(n => {
-      const row = el('li');
+      const row = el('li'),
+        answer = drafts.get(n.id);
       row.append(
         el('div', n.question),
-        el('div', answerText(n, drafts.get(n.id)), 'answer'),
-        button('回看这朵花', () => openNode(n.id, nodeTarget(n.id)))
+        el('div', displayAnswer(n, answer), 'answer'),
+        button(isDeferred(answer) ? '回看待定题' : '回看这朵花', () =>
+          openNode(n.id, nodeTarget(n.id))
+        )
       );
       list.append(row);
     });
@@ -495,23 +533,23 @@ function renderSummary(host) {
   submit.className = 'primary seal-btn';
   submit.setAttribute('aria-label', '提交本轮答案');
   submit.innerHTML =
-    '<span class="seal-mark">盖章</span><span class="seal-text">定了 · 接着长 ↗</span>';
+    '<span class="seal-mark">盖章</span><span class="seal-text">提交 · 接着长 ↗</span>';
   submit.disabled = busy || reviews().length > 0 || openQuestions().some(n => !drafts.has(n.id));
   host.append(submit);
 }
 function renderWaiting() {
-  card.append(el('p', `第 ${state.current_round} 轮 · 已确认`, 'k'));
+  card.append(el('p', `第 ${state.current_round} 轮 · 已提交`, 'k'));
   waitingHeader('正在想下一轮的问题…', '生长中');
-  card.append(elapsedLine(waitingSince), el('p', '可以点已答的花回看或修改。', 'w'));
+  card.append(elapsedLine(waitingSince), el('p', '可以点树上的题目回看或修改。', 'w'));
   if (assistantDisplay === 'connected') {
-    const late = el('p', '还在想，可以先回看已答的花', 'w');
+    const late = el('p', '还在想，可以先回看本轮回答', 'w');
     late.id = 'long-wait';
     late.hidden = waitingSince === null || performance.now() - waitingSince <= 60000;
     card.append(late);
   }
   if (documentState.phase === 'offered' && documentState.offered_revision === state.revision) {
     card.replaceChildren(
-      el('p', '需求已问清', 'k'),
+      el('p', '访谈可保存', 'k'),
       el('h2', '这一棵树，可以结果了。', 'q'),
       el('p', '保存后这次访谈只读，接下来生成方案、开发清单与验收标准。', 'w'),
       button('保存并生成任务文档', () => docAction('save'), true)
@@ -569,7 +607,7 @@ function renderDocument() {
       el('h2', '问过的，都结成了果。', 'q'),
       el(
         'p',
-        `${state.nodes.length} 个问题已确认 · ${chapters(state).length} 颗果子，点击打开对应章节。`,
+        `已提交 ${state.nodes.length} 题 · ${chapters(state).length} 颗果子，点击打开对应章节。`,
         'w'
       )
     );
@@ -668,14 +706,14 @@ function render() {
       );
     } else if (state.status === 'complete') {
       currentId = null;
-      if (allConfirmed()) renderDocument();
+      if (allSubmitted()) renderDocument();
       else
         card.append(
           el('p', '状态待核对', 'k'),
           el('h2', '保存状态与答案不一致。', 'q'),
           el(
             'p',
-            `当前只有 ${state.nodes.filter(n => n.status === 'answered').length} / ${state.nodes.length} 个问题已确认；请回到原对话核对 tree.json。`,
+            `当前只有 ${state.nodes.filter(n => n.status === 'answered').length} / ${state.nodes.length} 题已提交。请回到原对话核对 tree.json。`,
             'w'
           )
         );
@@ -860,7 +898,7 @@ function renderNote() {
       .filter(n => n?.answer)
       .sort((a, b) => b.round - a.round)[0];
   if (previous) {
-    const text = answerText(previous, drafts.get(previous.id) ?? previous.answer),
+    const text = displayAnswer(previous, drafts.get(previous.id) ?? previous.answer),
       aside = el('details', undefined, 'previous-answer'),
       summary = el('summary');
     summary.append(el('small', '上一句'), el('span', text, 'previous-excerpt'));
@@ -876,7 +914,8 @@ function renderNote() {
     body.append(el('p', '上游或本题有改动，这个回答需要再确认。', 'review-note'));
   if (noteMode === 'edit') inputs(n, body);
   else {
-    body.append(el('p', answerText(n, drafts.get(n.id) ?? n.answer) || '尚未回答。', 'answer'));
+    const answer = drafts.get(n.id) ?? n.answer;
+    body.append(el('p', displayAnswer(n, answer) || '尚未回答。', 'answer'));
     body.append(
       el(
         'p',
@@ -884,7 +923,7 @@ function renderNote() {
           ? '本轮草稿 · 尚未提交'
           : n.status === 'needs_review'
             ? '旧回答 · 待复核'
-            : `第 ${n.round} 轮 · 已确认`,
+            : `第 ${n.round} 轮 · ${isDeferred(answer) ? '待定' : '已确认'}`,
         'draft-hint'
       )
     );
@@ -897,10 +936,10 @@ function renderNote() {
     n.status === 'needs_review' &&
     n.answer !== null
   ) {
-    const keep = button('仍然有效', () =>
+    const keep = button(isDeferred(n.answer) ? '仍待定' : '仍然有效', () =>
       act(async () => {
         await post('/decision', { id: n.id, expected_revision: state.revision, answer: n.answer });
-        confirmed(n.id);
+        handleAnswer(n.id);
         closeNote();
       })
     );
@@ -1238,7 +1277,7 @@ function openFruit(fruit) {
     documentMatches() &&
     (documentState.phase === 'ready' ||
       documentState.chapters?.some(c => c.id === fruit.id && c.status === 'ready'));
-  if (!allConfirmed() || !ready) {
+  if (!allSubmitted() || !ready) {
     message('这个章节还在生成，完成后果子会成熟。');
     return;
   }
@@ -1438,7 +1477,7 @@ async function refresh(force = false) {
     state.schema_version === 1
       ? 'v1 历史访谈 · 只读'
       : state.status === 'complete'
-        ? allConfirmed()
+        ? allSubmitted()
           ? '已保存 · 本机文档预览'
           : '保存状态与答案待核对'
         : '已连接本机';

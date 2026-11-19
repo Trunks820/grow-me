@@ -1,0 +1,35 @@
+{
+  "schema_version": 2,
+  "session_id": "legacy-v2-reading-club",
+  "topic": "读书会报名",
+  "revision": 2,
+  "current_round": 2,
+  "status": "active",
+  "nodes": [
+    {
+      "id": "signup",
+      "question": "报名页首先要解决什么？",
+      "rationale": "决定报名页的首要目标。",
+      "input": "text",
+      "options": [],
+      "answer": { "option_ids": [], "text": "  统一报名入口\n方便读者找到报名页  " },
+      "depends_on": [],
+      "status": "answered",
+      "round": 1
+    },
+    {
+      "id": "confirmation",
+      "question": "报名后如何告知结果？",
+      "rationale": "决定报名成功后的反馈方式。",
+      "input": "single_choice",
+      "options": [
+        { "id": "page", "label": "在页面显示成功" },
+        { "id": "mail", "label": "发送确认邮件" }
+      ],
+      "answer": null,
+      "depends_on": ["signup"],
+      "status": "pending",
+      "round": 2
+    }
+  ]
+}

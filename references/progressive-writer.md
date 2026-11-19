@@ -31,6 +31,8 @@ Each part is a UTF-8 JSON file in a workspace generation directory:
 
 The three shared views can be authored independently using the common ID contract. Topic chapters are sequential: write one complete chapter, publish it successfully, then write the next. Use parallel agents only when authorized; parallel assembly support does not itself promise lower model latency or permit batching completed chapters.
 
+Check `answer.deferred` on the frozen tree. Treat selected options and notes on these answers as tentative. Keep the questions under 待确认 and avoid turning them into confirmed requirements, development commitments or acceptance criteria.
+
 Start `check.mjs --heartbeat` before writing and stop that heartbeat at the end. For **each** chapter, write only its explanatory HTML to a file outside the parts directory, then run:
 
 ```text
@@ -38,6 +40,8 @@ node <skill>/scripts/render-chapter.mjs --context <status.json> --tree <frozen-t
 ```
 
 The script validates complete/answered state, session/revision/digest/job and exact chapter membership. It renders question text, **only actually selected** option labels, and exact original free text (escaped HTML with preserved whitespace) straight from the frozen tree. Unselected recommendations never become answers. It adds a separate “方案说明（AI）” section for the prose. Old v2 without chapter_id still uses the existing root projection; explicit membership is honored. Retry with a new job requires regenerating source-bound parts. Keep raw answers out of AI-authored explanatory text; inferred implications must be labeled, not attributed to the user.
+
+Use the generated chapter part as returned. Its 待确认 section preserves tentative choices and notes. The assembler uses the part's `deferred_questions` to link to those chapters from the 待确认 list in each of the three views.
 
 **Mandatory: immediately after each chapter is written, run this command and confirm publication before writing the next chapter. Never accumulate several chapters for a single preview publication.** Keep already published parts in the directory; the new chapter is the only newly published one:
 
