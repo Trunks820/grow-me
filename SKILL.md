@@ -29,6 +29,7 @@ description: 用本机网页逐轮澄清需求，将用户提交回传当前对�
 4. 中间出题不读代码，用 `/context`、必要时 `/state` 和原修订；疑问记入“待核对”。预计最后一轮用户作答时，经 [计时入口](references/runtime.md#集中查代码) 集中核对。耗时工作可启用心跳，做完即停并短查。无新问题时先读 project-requirement-writer（否则 [内置指引](references/writer-guide.md)）、[分章交付](references/progressive-writer.md) 和 `assets/writer-shell.html`，再 offer；不发空轮。
    - 访谈进行中收到 `request_plan` 或查到 `plan_requested: true` 时，丢弃未发布题目，按当前答案准备 offer 并等待用户保存。把没问到的决策和标为待定的问题列入三视图的“待确认”。
 5. 保存后 claim，不再新开代码调查。用 `render-chapter.mjs` 渲染冻结答案原话，AI 只写说明。**每写完一章，立刻运行 `compose-document.mjs --preview --url <local-url>` 发布成功，再写下一章。** 参数和校验见分章交付。
+   - 给相关开发项加 `data-questions`。用 `compose-document.mjs` 定稿，全文校验通过后自动在方案旁写 `task.manifest.json`。交接只取方案与冻结访谈，不查代码、不估改动规模。
 6. 恢复后先运行 `check.mjs`，核对身份、实例和 revision；curl GET 不算轮询。服务不在时按 [恢复规则](references/runtime.md#恢复原会话) 从原文件重启后立即短查。复制提醒只含会话编号、轮次、地址。
 
 开发或交付前读 [验证与计时](references/verification.md)；等待、心跳和暂停以 [runtime](references/runtime.md) 为准。保留真实失败与未测项；CLI 安装成功、受控浏览器通过都不等于另一个助手真跑通过。

@@ -65,6 +65,7 @@ export function validateDocument(
   );
   requireValue(attribute('data-source-digest') === fingerprint(tree), '文档源内容指纹不匹配', 422);
   if (jobId) requireValue(attribute('data-source-job') === jobId, '文档生成任务已过期', 409);
+  if (!partial) requireValue(attribute('data-generating') !== 'true', '需要定稿全文', 422);
   const tags = body.match(/<[a-zA-Z][^>]*>/g) ?? [];
   const ids = tags.flatMap(tag =>
     [...tag.matchAll(/\sid\s*=\s*(["'])(.*?)\1/gi)].map(m => decode(m[2]))
@@ -87,9 +88,13 @@ export function validateDocument(
     for (const match of tag.matchAll(/\shref\s*=\s*(["'])#(.*?)\1/gi))
       requireValue(ids.includes(decodeURIComponent(decode(match[2]))), '文档存在失效章节链接', 422);
   if (!partial)
-    for (const kind of ['requirement', 'criterion', 'work'])
+    for (const [kind, pattern] of Object.entries({
+      requirement: /\sdata-kind\s*=\s*["']requirement["']/,
+      criterion: /\sdata-kind\s*=\s*["']criterion["']/,
+      work: /\sdata-kind\s*=\s*["'](?:work|phase)["']/
+    }))
       requireValue(
-        tags.some(tag => new RegExp('\\sdata-kind\\s*=\\s*["\\\']' + kind + '["\\\']').test(tag)),
+        tags.some(tag => pattern.test(tag)),
         '文档缺少 ' + kind,
         422
       );

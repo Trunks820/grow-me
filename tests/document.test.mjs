@@ -1,6 +1,6 @@
 import{test}from'node:test';import assert from'node:assert/strict';
 import{spawn,execFile}from'node:child_process';import{once}from'node:events';import{promisify}from'node:util';
-import{mkdtempSync,writeFileSync,readFileSync,mkdirSync,rmSync,realpathSync,existsSync}from'node:fs';
+import{mkdtempSync,writeFileSync,readFileSync,mkdirSync,rmSync,realpathSync,existsSync,readdirSync}from'node:fs';
 import{tmpdir}from'node:os';import{join,dirname,basename}from'node:path';import{fileURLToPath}from'node:url';
 import{createServer}from'node:net';import{fingerprint}from'../scripts/document.mjs';import{chapters}from'../assets/topics.mjs';
 const server=fileURLToPath(new URL('../scripts/server.mjs',import.meta.url));
@@ -80,4 +80,95 @@ test('one preview publishing multiple new chapters warns clearly without blockin
  assert.deepEqual(result.data.newly_published_chapters,['a','b']);assert.equal(result.data.warnings.length,1);assert.match(result.stderr,/警告.*一次新发布了 2 章/);assert.match(result.stderr,/不得攒多章一起发布/);assert.ok(result.stderr.includes(result.data.warnings[0]));
  assert.equal(s.timings().length,2);for(const id of ['a','b'])assert.equal((await fetch(s.url+'/document?chapter='+id)).status,200);
  const repeat=await s.preview();assert.deepEqual(repeat.data.warnings,[]);assert.equal(repeat.stderr,'');assert.equal(s.timings().length,2);
+});
+
+function handoffFixture(t) {
+  const root = mkdtempSync(join(tmpdir(), 'grill-handoff-test-'));
+  t.after(() => {
+    const target = realpathSync(root);
+    assert.equal(dirname(target).toLowerCase(), realpathSync(tmpdir()).toLowerCase());
+    assert.ok(basename(target).startsWith('grill-handoff-test-'));
+    rmSync(target, { recursive: true, force: true });
+  });
+  const frozen = { ...tree(), status: 'complete', revision: 7 };
+  frozen.nodes[1].question = '邮件 & 短信用哪种？';
+  frozen.nodes[2].id = '待定 % 时间';
+  frozen.nodes[2].question = '几点开始通知？';
+  for (const node of frozen.nodes.slice(1)) node.answer = { option_ids: [], text: '', deferred: true };
+  const file = join(root, 'plan', 'custom-plan.html');
+  const source = { session_id: frozen.session_id, revision: frozen.revision, digest: fingerprint(frozen), job_id: 'handoff-job' };
+  const chapterList = chapters(frozen).map(({ id, anchor, title, nodes }) => ({ id, anchor, title, node_ids: nodes.map(node => node.id) }));
+  const status = { phase: 'generating', job_id: source.job_id, source: { ...source, chapters: chapterList, document_file: file } };
+  const context = join(root, 'status.json'), state = join(root, 'tree.json'), parts = join(root, 'parts');
+  mkdirSync(parts);
+  writeFileSync(context, JSON.stringify(status));
+  writeFileSync(state, JSON.stringify(frozen));
+  const put = (name, view, html, extra = {}) => writeFileSync(join(parts, name + '.json'), JSON.stringify({ source, view, html, ...extra }));
+  for (const chapter of chapterList) {
+    const questions = frozen.nodes.filter(node => chapter.node_ids.includes(node.id) && node.answer.deferred).map(node => node.question);
+    put(`chapter-${chapter.id}`, 'chapter', '<p>可阅读的章节正文</p>', { chapter_id: chapter.id, deferred_questions: questions });
+  }
+  put('design', 'design', `<p data-kind="requirement" id="R1">报名后发送通知</p>
+    <ul><li data-kind="question" id="Q1">谁维护<strong>通知模板</strong>？</li><li data-kind="question" id="Q2">谁确认交付日期？</li></ul>`);
+  const plan = `<article data-kind="work" id="W2" data-requirements="R1" data-criteria="AC2" data-depends="W1" data-questions="deferred-b Q1">
+      <h3>发送通知</h3><p data-field="goal">报名后发送<strong>一条</strong>通知。</p><span data-field="status">planned</span>
+    </article><article data-kind="phase" id="W1" data-requirements="R1" data-criteria="AC1">
+      <h3>记录报名</h3><p data-field="goal">保存报名回执。</p>
+    </article><p data-kind="work" id="W3">整理操作说明</p>`;
+  put('plan', 'plan', plan);
+  const acceptance = `<article data-kind="criterion" id="AC1" data-requirements="R1"><p>报名成功后收到 <strong>回执</strong>。</p><span data-field="status">unverified</span></article>
+    <article data-kind="criterion" id="AC2" data-requirements="R1"><p>确认 A &amp; B。</p><p>只发送一次。</p><span data-field="status">unverified</span></article>`;
+  put('acceptance', 'acceptance', acceptance);
+  return {
+    file, manifest: join(dirname(file), 'task.manifest.json'), frozen, plan, acceptance, put,
+    assemble(...flags) {
+      const input = flags.includes('--existing') ? [] : ['--parts', parts];
+      return run(process.execPath, [composer, '--context', context, '--tree', state, ...input, ...flags], { timeout: 15000, windowsHide: true });
+    }
+  };
+}
+
+test('AC7 final assembly exports ordered packs, explicit questions and the first root fallback', async t => {
+  const s = handoffFixture(t);
+  await s.assemble('--preview');
+  assert.equal(existsSync(s.manifest), false);
+  const { stdout } = await s.assemble();
+  assert.equal(JSON.parse(stdout).manifest_file, s.manifest);
+  assert.ok(existsSync(s.file));
+  const manifest = JSON.parse(readFileSync(s.manifest, 'utf8'));
+  const empty = { external_effects: [], scope_files: [], tags: [] };
+  assert.deepEqual(manifest, {
+    project: s.frozen.topic,
+    upstream_source: `grow-me session ${s.frozen.session_id} / revision ${s.frozen.revision}`,
+    packs: [
+      { id: 'W2', title: '发送通知', goal: '报名后发送一条通知。', depends_on: ['W1'], acceptance_criteria: ['AC2 · 确认 A & B。 只发送一次。'], open_questions: ['邮件 & 短信用哪种？', '谁维护通知模板？'], ...empty },
+      { id: 'W1', title: '记录报名', goal: '保存报名回执。', depends_on: [], acceptance_criteria: ['AC1 · 报名成功后收到 回执。'], open_questions: ['几点开始通知？', '谁确认交付日期？'], ...empty },
+      { id: 'W3', title: '整理操作说明', goal: '整理操作说明', depends_on: [], acceptance_criteria: [], open_questions: [], ...empty }
+    ]
+  });
+  const finalHtml = readFileSync(s.file);
+  await s.assemble('--existing');
+  assert.deepEqual(readFileSync(s.file), finalHtml);
+  assert.deepEqual(JSON.parse(readFileSync(s.manifest, 'utf8')), manifest);
+});
+
+test('AC7 invalid question references and acceptance status prevent final publication', async t => {
+  const s = handoffFixture(t);
+  for (const [question, error] of [['Q-missing', /missing reference Q-missing/], ['AC2', /wrong reference type AC2/]]) {
+    s.put('plan', 'plan', s.plan.replace('deferred-b Q1', question));
+    await assert.rejects(s.assemble(), { stderr: error });
+  }
+  s.put('plan', 'plan', s.plan);
+  s.put('acceptance', 'acceptance', s.acceptance.replace('unverified', 'invalid'));
+  await assert.rejects(s.assemble(), { stderr: /AC1: missing\/invalid criterion status/ });
+  assert.deepEqual(readdirSync(dirname(s.file)), []);
+
+  s.put('acceptance', 'acceptance', s.acceptance);
+  await s.assemble();
+  const finalHtml = readFileSync(s.file), manifest = readFileSync(s.manifest);
+  s.put('plan', 'plan', s.plan.replace('deferred-b Q1', 'Q-missing'));
+  await assert.rejects(s.assemble(), { stderr: /missing reference Q-missing/ });
+  assert.deepEqual(readFileSync(s.file), finalHtml);
+  assert.deepEqual(readFileSync(s.manifest), manifest);
+  assert.deepEqual(readdirSync(dirname(s.file)).sort(), [basename(s.file), basename(s.manifest)].sort());
 });

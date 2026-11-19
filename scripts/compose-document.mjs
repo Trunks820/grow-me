@@ -1,6 +1,10 @@
 import { isMain } from './entry.mjs';
-import { readFileSync, writeFileSync, readdirSync, renameSync, mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { readFileSync, writeFileSync, readdirSync, renameSync, mkdirSync, rmSync } from 'node:fs';
+import { basename, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { isDeferred } from '../assets/answers.mjs';
+import { chapterAnchor } from '../assets/topics.mjs';
 import { validateDocument } from './document.mjs';
 
 const escape = value =>
@@ -13,7 +17,37 @@ const same = (part, status) =>
   part.source.revision === status.source.revision &&
   part.source.digest === status.source.digest &&
   part.source.job_id === status.job_id;
-export function composeDocument(status, parts, { preview = false } = {}) {
+const frozenQuestions = tree => new Map(
+  (tree?.nodes ?? []).filter(node => isDeferred(node.answer)).map(node => [node.id, node.question])
+);
+const questionId = id => /^[a-z\d_-]+$/i.test(id) ? 'deferred-' + id : 'deferred~' + chapterAnchor(id);
+
+function deferredLists(status, chapterParts, tree) {
+  const frozen = frozenQuestions(tree);
+  const items = status.source.chapters.flatMap(chapter => {
+    const part = chapterParts.get(chapter.id);
+    if (!part) return [];
+    const known = (chapter.node_ids ?? []).filter(id => frozen.has(id));
+    const texts = new Set(known.map(id => frozen.get(id)));
+    return [
+      ...known.map(id => ({ id: questionId(id), text: frozen.get(id), anchor: chapter.anchor })),
+      ...(part.deferred_questions ?? [])
+        .filter(question => !texts.has(question))
+        .map((text, index) => ({ id: `pending-${chapter.anchor}-${index + 1}`, text, anchor: chapter.anchor }))
+    ];
+  });
+  const list = entries => entries.length
+    ? `<section class="deferred-questions"><h3>待确认</h3><ul>${entries.join('')}</ul></section>`
+    : '';
+  return {
+    definitions: list(items.map(({ id, text, anchor }) =>
+      `<li id="${escape(id)}" data-kind="question"><a href="#${escape(anchor)}">${escape(text)}</a></li>`
+    )),
+    links: list(items.map(({ text, anchor }) => `<li><a href="#${escape(anchor)}">${escape(text)}</a></li>`))
+  };
+}
+
+export function composeDocument(status, parts, { preview = false, tree = null } = {}) {
   if (!status.job_id || !['requested', 'generating'].includes(status.phase))
     throw Error('需要当前冻结访谈的生成任务');
   const views = new Map(),
@@ -49,14 +83,7 @@ export function composeDocument(status, parts, { preview = false } = {}) {
     throw Error('最终文档需要三个视图和全部章节');
   const design = views.get('design'),
     pending = '<p class="small">本部分仍在生成；完成的主题章节已可阅读。</p>';
-  const deferred = status.source.chapters.flatMap(c =>
-    (chapterParts.get(c.id)?.deferred_questions ?? []).map(
-      question => `<li><a href="#${c.anchor}">${escape(question)}</a></li>`
-    )
-  );
-  const deferredList = deferred.length
-    ? `<section class="deferred-questions"><h3>待确认</h3><ul>${deferred.join('')}</ul></section>`
-    : '';
+  const deferred = deferredLists(status, chapterParts, tree);
   const chapters = status.source.chapters
     .map(c => {
       const part = chapterParts.get(c.id);
@@ -74,13 +101,13 @@ export function composeDocument(status, parts, { preview = false } = {}) {
     POSITION: preview ? '文档生成中，尚未完成最终校验。' : '全文已组装，验收状态以正文为准。',
     NEXT: preview ? '可从树上的成熟果子打开已完成主题。' : '阅读方案、开发清单与验收标准。',
     CONTEXT: escape('访谈 ' + status.source.session_id + ' / revision ' + status.source.revision),
-    DECISIONS: deferredList + (design?.decisions ?? ''),
+    DECISIONS: deferred.definitions + (design?.decisions ?? ''),
     DESIGN: chapters + (design?.html ?? pending),
     REQUIREMENTS: '',
     CONSTRAINTS: '',
-    PLAN: deferredList + (views.get('plan')?.html ?? pending),
+    PLAN: deferred.links + (views.get('plan')?.html ?? pending),
     HANDOFF: '',
-    ACCEPTANCE: deferredList + (views.get('acceptance')?.html ?? pending)
+    ACCEPTANCE: deferred.links + (views.get('acceptance')?.html ?? pending)
   };
   let html = readFileSync(new URL('../assets/writer-shell.html', import.meta.url), 'utf8').replace(
     /\{\{([A-Z]+)\}\}/g,
@@ -113,47 +140,83 @@ export function composeDocument(status, parts, { preview = false } = {}) {
   return { html, ready_chapters: [...chapterParts.keys()], views: [...views.keys()] };
 }
 
+function validateHandoff(file, tree, jobId) {
+  validateDocument(file, tree, jobId);
+  const questions = [...frozenQuestions(tree)].map(([id, question]) => [questionId(id), question]);
+  const validation = spawnSync(process.platform === 'win32' ? 'python' : 'python3', [
+    '-B', '-X', 'utf8', fileURLToPath(new URL('./validate_task.py', import.meta.url)), file, '--handoff'
+  ], { input: JSON.stringify(questions), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, windowsHide: true });
+  if (validation.error) throw Error('无法运行全文校验：' + validation.error.message);
+  if (![0, 1].includes(validation.status) || !validation.stdout) throw Error('全文校验程序未完成');
+  const report = JSON.parse(validation.stdout);
+  if (validation.status !== 0 || !report.valid) throw Error(report.errors.join('；'));
+  return {
+    project: tree.topic,
+    upstream_source: `grow-me session ${tree.session_id} / revision ${tree.revision}`,
+    packs: report.packs
+  };
+}
+
 async function main() {
   const args = process.argv.slice(2),
     value = name => args[args.indexOf(name) + 1];
   if (args.includes('--help') || !args.includes('--context')) {
     console.log(
-      'node compose-document.mjs --context status.json --tree tree.json --parts <dir> [--preview] [--url http://127.0.0.1:PORT]\nEach JSON part: {source:{session_id,revision,digest,job_id},view:design|plan|acceptance|chapter,html,...}. Chapter parts also carry chapter_id and optional title. Outputs are atomic; --preview publishes readable chapters when --url is given. Final output still needs writer validation then action ready.'
+      'node compose-document.mjs --context status.json --tree tree.json (--parts <dir> [--preview] | --existing) [--url http://127.0.0.1:PORT]\nParts carry source, view, html and, for chapters, chapter_id. Final validation exports task.manifest.json. --existing validates and exports the maintained HTML in place. After final checks, post action ready.'
     );
     return;
   }
   const started = performance.now(),
     status = JSON.parse(readFileSync(value('--context'), 'utf8')),
     tree = JSON.parse(readFileSync(value('--tree'), 'utf8')),
-    preview = args.includes('--preview');
-  let current = null;
-  if (args.includes('--url')) {
+    preview = args.includes('--preview'),
+    existing = args.includes('--existing');
+  if (!status.job_id || !['requested', 'generating'].includes(status.phase))
+    throw Error('需要当前冻结访谈的生成任务');
+  if (existing && (preview || args.includes('--parts'))) throw Error('--existing 单独用于校验已有全文');
+  const checkCurrent = async () => {
     const response = await fetch(value('--url') + '/document/status');
     if (!response.ok) throw Error('无法核对当前生成任务');
-    current = await response.json();
+    const current = await response.json();
     if (
       current.job_id !== status.job_id ||
       current.phase !== 'generating' ||
-      current.source.digest !== status.source.digest
+      current.source.digest !== status.source.digest ||
+      current.source.document_file !== status.source.document_file
     )
       throw Error('生成任务已过期，未写入文件');
-  }
-  const parts = readdirSync(value('--parts'))
+    return current;
+  };
+  const online = args.includes('--url');
+  let current = online && preview ? await checkCurrent() : null;
+  const parts = existing ? [] : readdirSync(value('--parts'))
       .filter(n => n.endsWith('.json'))
       .map(n => JSON.parse(readFileSync(resolve(value('--parts'), n), 'utf8'))),
-    result = composeDocument(status, parts, { preview });
+    result = existing ? { views: [], ready_chapters: [] } : composeDocument(status, parts, { preview, tree });
   const file = status.source.document_file + (preview ? '.preview.html' : ''),
-    temp = file + '.' + process.pid + '.tmp';
+    temp = file + '.' + process.pid + '.tmp',
+    manifestFile = resolve(dirname(file), 'task.manifest.json'),
+    manifestTemp = manifestFile + '.' + process.pid + '.tmp';
+  if (!preview && basename(file).toLowerCase() === 'task.manifest.json')
+    throw Error('方案路径不能与交接清单同名');
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(temp, result.html, 'utf8');
   try {
+    if (!existing) writeFileSync(temp, result.html, 'utf8');
     if (preview) {
       for (const id of result.ready_chapters)
         validateDocument(temp, tree, status.job_id, { partial: true, chapterId: id });
-    } else validateDocument(temp, tree, status.job_id);
-    renameSync(temp, file);
+    } else {
+      const manifest = validateHandoff(existing ? file : temp, tree, status.job_id);
+      writeFileSync(manifestTemp, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+      if (online) current = await checkCurrent();
+    }
+    if (!existing) renameSync(temp, file);
+    if (!preview) renameSync(manifestTemp, manifestFile);
   } catch (error) {
     throw Error('组装校验失败：' + error.message);
+  } finally {
+    if (!existing) rmSync(temp, { force: true });
+    if (!preview) rmSync(manifestTemp, { force: true });
   }
   const publishedBefore = new Set(
       current?.chapters.filter(c => c.status === 'ready').map(c => c.id)
@@ -161,7 +224,7 @@ async function main() {
     newlyPublished = [],
     warnings = [];
   try {
-    if (args.includes('--url'))
+    if (online)
       for (const id of preview ? result.ready_chapters : []) {
         const response = await fetch(value('--url') + '/document/control', {
           method: 'POST',
@@ -189,6 +252,7 @@ async function main() {
     JSON.stringify({
       file,
       preview,
+      ...(!preview && { manifest_file: manifestFile }),
       views: result.views,
       ready_chapters: result.ready_chapters,
       newly_published_chapters: newlyPublished,
