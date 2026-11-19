@@ -1,6 +1,8 @@
 """AI-query silence and recovery using real check.mjs calls, not model timing."""
 import argparse,json,subprocess,re,os,time
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
 from playwright.sync_api import sync_playwright,expect
 from browser_acceptance import Service,seed,node,request,no_overflow,ai_check
 
@@ -9,14 +11,17 @@ PAUSED=re.compile(r'已 \d+ 秒没收到 AI 回应，回聊天窗口发"继续"'
 
 def run(work):
     work.mkdir(parents=True,exist_ok=True)
-    report={'kind':'controlled UI/API; actual 60-second query silence despite live heartbeats, no AI model invocation','checks':{},'errors':[]}
+    report={'kind':'controlled UI/API; heartbeat presence across 60 seconds of query silence, no AI model invocation','checks':{},'errors':[]}
     heartbeats=[]
     thinking=Service(work/'thinking',seed([node('A','已确认的需求',answered=True)]))
     queued=Service(work/'queued',seed([node('A','等待写入文档的需求',answered=True)]))
     def start_heartbeat(service):
-        heartbeat=json.loads(subprocess.check_output(['node',str(BASE/'scripts/check.mjs'),'--url',service.url,'--session',service.state()['session_id'],'--heartbeat'],text=True,encoding='utf-8'))
+        heartbeat=json.loads(subprocess.check_output(['node',str(BASE/'scripts/check.mjs'),'--url',service.url,'--session',service.state()['session_id'],'--heartbeat','--owner-pid',str(os.getpid())],text=True,encoding='utf-8'))
         assert heartbeat['owner_pid']==os.getpid() and heartbeat['lease_ms']==180000
         heartbeats.append(heartbeat);return heartbeat
+    def stop_heartbeat(service,heartbeat):
+        receipt=json.loads(subprocess.check_output(['node',str(BASE/'scripts/check.mjs'),'--url',service.url,'--session',service.state()['session_id'],'--heartbeat-stop',heartbeat['heartbeat_id']],text=True,encoding='utf-8'))
+        assert not receipt['active']
     def control(action,**extra):
         code,result=request(queued.url,'/document/control',{'action':action,'expected_revision':queued.state()['revision'],**extra});assert code==200,(code,result);return result
     try:
@@ -37,25 +42,53 @@ def run(work):
                 no_overflow(page)
             report['checks']['never_queried_shows_connecting_in_thinking_and_queued']=True
             for s,page,title in zip([thinking,queued],pages,['正在想下一轮的问题…','正在生成任务文档…']):
-                start_heartbeat(s);expect(page.get_by_role('heading',name='等待 AI 对话连接',exact=True)).to_be_visible()
-                ai_check(s);expect(page.get_by_role('heading',name=title,exact=True)).to_be_visible()
-            # Heartbeats continue every 10 seconds; neither they nor browser GETs may hide a silent assistant.
-            expect(pages[0].locator('#ai-wait-notice')).to_have_text(PAUSED,timeout=67000)
-            expect(pages[1].locator('#ai-wait-notice')).to_have_text(PAUSED,timeout=5000)
+                start_heartbeat(s);expect(page.get_by_role('heading',name=title,exact=True)).to_be_visible()
+                assert request(s.url,'/progress')[1]['ai']['last_check_at'] is None
+                ai_check(s)
+            services = {'thinking': thinking, 'queued': queued}
+            check_ages = dict.fromkeys(services)
+            deadline = time.monotonic() + 67
+            while True:
+                for label, service in services.items():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        with urlopen(service.url + '/progress', timeout=remaining) as response:
+                            check_ages[label] = json.load(response)['ai']['seconds_since_last_check']
+                    except (TimeoutError, URLError) as error:
+                        if isinstance(error, URLError) and not isinstance(error.reason, TimeoutError):
+                            raise
+                        break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise AssertionError(f'Check ages did not both exceed 60s within 67s: {check_ages}')
+                if all(age is not None and age > 60 for age in check_ages.values()):
+                    break
+                time.sleep(min(1, remaining))
+            for (label, service), page in zip(services.items(), pages):
+                ai = request(service.url, '/progress')[1]['ai']
+                assert ai['heartbeat_active'] and ai['seconds_since_last_check'] > 60 and ai['seconds_since_last_heartbeat'] < 12, (label, ai)
+                expect(page.locator('#ai-wait-notice')).to_have_count(0)
+                expect(page.locator('#copy-reminder')).not_to_have_class('small-action needs-attention')
+            report['checks']['live_heartbeats_prevent_pause_in_thinking_and_queued']=True
+            control('claim',job_id=job);expect(pages[1].locator('#heartbeat-work')).to_contain_text('AI 正在写文档')
+            expect(pages[1].locator('#ai-wait-notice')).to_have_count(0)
+            report['checks']['live_heartbeat_keeps_claimed_writer_online']=True
+            for service,page,heartbeat in zip([thinking,queued],pages,heartbeats):
+                stop_heartbeat(service,heartbeat)
+                expect(page.locator('#ai-wait-notice')).to_have_text(PAUSED,timeout=5000)
             report['silence_seconds']={}
             for label,s,page in zip(['thinking','queued'],[thinking,queued],pages):
                 age=request(s.url,'/progress')[1]['ai']['seconds_since_last_check'];assert age>60;report['silence_seconds'][label]=age
-                ai=request(s.url,'/progress')[1]['ai'];assert ai['heartbeat_active'] and ai['seconds_since_last_heartbeat']<12
+                ai=request(s.url,'/progress')[1]['ai'];assert not ai['heartbeat_active']
                 recovery=request(s.url,'/recovery')[1]['ai'];assert recovery['last_check_at']==ai['last_check_at'] and recovery['seconds_since_last_check']>60
                 visible_age=int(re.search(r'已 (\d+) 秒',page.locator('#ai-wait-notice').inner_text()).group(1));assert abs(visible_age-age)<3
                 expect(page.locator('#copy-reminder')).to_have_class('small-action needs-attention')
                 expect(page.locator('#copy-reminder')).to_have_attribute('aria-describedby','ai-wait-notice')
                 text=page.locator('#card').inner_text();assert '生长中' not in text and '还在想' not in text
                 no_overflow(page);page.screenshot(path=str(work/(label+'-paused.png')),full_page=True)
-            report['checks']['live_heartbeats_cannot_hide_60s_check_silence_in_thinking_and_queued']=True
-            control('claim',job_id=job);expect(pages[1].locator('#ai-wait-notice')).to_have_text(PAUSED)
-            expect(pages[1].locator('#heartbeat-work')).to_contain_text('AI 正在写文档')
-            report['checks']['claimed_writing_still_requires_short_checks']=True
+            report['checks']['heartbeat_stop_reveals_existing_query_silence']=True
             pages[0].evaluate('navigator.clipboard.writeText=async text=>{window.copiedReminder=text}')
             pages[0].get_by_role('button',name='复制提醒',exact=True).click()
             copied=pages[0].evaluate('window.copiedReminder');identity=json.loads(copied.split('\n')[-1])
@@ -77,7 +110,7 @@ def run(work):
                 expect(page.locator('#copy-reminder')).to_have_class('small-action')
                 assert page.locator('#wait-elapsed').get_attribute('data-since')==since[index]
                 assert s.file.read_bytes()==originals[index]
-            report['checks']['only_resumed_check_clears_warning_without_resetting_wait_or_answers']=True
+            report['checks']['resumed_check_clears_warning_without_resetting_wait_or_answers']=True
             for s in [thinking,queued]:
                 events=[json.loads(line)['event'] for line in Path(str(s.file)+'.runtime-timings.jsonl').read_text(encoding='utf-8').splitlines()]
                 assert 'pause_shown' in events and 'pause_cleared' in events and 'ai_resumed' in events
@@ -103,7 +136,7 @@ def run(work):
             start_heartbeat(thinking);meta=request(thinking.url,'/recovery')[1]
             code,_=request(thinking.url,'/ai/work',{'expected_revision':thinking.state()['revision'],'expected_instance_id':meta['instance_id'],'action':'start','operation_id':'ui-code','final_round':True});assert code==200
             expect(pages[0].locator('#heartbeat-work')).to_contain_text('AI 正在查代码')
-            report['checks']['heartbeat_is_only_a_work_label']=True
+            report['checks']['heartbeat_shows_code_read_label']=True
             browser.close()
         assert not report['errors'],report['errors'];report['status']='passed'
     except Exception as error:

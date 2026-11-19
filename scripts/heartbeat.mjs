@@ -1,19 +1,68 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { runtimePost } from './runtime-client.mjs';
+import { promisify } from 'node:util';
+import { CheckError, runtimePost } from './runtime-client.mjs';
 import { HEARTBEAT_INTERVAL_MS, HEARTBEAT_LEASE_MS } from './progress.mjs';
 import { isMain } from './entry.mjs';
 
 // A detached helper must not conceal an abandoned host forever.
 export { HEARTBEAT_LEASE_MS } from './progress.mjs';
+const run = promisify(execFile);
+const AI_TOOL_PROCESSES = new Set([
+  'claude', 'claude-code', 'codex', 'codex-cli', 'cursor', 'cursor-agent', 'antigravity', 'agy'
+]);
+
+async function readProcessTable() {
+  const options = { encoding: 'utf8', timeout: 5000, windowsHide: true };
+  if (process.platform === 'win32') {
+    const { stdout } = await run('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      'Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress'
+    ], options);
+    return [JSON.parse(stdout)].flat().map(row => ({
+      pid: row.ProcessId,
+      ppid: row.ParentProcessId,
+      name: row.Name
+    }));
+  }
+  const { stdout } = await run('ps', ['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'comm='], options);
+  return Array.from(stdout.matchAll(/^[ \t]*(\d+)[ \t]+(\d+)[ \t]+(.+)$/gm), ([, pid, ppid, name]) => ({
+    pid: Number(pid),
+    ppid: Number(ppid),
+    name: name.trim()
+  }));
+}
+
+export function findAiOwnerPid(processes, pid = process.pid) {
+  const byPid = new Map(processes.map(row => [row.pid, row]));
+  const seen = new Set([pid]);
+  let parent = byPid.get(byPid.get(pid)?.ppid);
+  while (parent && !seen.has(parent.pid)) {
+    const name = parent.name.split(/[\\/]/).at(-1).toLowerCase().replace(/\.exe$/, '');
+    if (AI_TOOL_PROCESSES.has(name)) return parent.pid;
+    seen.add(parent.pid);
+    parent = byPid.get(parent.ppid);
+  }
+  return null;
+}
+
 export async function stopHeartbeat(options, id, reason = 'requested') {
   return runtimePost(options, '/ai/heartbeat', { heartbeat_id: id, action: 'stop', reason });
 }
 export async function startHeartbeat(
   options,
-  { ownerPid = options.ownerPid ?? process.ppid } = {}
+  { ownerPid = options.ownerPid, loadProcessTable = readProcessTable } = {}
 ) {
+  if (ownerPid === undefined) {
+    try {
+      ownerPid = findAiOwnerPid(await loadProcessTable());
+    } catch {
+      throw new CheckError('owner', '无法读取父进程链；请显式传 --owner-pid <AI 工具 PID>。');
+    }
+    if (ownerPid === null)
+      throw new CheckError('owner', '未找到已知 AI 工具进程；请显式传 --owner-pid <AI 工具 PID>。');
+  }
   if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0)
     throw Error('owner-pid must be a positive integer');
   const id = randomUUID(),
@@ -32,9 +81,10 @@ export async function startHeartbeat(
     '--instance',
     first.instance_id,
     '--id',
-    id
+    id,
+    '--owner-pid',
+    String(ownerPid)
   ];
-  if (ownerPid) args.push('--owner-pid', String(ownerPid));
   const child = spawn(process.execPath, args, {
     detached: true,
     windowsHide: true,

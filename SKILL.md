@@ -20,11 +20,13 @@ description: 用本机网页逐轮澄清需求，将用户提交回传当前对�
 
 ## 默认做法
 
-1. 首次使用读 [数据与 HTTP 合约](references/contract.md)，按真实需求创建首轮，通常 3–5 题，必要时增减；每道新题标 `chapter_id`（所属 root 节点，根题填自身 ID）。新访谈生成一次 UUID，恢复时保留。运行数据和输出放用户工作目录，不放技能包里。
+1. 开访谈前先摸一遍项目现状。读 [数据与 HTTP 合约](references/contract.md)，按真实需求创建首轮（通常 3–5 题）；新题标 `chapter_id`（所属根节点 ID）。新访谈生成一次 UUID，恢复时保留。运行数据和输出放用户工作目录。
 2. 读 [启动、短查询与恢复](references/runtime.md)，用独立进程启动服务并保留启动回执与原文件路径。按系统使用 [Windows 命令](references/commands-windows.md) 或 [macOS/Linux 命令](references/commands-posix.md)，打开打印的 URL。
-3. 每约 10 秒运行 `check.mjs`，游标自动保存；**用户未点最终保存前不得结束本轮回复，每次短查询后必须继续下一次。** 出题、查代码、写文档前启动 `check.mjs --heartbeat`，结束后停掉；**心跳期间仍须每约 10 秒短查询，否则页面会提示暂停。**出题期间不读项目代码，只用用户回答和已有上下文；疑问记入“待核对”。用 `/context`、必要时 `/state` 和原修订出题，每题标 `chapter_id`。
-4. 在预计最后一轮用户作答、等待提交时，用 [runtime 的计时入口](references/runtime.md#集中查代码) 在心跳保护下集中查代码、处理“待核对”、准备章节结构。无新问题时先读已安装的 project-requirement-writer（否则 [内置指引](references/writer-guide.md)）、[分章交付](references/progressive-writer.md) 和 `assets/writer-shell.html` 结构，再 offer；不发空轮。规则／模板可预读，最终内容只认保存后的冻结答案。
-5. 等保存仍短查询；保存后 claim，不再新开代码调查。用 `render-chapter.mjs` 从冻结树渲染原话，AI 只写说明文字。**每写完一章，立刻运行 `compose-document.mjs --preview --url <local-url>` 发布成功，再写下一章；不得攒章。** 参数、计时和最终校验见分章交付。
-6. 恢复后第一步先运行一次 `check.mjs`，核对身份、实例和 revision，再做别的事；curl GET 不算轮询。服务不在时按 [恢复规则](references/runtime.md#恢复原会话) 从原文件重启后立即短查。复制提醒只含会话编号、轮次、地址，不含答案；它不能自动唤醒已结束的对话。
+3. 发布一轮或 offer 后，按宿主能力等待，游标自动保存。预计末轮先趁用户作答做第 4 步的代码核对，再取回执：
+   - **A. 后台命令结束能唤回 AI**（如 Claude Code）：用宿主后台启动 `check.mjs --wait`，然后结束本条回复；按事件回执继续。
+   - **B. 做不到**：本条回复内每约 10 秒运行一次 `check.mjs`，直到收到用户事件。
+4. 中间出题不读代码，用 `/context`、必要时 `/state` 和原修订；疑问记入“待核对”。预计最后一轮用户作答时，经 [计时入口](references/runtime.md#集中查代码) 集中核对。耗时工作可启用心跳，做完即停并短查。无新问题时先读 project-requirement-writer（否则 [内置指引](references/writer-guide.md)）、[分章交付](references/progressive-writer.md) 和 `assets/writer-shell.html`，再 offer；不发空轮。
+5. 保存后 claim，不再新开代码调查。用 `render-chapter.mjs` 渲染冻结答案原话，AI 只写说明。**每写完一章，立刻运行 `compose-document.mjs --preview --url <local-url>` 发布成功，再写下一章。** 参数和校验见分章交付。
+6. 恢复后先运行 `check.mjs`，核对身份、实例和 revision；curl GET 不算轮询。服务不在时按 [恢复规则](references/runtime.md#恢复原会话) 从原文件重启后立即短查。复制提醒只含会话编号、轮次、地址。
 
-开发或交付前读 [验证与计时](references/verification.md)。保留真实失败与未测项；CLI 安装成功、受控浏览器通过都不等于另一个助手真跑通过。
+开发或交付前读 [验证与计时](references/verification.md)；等待、心跳和暂停以 [runtime](references/runtime.md) 为准。保留真实失败与未测项；CLI 安装成功、受控浏览器通过都不等于另一个助手真跑通过。

@@ -1,10 +1,46 @@
 import { isMain } from './entry.mjs';
 import { readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { startService } from './start.mjs';
 import { CheckError, localUrl } from './runtime-client.mjs';
 import { startHeartbeat, stopHeartbeat } from './heartbeat.mjs';
+import { HEARTBEAT_INTERVAL_MS } from './progress.mjs';
 export { localUrl } from './runtime-client.mjs';
+
+const REQUEST_TIMEOUT_MS = 3000;
+const jsonPost = body => ({
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(body)
+});
+
+async function requestJson(url, path, { instanceId, waiting, ...options }) {
+  const unavailable = () =>
+    new CheckError(
+      waiting && options.signal.aborted ? 'timeout' : 'offline',
+      '本机服务不可达；保留原文件，按原路径恢复服务。'
+    );
+  let response;
+  try {
+    response = await fetch(url + path, options);
+  } catch {
+    throw unavailable();
+  }
+  const instance = response.headers.get('x-grow-me-instance');
+  if (instanceId && instance !== instanceId)
+    throw new CheckError('identity', '等待期间服务实例已变；请先短查核对。');
+  if (response.status === 409)
+    throw new CheckError('changed', '查询期间状态已变，请重新短查询。');
+  if (!response.ok || !response.headers.get('content-type')?.includes('application/json'))
+    throw new CheckError('protocol', '服务响应异常；先核对地址，未继续写入。');
+  try {
+    return { data: await response.json(), instance };
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw unavailable();
+    throw new CheckError('protocol', '服务响应异常；未继续写入。');
+  }
+}
 
 export async function checkOnce({
   url,
@@ -12,8 +48,10 @@ export async function checkOnce({
   afterRevision,
   afterSequence,
   afterInstance,
-  timeoutMs = 3000,
-  ownerPid = process.ppid
+  timeoutMs = REQUEST_TIMEOUT_MS,
+  ownerPid,
+  instanceId,
+  waiting = false
 }) {
   url = localUrl(url);
   if (!sessionId)
@@ -21,22 +59,9 @@ export async function checkOnce({
   const signal = AbortSignal.timeout(timeoutMs),
     instances = [];
   async function get(path, options = {}) {
-    let response;
-    try {
-      response = await fetch(url + path, { ...options, signal });
-    } catch {
-      throw new CheckError('offline', '本机服务不可达；保留原文件，按原路径恢复服务。');
-    }
-    if (response.status === 409)
-      throw new CheckError('changed', '查询期间状态已变，请重新短查询。');
-    if (!response.ok || !response.headers.get('content-type')?.includes('application/json'))
-      throw new CheckError('protocol', '服务响应异常；先核对地址，未继续写入。');
-    instances.push(response.headers.get('x-grow-me-instance'));
-    try {
-      return await response.json();
-    } catch {
-      throw new CheckError('protocol', '服务响应异常；未继续写入。');
-    }
+    const result = await requestJson(url, path, { ...options, signal, instanceId, waiting });
+    instances.push(result.instance);
+    return result.data;
   }
   // Identity must be checked against /state before any recovery metadata is trusted.
   const state = await get('/state');
@@ -76,10 +101,9 @@ export async function checkOnce({
   const observed = Date.now(),
     submission =
       progress.last_submission?.revision === state.revision ? progress.last_submission : null;
-  const activity = await get('/ai/check', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
+  const activity = await get(
+    '/ai/check',
+    jsonPost({
       expected_session_id: sessionId,
       expected_revision: state.revision,
       expected_instance_id: recovery.instance_id,
@@ -87,7 +111,7 @@ export async function checkOnce({
       after_revision: afterRevision,
       owner_pid: ownerPid
     })
-  });
+  );
   if (
     activity.session_id !== sessionId ||
     activity.revision !== state.revision ||
@@ -160,15 +184,61 @@ export async function checkOnce({
   };
 }
 
+export async function waitForUser({ timeoutMs = REQUEST_TIMEOUT_MS, ...options }) {
+  const url = localUrl(options.url);
+  let receipt,
+    instanceId,
+    instanceChanged = false;
+  for (;;) {
+    try {
+      if (!receipt) {
+        receipt = await checkOnce({ ...options, url, timeoutMs, instanceId, waiting: true });
+        instanceId ??= receipt.instance_id;
+        instanceChanged ||= receipt.instance_changed;
+        if (receipt.changed) return { ...receipt, instance_changed: instanceChanged };
+      }
+      const { data } = await requestJson(url, '/ai/wait', {
+        ...jsonPost({
+          expected_session_id: receipt.session_id,
+          expected_revision: receipt.revision,
+          expected_instance_id: instanceId,
+          after_sequence: options.afterSequence ?? receipt.sequence,
+          after_revision: options.afterRevision,
+          owner_pid: options.ownerPid
+        }),
+        signal: AbortSignal.timeout(HEARTBEAT_INTERVAL_MS + timeoutMs),
+        instanceId,
+        waiting: true
+      });
+      if (data?.status === 'pending') continue;
+      if (data?.status === 'event') {
+        receipt = null;
+        continue;
+      }
+      if (data?.status === 'session_finished')
+        throw new CheckError('session_finished', '访谈已结束。');
+      if (data?.status === 'service_closed')
+        throw new CheckError('service_closed', '本机服务已关闭。');
+      throw new CheckError('protocol', '等待回执异常；请先短查核对。');
+    } catch (error) {
+      if (error.kind === 'offline') throw new CheckError('service_closed', error.message);
+      if (error.kind === 'changed') receipt = null;
+      else if (error.kind !== 'timeout') throw error;
+      await sleep(100);
+    }
+  }
+}
+
 if (isMain(import.meta.url)) {
   const args = process.argv.slice(2),
+    waiting = args.includes('--wait'),
     arg = (name, fallback) => {
       const i = args.indexOf(name);
       return i < 0 ? fallback : args[i + 1];
     };
   if (args.includes('--help'))
     console.log(
-      'node scripts/check.mjs --url <origin> --session <id> [--heartbeat | --heartbeat-stop <id>] [--owner-pid PID] [--after-revision R --after-sequence S --after-instance ID] [--timeout-ms 3000]\nOne short check with a persistent local cursor; no answers are printed. Heartbeat is a detached 10-second metadata-only pulse (3-minute lease, renewed by short checks from the same owner PID). For an offline service: add --restart --state <original-tree.json> --document <original-task.html>.'
+      'node scripts/check.mjs --url <origin> --session <id> [--wait | --heartbeat | --heartbeat-stop <id>] [--owner-pid PID] [--after-revision R --after-sequence S --after-instance ID] [--timeout-ms 3000]\n--wait reports activity and waits for a user event, reusing the short-check cursor and JSON format. Idle deadlines renew the wait without output. --heartbeat detects the AI tool ancestor unless --owner-pid is supplied. Checks and waits with a matching --owner-pid renew the three-minute heartbeat lease. For an offline service: add --restart --state <original-tree.json> --document <original-task.html> to a short check.'
     );
   else
     try {
@@ -185,19 +255,20 @@ if (isMain(import.meta.url)) {
         afterRevision: number('--after-revision'),
         afterSequence: number('--after-sequence'),
         afterInstance: arg('--after-instance'),
-        timeoutMs: number('--timeout-ms') ?? 3000,
-        ownerPid: number('--owner-pid') ?? process.ppid
+        timeoutMs: number('--timeout-ms') ?? REQUEST_TIMEOUT_MS,
+        ownerPid: number('--owner-pid')
       };
       if (options.timeoutMs < 10 || options.timeoutMs > 3000)
         throw Error('timeout-ms must be 10..3000');
       try {
-        if (args.includes('--heartbeat'))
+        if (waiting) console.log(JSON.stringify(await waitForUser(options)));
+        else if (args.includes('--heartbeat'))
           console.log(JSON.stringify(await startHeartbeat(options)));
         else if (args.includes('--heartbeat-stop'))
           console.log(JSON.stringify(await stopHeartbeat(options, arg('--heartbeat-stop'))));
         else console.log(JSON.stringify(await checkOnce(options)));
       } catch (error) {
-        if (error.kind !== 'offline' || !args.includes('--restart')) throw error;
+        if (waiting || error.kind !== 'offline' || !args.includes('--restart')) throw error;
         if (!arg('--state') || !arg('--document'))
           throw new CheckError(
             'recovery',
@@ -230,7 +301,10 @@ if (isMain(import.meta.url)) {
     } catch (error) {
       console.log(
         JSON.stringify({
-          status: 'attention',
+          status:
+            waiting && ['service_closed', 'session_finished', 'identity'].includes(error.kind)
+              ? error.kind
+              : 'attention',
           kind: error.kind ?? 'recovery',
           error: error.message
         })

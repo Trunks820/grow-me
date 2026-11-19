@@ -14,7 +14,8 @@ import {
   roundResult
 } from './model.mjs';
 import { DocumentBridge } from './document.mjs';
-import { InterviewProgress, SHORT_QUERY_TIMEOUT_MS } from './progress.mjs';
+import { InterviewProgress, HEARTBEAT_INTERVAL_MS } from './progress.mjs';
+import { assistantConnection, assistantSilenceSeconds } from '../assets/presentation.mjs';
 import { interviewContext } from './context.mjs';
 import { recommendationView } from './recommendations.mjs';
 import { RuntimeLog } from './runtime-log.mjs';
@@ -47,6 +48,7 @@ const documentFile = resolve(
   arg('--document', resolve(dirname(stateFile), 'outputs', 'task.html'))
 );
 const waiters = new Set();
+const aiWaiters = new Set();
 const instanceId = randomUUID();
 const appVersion = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8')
@@ -59,7 +61,12 @@ const runtimeLog = new RuntimeLog(
 );
 const progress = new InterviewProgress(() => tree, {
   log: runtimeLog,
-  getPhase: () => documents?.phase
+  getPhase: () => documents?.phase,
+  onUserEvent: () => {
+    for (const waiter of aiWaiters)
+      if (progress.eventsAfter(waiter.afterSequence, waiter.afterRevision).length)
+        waiter.done('event');
+  }
 });
 const heartbeatSweep = setInterval(() => progress.sweep(), 1000);
 heartbeatSweep.unref();
@@ -86,6 +93,31 @@ function json(res, status, value) {
   });
   res.end(JSON.stringify(value));
 }
+function sessionFinished() {
+  return tree.schema_version === 1 || ['ready', 'closed'].includes(documents.phase);
+}
+function waitForAiEvent(res, { afterSequence, afterRevision, ownerPid }) {
+  const send = status => json(res, 200, { status });
+  if (closing) return send('service_closed');
+  if (sessionFinished()) return send('session_finished');
+  progress.reportCheck(ownerPid);
+  if (progress.eventsAfter(afterSequence, afterRevision).length) return send('event');
+  const cleanup = () => {
+    clearTimeout(timer);
+    aiWaiters.delete(waiter);
+  };
+  const waiter = {
+    afterSequence,
+    afterRevision,
+    done(status) {
+      cleanup();
+      send(status);
+    }
+  };
+  const timer = setTimeout(() => waiter.done('pending'), Math.min(waitMs, HEARTBEAT_INTERVAL_MS));
+  aiWaiters.add(waiter);
+  res.once('close', cleanup);
+}
 async function body(req) {
   if (!(req.headers['content-type'] ?? '').startsWith('application/json'))
     throw new InputError('use application/json', 415);
@@ -110,6 +142,7 @@ function stop() {
   documents?.closeWaiters();
   for (const waiter of [...waiters])
     waiter.done({ status: 'closed', round: waiter.round, revision: tree.revision });
+  for (const waiter of aiWaiters) waiter.done('service_closed');
   server.close();
   server.closeIdleConnections();
   setTimeout(() => server.closeAllConnections(), 1000).unref();
@@ -266,7 +299,7 @@ const server = http.createServer(async (req, res) => {
           'session changed; read /state and verify identity before writing',
           409
         );
-      if (url.pathname === '/ai/check') {
+      if (['/ai/check', '/ai/wait'].includes(url.pathname)) {
         if (
           data.expected_session_id !== tree.session_id ||
           data.expected_revision !== tree.revision ||
@@ -281,15 +314,13 @@ const server = http.createServer(async (req, res) => {
           (!Number.isSafeInteger(data.owner_pid) || data.owner_pid <= 0)
         )
           throw new InputError('invalid owner pid', 400);
-        return json(
-          res,
-          200,
-          progress.checkIn({
-            afterSequence: data.after_sequence ?? 0,
-            afterRevision: data.after_revision,
-            ownerPid: data.owner_pid
-          })
-        );
+        const cursor = {
+          afterSequence: data.after_sequence ?? 0,
+          afterRevision: data.after_revision,
+          ownerPid: data.owner_pid
+        };
+        if (url.pathname === '/ai/wait') return waitForAiEvent(res, cursor);
+        return json(res, 200, progress.checkIn(cursor));
       }
       if (['/ai/heartbeat', '/ai/telemetry', '/ai/work'].includes(url.pathname)) {
         if (
@@ -319,8 +350,7 @@ const server = http.createServer(async (req, res) => {
             !['requested', 'owner_exited', 'terminated'].includes(data.reason)
           )
             throw new InputError('invalid stop reason', 400);
-          const ended =
-            closing || ['ready', 'closed'].includes(documents.phase) || tree.schema_version === 1;
+          const ended = closing || sessionFinished();
           if (ended) progress.endHeartbeat(data.heartbeat_id, 'session_finished');
           const active =
             !ended &&
@@ -343,22 +373,20 @@ const server = http.createServer(async (req, res) => {
             data.page_id.length > 80
           )
             throw new InputError('invalid UI timing', 400);
-          const age = progress.status().ai.seconds_since_last_check,
+          const { ai, stage } = progress.status(),
             eligible =
-              progress.status().stage === 'thinking' ||
-              ['requested', 'generating'].includes(documents.phase);
+              stage === 'thinking' || ['requested', 'generating'].includes(documents.phase);
           if (
             data.event === 'pause_shown' &&
             (!eligible ||
-              age === null ||
-              age * 1000 <= SHORT_QUERY_TIMEOUT_MS ||
-              data.last_check_at !== progress.lastCheckAt)
+              assistantConnection(ai, Infinity) !== 'paused' ||
+              data.last_check_at !== ai.last_check_at)
           )
             return json(res, 200, { recorded: false });
           runtimeLog.append(data.event, {
             revision: tree.revision,
             page_id: data.page_id,
-            seconds_without_ai: age
+            seconds_without_ai: assistantSilenceSeconds(ai)
           });
           return json(res, 200, { recorded: true });
         }
@@ -400,7 +428,10 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname === '/document/control') {
         const result = documents.control(data);
         if (['save', 'retry'].includes(data.action)) progress.userEvent(data.action);
-        if (['ready', 'close'].includes(data.action)) progress.close();
+        if (sessionFinished()) {
+          progress.close();
+          for (const waiter of aiWaiters) waiter.done('session_finished');
+        }
         return json(res, 200, result);
       }
       if (url.pathname === '/submit') save(submitRound(tree, data), 'submit');
@@ -409,6 +440,7 @@ const server = http.createServer(async (req, res) => {
       else if (url.pathname === '/round') save(publishRound(tree, data));
       else if (url.pathname === '/finish') {
         save(finish(tree, data));
+        for (const waiter of aiWaiters) waiter.done('session_finished');
         json(res, 200, { status: 'complete', revision: tree.revision });
         setImmediate(stop);
         return;

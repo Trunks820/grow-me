@@ -17,8 +17,16 @@ test('AI check age is memory-only, distinguishes never connected, and honors thr
  assert.equal(AI_CHECK_TIMEOUT_MS,30000);now+=120000;assert.deepEqual(progress.status().ai,{last_check_at:null,last_heartbeat_at:null,last_activity_at:null,source:null,seconds_since_last_check:null,seconds_since_last_heartbeat:null,heartbeat_active:false,heartbeat_activity:null,timeout_ms:30000,short_query_timeout_ms:60000});assert.equal(assistantConnection(progress.status().ai,120000),'connecting');
  const checked=progress.checkIn().ai.last_check_at;assert.equal(SHORT_QUERY_TIMEOUT_MS,60000);now+=SHORT_QUERY_TIMEOUT_MS;assert.equal(progress.status().ai.last_check_at,checked);assert.equal(progress.status().ai.seconds_since_last_check,60);assert.equal(assistantConnection(progress.status().ai,120000),'connected');
  now++;assert.equal(assistantConnection(progress.status().ai,120000),'paused');assert.equal(assistantConnection(progress.status().ai,0),'connected','a freshly opened page gets a grace period');
+ progress.heartbeat('alive','pulse',{ownerPid:7});assert.equal(assistantConnection(progress.status().ai,120000),'connected');
+ now+=AI_CHECK_TIMEOUT_MS+1;assert.equal(progress.status().ai.heartbeat_active,false);assert.equal(assistantConnection(progress.status().ai,120000),'paused');
  progress.checkIn();assert.equal(assistantConnection(progress.status().ai,120000),'connected');assert.equal(JSON.stringify(tree),before);
  assert.equal(assistantConnection(new InterviewProgress(()=>tree).status().ai,120000),'connecting','restart loses liveness, not saved answers');
+});
+test('a heartbeat connects before the first check and can age into a pause after its owner exits',context=>{
+ let now=100000;context.mock.method(Date,'now',()=>now);const progress=new InterviewProgress(seed);
+ progress.heartbeat('only-heartbeat','pulse',{ownerPid:7});assert.equal(assistantConnection(progress.status().ai,90000),'connected');
+ now+=1000;progress.heartbeat('only-heartbeat','stop',{reason:'owner_exited'});
+ now+=SHORT_QUERY_TIMEOUT_MS;assert.equal(assistantConnection(progress.status().ai,90000),'paused');
 });
 test('compact context retains full recent text, all dependency/status ids and flags abridgement',()=>{
  const tree=seed();tree.nodes[0].answer.text='旧'.repeat(1000);const bytes=JSON.stringify(tree),context=interviewContext(tree);assert.equal(context.source.revision,0);assert.deepEqual(context.decision_index.at(-1).depends_on,['a']);assert.equal(context.recent_answers[0].answer.text,tree.nodes[2].answer.text);assert.equal(context.earlier_decisions[0].abridged,true);assert.equal(JSON.stringify(tree),bytes);assert.ok(JSON.stringify(context).length<bytes.length);

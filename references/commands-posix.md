@@ -12,7 +12,11 @@ python3 "<skill>/scripts/validate_task.py" "<workspace>/task.html"
 python3 "<skill>/scripts/read_task.py" "<workspace>/task.html"
 ```
 
-请求必须带已核对的 expected_session_id 与候选读取时 expected_revision。查询结束后用宿主短等待，约 10 秒再查；不要用一个永不结束的 shell 循环冒充短命令。
+请求带已核对的 `expected_session_id` 和候选读取时的 `expected_revision`。
+
+**A. 宿主后台命令结束能唤回 AI**：发布一轮或 offer 后，用宿主后台运行 `node "<skill>/scripts/check.mjs" --url "http://127.0.0.1:<port>" --session "<UUID>" --wait`，然后结束本条回复。空闲到期自动续等，收到用户事件才正常返回。
+
+**B. 做不到**：在本条回复内，每约 10 秒重复上面的普通 `check.mjs`，直到收到用户事件。
 
 服务退出后：
 
@@ -29,6 +33,6 @@ node "<skill>/scripts/check.mjs" --url "http://127.0.0.1:<port>" --session "<UUI
 node "<skill>/scripts/check.mjs" --url "http://127.0.0.1:<port>" --session "<UUID>" --heartbeat-stop "<回执heartbeat_id>"
 ```
 
-短查询自动管理游标；不再手写 --after-*。恢复后第一步先 check.mjs；curl GET 仅用于读取内容，不是活跃查询。查代码只在最后一轮等待用户提交的窗口，经 runtime.md 的 work.mjs 入口记录每次起止。
+短查和等待共用游标；恢复后先短查，curl GET 只读取。心跳自动寻找 AI 工具进程，找不到就传 `--owner-pid <AI 工具 PID>`；需要续租时，短查或等待传回执中的 PID。
 
-心跳期间仍每约 10 秒运行普通 check.mjs。默认 owner 为调用方父进程 PID；若启动时显式传 --owner-pid，后续短查询也传相同值来续 3 分钟租期。心跳不会消除超过 60 秒未短查的暂停提示。
+开访谈前先摸项目现状；中间出题不读代码；预计末轮先趁用户作答经 `work.mjs --final-round` 集中核对，再按 A/B 取回执。

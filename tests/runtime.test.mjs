@@ -10,6 +10,7 @@ import {join} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {validateTree,publishRound} from '../scripts/model.mjs';
 import {checkOnce} from '../scripts/check.mjs';
+import {assistantConnection} from '../assets/presentation.mjs';
 import {fingerprint} from '../scripts/document.mjs';
 import {chapters} from '../assets/topics.mjs';
 import {recommendationDigest} from '../scripts/recommendations.mjs';
@@ -18,12 +19,12 @@ const run=promisify(execFile),server=fileURLToPath(new URL('../scripts/server.mj
 const options=[{id:'a',label:'邮件通知'},{id:'b',label:'站内通知'},{id:'none',label:'都不需要',exclusive:true}];
 const node=(id='delivery',extra={})=>({id,question:'需要哪些通知方式？',rationale:'决定首版需要开发和验收哪些通知渠道。',input:'multi_choice',options:structuredClone(options),answer:null,depends_on:[],status:'pending',round:1,...extra});
 const tree=(nodes=[node()])=>({schema_version:2,session_id:'v2-regression',topic:'通知范围',revision:0,current_round:1,status:'active',nodes});
-async function service(t,seed=tree(),{clock=false}={}){
+async function service(t,seed=tree(),{clock=false,waitMs=25000}={}){
   const root=mkdtempSync(join(tmpdir(),'grow-v2-')),file=join(root,'tree.json'),document=join(root,'task.html');writeFileSync(file,JSON.stringify(seed)+'\n');
   const clockFile=join(root,'clock-offset'),preload=join(root,'test-clock.mjs');
   if(clock){writeFileSync(clockFile,'0');writeFileSync(preload,`import {readFileSync} from 'node:fs';const realNow=Date.now;Date.now=()=>realNow()+Number(readFileSync(${JSON.stringify(clockFile)},'utf8'));`);}
   const children=[],detached=[];
-  async function start(){const child=spawn(process.execPath,[...(clock?['--import',pathToFileURL(preload).href]:[]),server,'--state',file,'--document',document]);children.push(child);let errors='';child.stderr.on('data',d=>errors+=d);return{child,...await Promise.race([once(child.stdout,'data').then(([d])=>JSON.parse(String(d))),once(child,'exit').then(()=>{throw Error(errors);})])};}
+  async function start(){const child=spawn(process.execPath,[...(clock?['--import',pathToFileURL(preload).href]:[]),server,'--state',file,'--document',document,'--wait-ms',String(waitMs)]);children.push(child);let errors='';child.stderr.on('data',d=>errors+=d);return{child,...await Promise.race([once(child.stdout,'data').then(([d])=>JSON.parse(String(d))),once(child,'exit').then(()=>{throw Error(errors);})])};}
   const started=await start();
   t.after(async()=>{
     for(const pid of detached){try{process.kill(pid);}catch{}for(let i=0;i<100;i++){try{process.kill(pid,0);}catch{break;}await new Promise(r=>setTimeout(r,20));}}
@@ -34,7 +35,7 @@ async function service(t,seed=tree(),{clock=false}={}){
   return{...started,root,file,document,start,setClockOffset:offset=>writeFileSync(clockFile,String(offset)),track:pid=>detached.push(pid),async state(){return(await fetch(this.url+'/state')).json();},async post(path,data){return fetch(this.url+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({expected_session_id:seed.session_id,...data})});}};
 }
 
-import {startHeartbeat,stopHeartbeat} from '../scripts/heartbeat.mjs';
+import {findAiOwnerPid,startHeartbeat,stopHeartbeat} from '../scripts/heartbeat.mjs';
 import {runtimePost} from '../scripts/runtime-client.mjs';
 import {InterviewProgress,SHORT_QUERY_TIMEOUT_MS,HEARTBEAT_LEASE_MS} from '../scripts/progress.mjs';
 import {renderChapter} from '../scripts/render-chapter.mjs';
@@ -46,6 +47,31 @@ const logs=s=>readFileSync(s.file+'.runtime-timings.jsonl','utf8').trim().split(
 const opts=s=>({url:s.url,sessionId:'v2-regression'});
 const control=async(s,action,extra={})=>{const response=await s.post('/document/control',{action,expected_revision:(await s.state()).revision,...extra});assert.equal(response.status,200,await response.clone().text());return response.json();};
 const submit=async s=>{assert.equal((await s.post('/submit',{round:1,expected_revision:0,answers:[{id:'delivery',answer:{option_ids:['none'],text:'用户真正原话'}}]})).status,200);};
+const getAi=async running=>(await (await fetch(running.url+'/progress')).json()).ai;
+
+function waitCommand(context, running, sessionId = opts(running).sessionId) {
+  const child = spawn(process.execPath, [checker, '--url', running.url, '--session', sessionId, '--wait'], {
+    stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true
+  });
+  let stdout = '', stderr = '';
+  child.stdout.setEncoding('utf8').on('data', text => stdout += text);
+  child.stderr.setEncoding('utf8').on('data', text => stderr += text);
+  const result = once(child, 'close').then(([code]) => ({ code, stdout, stderr }));
+  context.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    await result;
+  });
+  return { child, result, get stdout() { return stdout; } };
+}
+
+async function until(predicate, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    if (await predicate()) return;
+    await delay(25);
+  } while (Date.now() < deadline);
+  assert.fail('Timed out waiting for the server state');
+}
 
 test('check CLI through a directory symlink enters main and matches direct calls, including live user events',async t=>{
  const s=await service(t),link=join(s.root,'linked-skill'),target=fileURLToPath(new URL('..',import.meta.url));
@@ -101,9 +127,79 @@ test('offer before discovery reports waiting_for_save without ever recording dis
  assert.equal(logs(s).filter(e=>e.event==='submission_discovered').length,0);
 });
 
+test('wait CLI stays silent across idle deadlines, reports activity and returns user events with the short-check cursor', {timeout:15000}, async context => {
+  const running = await service(context, tree(), { waitMs: 100 });
+  const waiting = waitCommand(context, running);
+  await until(async () => (await getAi(running)).last_check_at !== null);
+  const first = (await getAi(running)).last_check_at;
+  await until(async () => (await getAi(running)).last_check_at > first + 200);
+  assert.equal(waiting.child.exitCode, null);
+  assert.equal(waiting.stdout, '');
+  assert.equal(assistantConnection(await getAi(running), 90000), 'connected');
+
+  await submit(running);
+  const submitted = await waiting.result;
+  assert.equal(submitted.code, 0, submitted.stderr || submitted.stdout);
+  assert.equal(submitted.stdout.includes('用户真正原话'), false);
+  const result = JSON.parse(submitted.stdout);
+  const replay = await checkOnce({ ...opts(running), afterSequence: 0 });
+  assert.deepEqual({ ...result, timing: null }, { ...replay, timing: null });
+  assert.deepEqual(result.events.map(event => event.kind), ['submit']);
+  assert.equal((await checkOnce(opts(running))).changed, false);
+
+  const review = waitCommand(context, running);
+  assert.equal((await running.post('/decision', {
+    expected_revision: 1, id: 'delivery', answer: { option_ids: ['a'], text: '' }
+  })).status, 200);
+  const reviewed = await review.result;
+  assert.equal(reviewed.code, 0, reviewed.stderr || reviewed.stdout);
+  assert.deepEqual(JSON.parse(reviewed.stdout).events.map(event => event.kind), ['review']);
+
+  const save = waitCommand(context, running);
+  await control(running, 'offer');
+  await control(running, 'save');
+  const saved = await save.result;
+  assert.equal(saved.code, 0, saved.stderr || saved.stdout);
+  assert.deepEqual(JSON.parse(saved.stdout).events.map(event => event.kind), ['save']);
+  const afterSave = await checkOnce(opts(running));
+  assert.equal(afterSave.sequence, 3);
+  assert.equal(afterSave.changed, false);
+});
+
+test('wait CLI distinguishes a closed service, a finished session and the wrong identity', {timeout:15000}, async context => {
+  const running = await service(context);
+  const wrong = await waitCommand(context, running, 'different-session').result;
+  assert.equal(wrong.code, 2);
+  assert.equal(JSON.parse(wrong.stdout).status, 'identity');
+  assert.equal((await getAi(running)).last_check_at, null);
+
+  const waiting = waitCommand(context, running);
+  await until(async () => (await getAi(running)).last_check_at !== null);
+  const stopped = once(running.child, 'exit');
+  running.child.kill();
+  await stopped;
+  const offline = await waiting.result;
+  assert.equal(offline.code, 2);
+  assert.equal(JSON.parse(offline.stdout).status, 'service_closed');
+
+  const resumed = await running.start();
+  running.url = resumed.url;
+  await submit(running);
+  await control(running, 'offer');
+  await control(running, 'save');
+  await checkOnce(opts(running));
+  const lastCheck = (await getAi(running)).last_check_at;
+  const stillWaiting = waitCommand(context, running);
+  await until(async () => (await getAi(running)).last_check_at > lastCheck);
+  await control(running, 'close');
+  const finished = await stillWaiting.result;
+  assert.equal(finished.code, 2);
+  assert.equal(JSON.parse(finished.stdout).status, 'session_finished');
+});
+
 test('detached heartbeat renews activity every 10s without reading or consuming submissions; stop records end',async t=>{
  const s=await service(t);await checkOnce(opts(s));const cursor=readFileSync(s.file+'.cursor.json');
- const started=Date.now(),hb=JSON.parse((await run(process.execPath,[checker,'--url',s.url,'--session','v2-regression','--heartbeat'])).stdout);s.track(hb.pid);
+ const started=Date.now(),hb=JSON.parse((await run(process.execPath,[checker,'--url',s.url,'--session','v2-regression','--heartbeat','--owner-pid',String(process.pid)])).stdout);s.track(hb.pid);
  assert.equal(hb.status,'heartbeat_started');assert.equal(hb.interval_ms,10000);assert.ok(Date.now()-started<3000);
  const first=(await(await fetch(s.url+'/progress')).json()).ai.last_activity_at;
  await submit(s);const bytes=readFileSync(s.file);
@@ -120,7 +216,7 @@ test('heartbeat validates session/revision/instance and exits when service insta
   const response=await s.post('/ai/heartbeat',{heartbeat_id:'rejected',expected_revision:0,expected_instance_id:s.instance_id,...override});assert.equal(response.status,409);
  }
  assert.equal((await(await fetch(s.url+'/progress')).json()).ai.last_activity_at,null);
- const hb=await startHeartbeat(opts(s));s.track(hb.pid);s.child.kill();await once(s.child,'exit');
+ const hb=await startHeartbeat({...opts(s),ownerPid:process.pid});s.track(hb.pid);s.child.kill();await once(s.child,'exit');
  const until=Date.now()+13000;let alive=true;while(alive&&Date.now()<until){try{process.kill(hb.pid,0);await delay(100);}catch{alive=false;}}assert.equal(alive,false);
 });
 
@@ -173,28 +269,76 @@ test('three-minute leases renew only on a short check from their owner; pulses a
  }finally{Date.now=original;}
 });
 
-test('CLI short checks renew the default or explicitly matching owner, and recovery exposes both clocks',async t=>{
+test('CLI short checks renew only an explicitly matching owner, and recovery exposes both clocks',async t=>{
  const s=await service(t),common=['--url',s.url,'--session','v2-regression'];
- const hb=JSON.parse((await run(process.execPath,[checker,...common,'--heartbeat'])).stdout);s.track(hb.pid);assert.equal(hb.owner_pid,process.pid);
+ const hb=JSON.parse((await run(process.execPath,[checker,...common,'--heartbeat','--owner-pid',String(process.pid)])).stdout);s.track(hb.pid);assert.equal(hb.owner_pid,process.pid);
  const first=await(await fetch(s.url+'/recovery')).json();assert.equal(first.ai.last_check_at,null);assert.equal(first.ai.seconds_since_last_check,null);assert.ok(first.ai.seconds_since_last_heartbeat>=0);
- await delay(20);await run(process.execPath,[checker,...common]);let rec=await(await fetch(s.url+'/recovery')).json();const renewed=rec.heartbeats.find(h=>h.id===hb.heartbeat_id).lease_until;assert.ok(renewed>hb.lease_until);assert.equal(rec.ai.last_heartbeat_at,first.ai.last_heartbeat_at);
- await run(process.execPath,[checker,...common,'--owner-pid',String(process.ppid)]);rec=await(await fetch(s.url+'/recovery')).json();assert.equal(rec.heartbeats.find(h=>h.id===hb.heartbeat_id).lease_until,renewed);
- const explicit=JSON.parse((await run(process.execPath,[checker,...common,'--heartbeat','--owner-pid',String(process.ppid)])).stdout);s.track(explicit.pid);assert.equal(explicit.owner_pid,process.ppid);
- await delay(20);await run(process.execPath,[checker,...common,'--owner-pid',String(process.ppid)]);rec=await(await fetch(s.url+'/recovery')).json();assert.ok(rec.heartbeats.find(h=>h.id===explicit.heartbeat_id).lease_until>explicit.lease_until);
+ await run(process.execPath,[checker,...common]);let rec=await(await fetch(s.url+'/recovery')).json();assert.equal(rec.heartbeats[0].lease_until,hb.lease_until);assert.equal(rec.ai.last_heartbeat_at,first.ai.last_heartbeat_at);
+ await run(process.execPath,[checker,...common,'--owner-pid',String(process.ppid)]);rec=await(await fetch(s.url+'/recovery')).json();assert.equal(rec.heartbeats[0].lease_until,hb.lease_until);
+ await run(process.execPath,[checker,...common,'--owner-pid',String(process.pid)]);rec=await(await fetch(s.url+'/recovery')).json();assert.ok(rec.heartbeats[0].lease_until>hb.lease_until);
  assert.equal(rec.ai.last_check_at,(await(await fetch(s.url+'/progress')).json()).ai.last_check_at);
 });
 
-test('default parent owner exit stops a live heartbeat within one cycle and logs owner_exited',async t=>{
- const s=await service(t),hostScript=join(s.root,'host.mjs');
- writeFileSync(hostScript,`import {execFileSync} from 'node:child_process';console.log(execFileSync(process.execPath,${JSON.stringify([checker,'--url',s.url,'--session','v2-regression','--heartbeat'])},{encoding:'utf8'}).trim());setInterval(()=>{},1000);`);
- const host=spawn(process.execPath,[hostScript],{stdio:['ignore','pipe','pipe'],windowsHide:true});t.after(()=>host.kill());
- const hb=JSON.parse(String((await once(host.stdout,'data'))[0]));s.track(hb.pid);assert.equal(hb.owner_pid,host.pid);
- await delay(1200);process.kill(hb.pid,0);const endedAt=Date.now();host.kill();await once(host,'exit');let alive=true;while(alive&&Date.now()-endedAt<10000){try{process.kill(hb.pid,0);await delay(50);}catch{alive=false;}}
- assert.equal(alive,false);assert.ok(Date.now()-endedAt<10000);assert.equal(logs(s).filter(e=>e.event==='heartbeat_end').at(-1).reason,'owner_exited');
+test('heartbeat owner lookup skips shells, recognizes the four tools and chooses the closest ancestor', () => {
+  const descendants = [{ pid: 70, ppid: 60, name: 'node' }, { pid: 60, ppid: 50, name: 'pwsh.exe' }];
+  for (const name of ['C:\\Apps\\Claude.EXE', '/opt/codex', 'cursor-agent', 'Antigravity.exe']) {
+    assert.equal(findAiOwnerPid([
+      ...descendants, { pid: 50, ppid: 40, name }, { pid: 40, ppid: 1, name: 'claude' }
+    ], 70), 50);
+  }
+  assert.equal(findAiOwnerPid([
+    ...descendants, { pid: 50, ppid: 60, name: 'claude-helper.exe' },
+    { pid: 40, ppid: 1, name: 'codex' }
+  ], 70), null);
+});
+
+test('an inferred heartbeat keeps stale checks online; owner exit removes it and permits pause telemetry', {timeout:15000}, async context => {
+  const running = await service(context, tree(), { clock: true });
+  await submit(running);
+  await checkOnce(opts(running));
+  running.setClockOffset(SHORT_QUERY_TIMEOUT_MS + 1000);
+
+  await assert.rejects(startHeartbeat(opts(running), {
+    loadProcessTable: async () => [{ pid: process.pid, ppid: 1, name: 'node' }]
+  }), /--owner-pid/);
+  const host = spawn(process.execPath, ['-e', 'setInterval(()=>{}, 1000)'], { stdio: 'ignore', windowsHide: true });
+  const hostExit = once(host, 'exit');
+  context.after(async () => {
+    if (host.exitCode === null && host.signalCode === null) host.kill();
+    await hostExit;
+  });
+  const shellPid = Math.max(process.pid, host.pid) + 1;
+  const hb = await startHeartbeat(opts(running), {
+    loadProcessTable: async () => [
+      { pid: process.pid, ppid: shellPid, name: 'node' },
+      { pid: shellPid, ppid: host.pid, name: 'pwsh' },
+      { pid: host.pid, ppid: 1, name: 'claude.exe' }
+    ]
+  });
+  running.track(hb.pid);
+  assert.equal(hb.owner_pid, host.pid);
+  const active = await getAi(running);
+  assert.ok(active.seconds_since_last_check > 60);
+  assert.equal(active.heartbeat_active, true);
+  assert.equal(assistantConnection(active, 90000), 'connected');
+  const pause = () => running.post('/ai/telemetry', {
+    expected_revision: 1, expected_instance_id: running.instance_id, event: 'pause_shown',
+    page_id: 'owner-exit', last_check_at: active.last_check_at
+  }).then(response => response.json());
+  assert.deepEqual(await pause(), { recorded: false });
+
+  await delay(1200);
+  process.kill(hb.pid, 0);
+  host.kill();
+  await hostExit;
+  await until(async () => !(await getAi(running)).heartbeat_active, 10000);
+  assert.equal(logs(running).filter(event => event.event === 'heartbeat_end').at(-1).reason, 'owner_exited');
+  assert.equal(assistantConnection(await getAi(running), 90000), 'paused');
+  assert.deepEqual(await pause(), { recorded: true });
 });
 
 test('server lease expiry stops the real worker and logs lease_expired (controlled service clock)',async t=>{
- const s=await service(t,tree(),{clock:true}),hb=await startHeartbeat(opts(s));s.track(hb.pid);const bytes=readFileSync(s.file);
+ const s=await service(t,tree(),{clock:true}),hb=await startHeartbeat({...opts(s),ownerPid:process.pid});s.track(hb.pid);const bytes=readFileSync(s.file);
  // Advance server time only: no shorter production constants or fake heartbeat worker.
  s.setClockOffset(HEARTBEAT_LEASE_MS+1);let alive=true;const until=Date.now()+12000;
  while(alive&&Date.now()<until){try{process.kill(hb.pid,0);await delay(100);}catch{alive=false;}}

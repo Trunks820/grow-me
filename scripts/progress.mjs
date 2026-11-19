@@ -4,8 +4,8 @@ export const HEARTBEAT_INTERVAL_MS = 10_000;
 export const SHORT_QUERY_TIMEOUT_MS = 60_000;
 export const HEARTBEAT_LEASE_MS = 3 * 60_000;
 export class InterviewProgress {
-  constructor(getTree, { log = null, getPhase = () => null } = {}) {
-    Object.assign(this, { getTree, log, getPhase });
+  constructor(getTree, { log = null, getPhase = () => null, onUserEvent = () => {} } = {}) {
+    Object.assign(this, { getTree, log, getPhase, onUserEvent });
     this.startedAt = null;
     this.revision = null;
     this.lastSubmission = null;
@@ -21,7 +21,7 @@ export class InterviewProgress {
   record(event, detail = {}) {
     this.log?.append(event, { revision: this.getTree().revision, ...detail });
   }
-  checkIn({ afterSequence = 0, afterRevision, ownerPid } = {}) {
+  reportCheck(ownerPid) {
     this.sweep();
     const now = Date.now();
     if (this.lastCheckAt !== null && now - this.lastCheckAt > SHORT_QUERY_TIMEOUT_MS)
@@ -29,13 +29,19 @@ export class InterviewProgress {
     this.lastCheckAt = now;
     for (const heartbeat of this.heartbeats.values())
       if (heartbeat.ownerPid === ownerPid) heartbeat.leaseUntil = now + HEARTBEAT_LEASE_MS;
-    const events = this.log
+  }
+  eventsAfter(afterSequence, afterRevision) {
+    return this.log
       ? this.log.after(afterSequence, afterRevision)
       : this.events.filter(
           e =>
             e.sequence > afterSequence &&
             (afterRevision === undefined || e.revision > afterRevision)
         );
+  }
+  checkIn({ afterSequence = 0, afterRevision, ownerPid } = {}) {
+    this.reportCheck(ownerPid);
+    const events = this.eventsAfter(afterSequence, afterRevision);
     const submission =
       this.getPhase() !== 'offered'
         ? events.findLast(
@@ -119,6 +125,7 @@ export class InterviewProgress {
             ready_for_ai: tree.status === 'active' && tree.nodes.every(n => n.status === 'answered')
           };
     if (!this.log) this.events.push(e);
+    this.onUserEvent();
   }
   status() {
     this.sweep();

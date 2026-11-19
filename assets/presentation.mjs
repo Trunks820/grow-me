@@ -1,7 +1,12 @@
 // Only operational messages pass here. Interview answers always retain their original text.
+export function assistantSilenceSeconds(ai) {
+  return ai?.seconds_since_last_check ?? ai?.seconds_since_last_heartbeat ?? null;
+}
 export function assistantConnection(ai, openedForMs) {
-  if (!ai || ai.last_check_at === null || ai.seconds_since_last_check === null) return 'connecting';
-  return ai.seconds_since_last_check * 1000 > (ai.short_query_timeout_ms ?? ai.timeout_ms) &&
+  if (ai?.heartbeat_active) return 'connected';
+  const silence = assistantSilenceSeconds(ai);
+  if (silence === null) return 'connecting';
+  return silence * 1000 > (ai.short_query_timeout_ms ?? ai.timeout_ms) &&
     openedForMs > ai.timeout_ms
     ? 'paused'
     : 'connected';

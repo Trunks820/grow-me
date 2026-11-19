@@ -1,6 +1,6 @@
 import { createDecisionTree } from './tree.mjs';
 import { chapters, answerText } from './topics.mjs';
-import { publicError, assistantConnection } from './presentation.mjs';
+import { publicError, assistantConnection, assistantSilenceSeconds } from './presentation.mjs';
 import { selectionValid } from './answers.mjs';
 
 const card = document.querySelector('#card'),
@@ -30,7 +30,7 @@ let aiActivity = null,
   reportedPause = false;
 const pageId = crypto.randomUUID();
 const pauseText = () =>
-  `已 ${Math.max(0, Math.floor((aiActivity?.seconds_since_last_check ?? 0) + (performance.now() - aiObservedAt) / 1000))} 秒没收到 AI 回应，回聊天窗口发\"继续\"`;
+  `已 ${Math.max(0, Math.floor((assistantSilenceSeconds(aiActivity) ?? 0) + (performance.now() - aiObservedAt) / 1000))} 秒没收到 AI 回应，回聊天窗口发\"继续\"`;
 let state,
   documentState = { phase: 'idle' },
   currentId = null,
@@ -184,7 +184,7 @@ function heartbeatNote() {
         aiActivity.heartbeat_activity
       ]
     : null;
-  return text ? '心跳报告：' + text + '（不代表对话仍在继续）' : '';
+  return text ? '心跳报告：' + text : '';
 }
 function waitingHeader(title, progress) {
   if (['paused', 'connecting'].includes(assistantDisplay)) {
