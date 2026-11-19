@@ -1,5 +1,5 @@
 """Real Chromium actors and controlled UI checks. Only the calling Codex authors AI rounds."""
-import argparse, json, subprocess, time, uuid, sys, urllib.request, urllib.error, hashlib
+import argparse, json, subprocess, time, uuid, sys, urllib.request, urllib.error
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
 sys.stdout.reconfigure(encoding='utf-8')
@@ -176,27 +176,19 @@ def run_suite(work,scenario='all',layout_fixture='v7'):
     assert not report['errors'],report['errors'];report['status']='passed';report['screenshots']=[p.name for p in work.glob('*.png')]
     (work/'browser-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8');return report
 
-def run_actor(args):
-    out=Path(args.evidence);out.mkdir(parents=True,exist_ok=True);nonce='银杏-'+uuid.uuid4().hex[:10];raw=f'预算 3000；本轮临时特征词：{nonce}\n自由回答原文："第一轮" <不改写>'
-    report={'kind':'transport actor, synthetic answers; next round authored by calling Codex','checks':{},'errors':[],'feature_word':nonce}
+def run_capture(args):
+    out=Path(args.evidence);out.mkdir(parents=True,exist_ok=True)
     with sync_playwright() as p:
-        browser=p.chromium.launch(headless=True);page=browser.new_page(viewport={'width':1000,'height':900});page.on('pageerror',lambda e:report['errors'].append(str(e)));page.goto(args.url);page.wait_for_load_state('networkidle')
-        if args.capture_only:
-            for name,w,h in [('desktop',1000,900),('mobile',390,844)]:
-                page.set_viewport_size({'width':w,'height':h});no_overflow(page);capture(page,out,args.label+'-'+name)
-                if args.check_cards:assert page.locator('#card').is_visible() and page.locator('link[rel=stylesheet]').count()==1
-            browser.close();return {'status':'passed','kind':'capture-only'}
-        capture(page,out,'round-1');navigation=page.evaluate('performance.timeOrigin');page.locator('.tree-node[data-status=pending]').first.click();page.get_by_label('先做网页版',exact=True).check();page.get_by_role('button',name='就这么定',exact=True).click();page.locator('.tree-node[data-status=pending]').first.click();page.get_by_role('textbox').fill(raw);page.get_by_role('button',name='就这么定',exact=True).click();open_summary(page);time.sleep(args.submit_delay)
-        report['submitted_at_epoch']=time.time();page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.locator('#wait-elapsed')).to_be_visible();print('BROWSER_SUBMITTED_ROUND_1',flush=True)
-        expect(page.locator('#meta')).to_contain_text('第 2 轮',timeout=300000);assert navigation==page.evaluate('performance.timeOrigin');page.locator('.tree-node[data-status=pending]').first.click();assert nonce in page.locator('#node-body').inner_text() and '3000' in page.locator('#node-body').inner_text()
-        report['round2_visible_at_epoch']=time.time();report['submit_to_next_question_seconds']=report['round2_visible_at_epoch']-report['submitted_at_epoch'];capture(page,out,'new-branches')
-        page.get_by_role('textbox').fill('确认，预算保持 3000；第二轮回传成功。');page.get_by_role('button',name='就这么定',exact=True).click();open_summary(page);page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.locator('#wait-elapsed')).to_be_visible();assert not report['errors'],report['errors'];report['checks']={'same_page':True,'unseen_feature_word_used_by_current_agent':True,'second_round_submitted':True};report['status']='passed';browser.close()
-    (out/'browser-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8');return report
+        browser=p.chromium.launch(headless=True);page=browser.new_page(viewport={'width':1000,'height':900});page.goto(args.url);page.wait_for_load_state('networkidle')
+        for name,w,h in [('desktop',1000,900),('mobile',390,844)]:
+            page.set_viewport_size({'width':w,'height':h});no_overflow(page);capture(page,out,args.label+'-'+name)
+            if args.check_cards:assert page.locator('#card').is_visible() and page.locator('link[rel=stylesheet]').count()==1
+        browser.close();return {'status':'passed','kind':'capture-only'}
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--url');parser.add_argument('--evidence');parser.add_argument('--work');parser.add_argument('--scenario',choices=['all','interactions','review','tree'],default='all');parser.add_argument('--layout-fixture',choices=['v7','four'],default='v7');parser.add_argument('--submit-delay',type=float,default=3);parser.add_argument('--capture-only',action='store_true');parser.add_argument('--label',default='capture');parser.add_argument('--check-cards',action='store_true');parser.add_argument('--expected-history-count',type=int,default=2);args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--url');parser.add_argument('--evidence');parser.add_argument('--work');parser.add_argument('--scenario',choices=['all','interactions','review','tree'],default='all');parser.add_argument('--layout-fixture',choices=['v7','four'],default='v7');parser.add_argument('--capture-only',action='store_true');parser.add_argument('--label',default='capture');parser.add_argument('--check-cards',action='store_true');args=parser.parse_args()
     if args.work:report=run_suite(Path(args.work),args.scenario,args.layout_fixture)
-    elif args.url and args.evidence:report=run_actor(args)
-    else:parser.error('use --work for the controlled suite, or --url and --evidence for current-conversation actor')
+    elif args.capture_only and args.url and args.evidence:report=run_capture(args)
+    else:parser.error('use --work for the controlled suite, --capture-only --url --evidence for screenshots, or tests/sim_user.py for the simulated user')
     print(json.dumps(report,ensure_ascii=False,indent=2))
 if __name__=='__main__':main()
