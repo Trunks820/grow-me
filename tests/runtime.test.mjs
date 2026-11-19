@@ -51,15 +51,29 @@ test('check CLI through a directory symlink enters main and matches direct calls
  const s=await service(t),link=join(s.root,'linked-skill'),target=fileURLToPath(new URL('..',import.meta.url));
  // Junctions are the Windows directory symlink used by ~/.claude/skills.
  symlinkSync(target,link,process.platform==='win32'?'junction':'dir');
- const via=join(link,'scripts','check.mjs'),viaFile=join(s.root,'check-link.mjs');symlinkSync(checker,viaFile,'file');
+ const via=join(link,'scripts','check.mjs');
  const directHelp=await run(process.execPath,[checker,'--help']),linkedHelp=await run(process.execPath,[via,'--help']);
- assert.equal((await run(process.execPath,[viaFile,'--help'])).stdout,directHelp.stdout);assert.ok(linkedHelp.stdout.length>40);assert.equal(linkedHelp.stdout,directHelp.stdout);assert.equal((await run(process.execPath,['--preserve-symlinks-main',via,'--help'])).stdout,directHelp.stdout);
+ assert.ok(linkedHelp.stdout.length>40);
+ assert.equal(linkedHelp.stdout,directHelp.stdout);
+ assert.equal((await run(process.execPath,['--preserve-symlinks-main',via,'--help'])).stdout,directHelp.stdout);
  await submit(s);
  const args=['--url',s.url,'--session','v2-regression','--after-sequence','0'];
  const direct=JSON.parse((await run(process.execPath,[checker,...args])).stdout),linked=JSON.parse((await run(process.execPath,[via,...args])).stdout);
- const fileLinked=JSON.parse((await run(process.execPath,[viaFile,...args])).stdout);
- for(const key of ['status','session_id','revision','sequence','instance_id','events']){assert.deepEqual(linked[key],direct[key]);assert.deepEqual(fileLinked[key],direct[key]);}
+ const keys=['status','session_id','revision','sequence','instance_id','events'];
+ for(const key of keys) assert.deepEqual(linked[key],direct[key]);
  assert.equal(linked.changed,true);assert.equal(linked.status,'ready_for_ai');
+
+ const viaFile=join(s.root,'check-link.mjs');
+ try{
+  symlinkSync(checker,viaFile,'file');
+ }catch(error){
+  if(process.platform!=='win32'||error.code!=='EPERM') throw error;
+  t.diagnostic('Skipped file symlink checks because Windows denied permission to create the file symlink (EPERM).');
+  return;
+ }
+ assert.equal((await run(process.execPath,[viaFile,'--help'])).stdout,directHelp.stdout);
+ const fileLinked=JSON.parse((await run(process.execPath,[viaFile,...args])).stdout);
+ for(const key of keys) assert.deepEqual(fileLinked[key],direct[key]);
 });
 
 test('cursor automatically follows only user events across AI publication, offer, save, retry and restart',async t=>{
