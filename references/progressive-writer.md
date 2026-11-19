@@ -31,7 +31,7 @@ Each part is a UTF-8 JSON file in a workspace generation directory:
 
 The three shared views can be authored independently using the common ID contract. Topic chapters are sequential: write one complete chapter, publish it successfully, then write the next. Use parallel agents only when authorized; parallel assembly support does not itself promise lower model latency or permit batching completed chapters.
 
-Check `answer.deferred` on the frozen tree. Treat selected options and notes on these answers as tentative. Keep the questions under 待确认 and avoid turning them into confirmed requirements, development commitments or acceptance criteria.
+Check `answer.deferred` on the frozen tree. Treat selected options and notes on these answers as tentative. Keep the questions under 待确认 and avoid turning them into confirmed requirements, development commitments or acceptance criteria. When the user requests a plan early, list decisions the interview did not reach under 待确认 in all three views.
 
 Start `check.mjs --heartbeat` before writing and stop that heartbeat at the end. For **each** chapter, write only its explanatory HTML to a file outside the parts directory, then run:
 

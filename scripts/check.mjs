@@ -155,6 +155,7 @@ export async function checkOnce({
       at
     })),
     sequence: activity.sequence,
+    plan_requested: activity.plan_requested,
     instance_changed: Boolean(
       (afterInstance ?? cursor?.instance) &&
         (afterInstance ?? cursor?.instance) !== recovery.instance_id

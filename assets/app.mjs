@@ -33,6 +33,7 @@ const pauseText = () =>
   `已 ${Math.max(0, Math.floor((assistantSilenceSeconds(aiActivity) ?? 0) + (performance.now() - aiObservedAt) / 1000))} 秒没收到 AI 回应，回聊天窗口发\"继续\"`;
 let state,
   documentState = { phase: 'idle' },
+  planRequested = false,
   currentId = null,
   busy = false,
   waitingSince = null,
@@ -97,6 +98,8 @@ const allSubmitted = () =>
 const documentMatches = () =>
   documentState.source?.session_id === state.session_id &&
   documentState.source?.revision === state.revision;
+const saveOffered = () =>
+  documentState.phase === 'offered' && documentState.offered_revision === state.revision;
 function navigationTarget() {
   if (state?.schema_version !== 2 || state.status !== 'active') return null;
   const review = reviews(),
@@ -141,6 +144,8 @@ function updateNavigation() {
     next.disabled = busy || !target;
     next.dataset.target = target?.id ?? '';
   }
+  const plan = card.querySelector('#request-plan');
+  if (plan) plan.disabled = busy || dialog.open;
   budGuide.hidden = !target || dialog.open || stopped;
   budGuide.disabled = busy;
   budGuide.dataset.target = target?.id ?? '';
@@ -178,20 +183,20 @@ function handleAnswer(id) {
   if (advanceId === id) advanceId = null;
 }
 function assistantStatus() {
-  const offered =
-    documentState.phase === 'offered' && documentState.offered_revision === state?.revision;
   const writing =
     state?.status === 'complete' &&
     documentMatches() &&
     ['requested', 'generating'].includes(documentState.phase);
-  if (state?.schema_version !== 2 || !((isWaiting() && !offered) || writing)) return 'inactive';
+  if (state?.schema_version !== 2 || !((isWaiting() && !saveOffered()) || writing)) return 'inactive';
   return assistantConnection(aiActivity, performance.now() - aiOpenedAt);
 }
 function heartbeatNote() {
   const text = aiActivity?.heartbeat_active
-    ? { questions: 'AI 正在出题', code: 'AI 正在查代码', document: 'AI 正在写文档' }[
-        aiActivity.heartbeat_activity
-      ]
+    ? {
+        questions: planRequested ? 'AI 正在准备保存' : 'AI 正在出题',
+        code: 'AI 正在查代码',
+        document: 'AI 正在写文档'
+      }[aiActivity.heartbeat_activity]
     : null;
   return text ? '心跳报告：' + text : '';
 }
@@ -537,17 +542,59 @@ function renderSummary(host) {
   submit.disabled = busy || reviews().length > 0 || openQuestions().some(n => !drafts.has(n.id));
   host.append(submit);
 }
+function planConfirmation(unanswered, confirm, cancel) {
+  const question = el(
+    'h2',
+    unanswered
+      ? `这一轮还有 ${unanswered} 题没答，会记成待定，直接出方案吗？`
+      : '这一轮已答完，直接出方案吗？'
+  );
+  question.id = 'node-question';
+  question.tabIndex = -1;
+  const actions = el('div', undefined, 'actions');
+  actions.append(button('我再答几题', cancel), button('先出方案', confirm, true));
+  return [question, actions];
+}
+function openPlanConfirmation() {
+  if (busy || dialog.open) return;
+  const pending = openQuestions();
+  const answers = pending
+    .filter(n => drafts.has(n.id))
+    .map(n => ({ id: n.id, answer: drafts.get(n.id) }));
+  const request = { round: state.current_round, expected_revision: state.revision, answers };
+  const confirm = () =>
+    act(async () => {
+      await post('/request-plan', request);
+      closeNote();
+    });
+  noteId = currentId = null;
+  noteMode = 'plan';
+  noteRevision = state.revision;
+  dialog.dataset.mode = noteMode;
+  delete dialog.dataset.nodeId;
+  document.querySelector('#close-node').disabled = false;
+  document.querySelector('#node-actions').replaceChildren();
+  document.querySelector('#node-body').replaceChildren(
+    ...planConfirmation(pending.length - answers.length, confirm, closeNote)
+  );
+  showNote();
+  updateNavigation();
+}
 function renderWaiting() {
   card.append(el('p', `第 ${state.current_round} 轮 · 已提交`, 'k'));
-  waitingHeader('正在想下一轮的问题…', '生长中');
+  waitingHeader(planRequested ? '正在准备保存…' : '正在想下一轮的问题…', '生长中');
   card.append(elapsedLine(waitingSince), el('p', '可以点树上的题目回看或修改。', 'w'));
   if (assistantDisplay === 'connected') {
-    const late = el('p', '还在想，可以先回看本轮回答', 'w');
+    const late = el(
+      'p',
+      planRequested ? '还在准备保存，可以先回看本轮回答' : '还在想，可以先回看本轮回答',
+      'w'
+    );
     late.id = 'long-wait';
     late.hidden = waitingSince === null || performance.now() - waitingSince <= 60000;
     card.append(late);
   }
-  if (documentState.phase === 'offered' && documentState.offered_revision === state.revision) {
+  if (saveOffered()) {
     card.replaceChildren(
       el('p', '访谈可保存', 'k'),
       el('h2', '这一棵树，可以结果了。', 'q'),
@@ -761,6 +808,11 @@ function render() {
         work.hidden = !work.textContent;
         card.append(work);
       } else renderWaiting();
+      if (!planRequested && !review.length && !saveOffered()) {
+        const plan = button('够了，先出方案', openPlanConfirmation);
+        plan.id = 'request-plan';
+        card.append(plan);
+      }
     }
     if (reportedPause !== (assistantDisplay === 'paused')) {
       reportedPause = assistantDisplay === 'paused';
@@ -780,9 +832,14 @@ function render() {
           ? 'questions'
           : 'waiting';
     updateTree();
-    if (dialog.open && (noteRevision !== state.revision || noteBusy !== busy)) {
-      if (noteId) renderNote();
-      else if (noteMode === 'summary') renderSummaryNote();
+    if (dialog.open) {
+      if (noteMode === 'plan') {
+        if (noteRevision !== state.revision) closeNote();
+        else dialog.querySelectorAll('button').forEach(b => (b.disabled = busy));
+      } else if (noteRevision !== state.revision || noteBusy !== busy) {
+        if (noteId) renderNote();
+        else if (noteMode === 'summary') renderSummaryNote();
+      }
     }
     syncNotePosition();
   } catch (error) {
@@ -1022,7 +1079,7 @@ function positionNote() {
   dialog.style.top = '0px';
   const wide =
     n && (n.options.some(o => o.label.length > 12) || n.input === 'text' || noteMode === 'read');
-  // Round summary and the copy-reminder fallback have no bud and carry more text.
+  // Notes without a bud can use the wider bubble.
   dialog.style.width =
     (!n
       ? Math.min(360, innerWidth - 32)
@@ -1298,7 +1355,8 @@ dialog.addEventListener('close', () => {
   questionHeading.hidden = true;
   document.querySelector('#bubble-link').setAttribute('hidden', '');
   document.body.classList.remove('note-open');
-  returnFocus?.focus({ preventScroll: true });
+  const target = noteMode === 'plan' ? card.querySelector('#request-plan') : returnFocus;
+  target?.focus({ preventScroll: true });
   if (state) updateTree();
 });
 window.addEventListener('resize', syncNotePosition);
@@ -1323,7 +1381,7 @@ document.addEventListener('keydown', event => {
   if (
     (event.code === 'Space' || event.key === ' ') &&
     !dialog.open &&
-    !event.target.matches('textarea,input')
+    !event.target.matches('button,textarea,input')
   ) {
     const seal = card.querySelector('.seal-btn');
     if (seal && !seal.disabled) {
@@ -1412,6 +1470,7 @@ async function refresh(force = false) {
   if (sequence < appliedRefresh || (state && next.revision < state.revision)) return;
   appliedRefresh = sequence;
   const changed = !state || next.revision !== state.revision,
+    planChanged = planRequested !== Boolean(progress.plan_requested),
     docChanged =
       JSON.stringify({ ...doc, server_now: 0 }) !==
       JSON.stringify({ ...documentState, server_now: 0 });
@@ -1445,6 +1504,7 @@ async function refresh(force = false) {
     state = next;
   }
   documentState = doc;
+  planRequested = Boolean(progress.plan_requested);
   guidance = advice.recommendations;
   document.querySelector('#copy-reminder').disabled = false;
   if (instance !== aiInstance) {
@@ -1454,7 +1514,7 @@ async function refresh(force = false) {
   aiActivity = progress.ai ?? null;
   aiObservedAt = performance.now();
   if (isWaiting()) {
-    if (waitingSince === null)
+    if (waitingSince === null || planChanged)
       waitingSince =
         performance.now() -
         (progress?.session_id === state.session_id &&
@@ -1481,7 +1541,14 @@ async function refresh(force = false) {
           ? '已保存 · 本机文档预览'
           : '保存状态与答案待核对'
         : '已连接本机';
-  if (changed || docChanged || assistantDisplay !== assistantStatus() || force || renderFailed)
+  if (
+    changed ||
+    planChanged ||
+    docChanged ||
+    assistantDisplay !== assistantStatus() ||
+    force ||
+    renderFailed
+  )
     render();
   const note = document.querySelector('#heartbeat-work');
   if (note) {

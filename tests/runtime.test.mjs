@@ -129,6 +129,83 @@ async function until(predicate, timeoutMs = 5000) {
   assert.fail('Timed out waiting for the server state');
 }
 
+test('requesting a plan submits the remaining round and wakes the wait command', {timeout: 15000}, async t => {
+  const confirmed = {option_ids: ['a'], text: '用户已提交'};
+  const draft = {option_ids: ['b'], text: '保留这份草稿'};
+  const deferred = {option_ids: [], text: '', deferred: true};
+  const initial = tree([
+    node('prior', {answer: confirmed, status: 'answered'}),
+    node('delivery'),
+    node('followup', {depends_on: ['schedule']}),
+    node('schedule')
+  ]);
+  const s = await service(t, initial);
+  const waiting = waitCommand(t, s);
+  await until(async () => (await getAi(s)).last_check_at !== null);
+  const request = {
+    round: 1, expected_revision: 0, answers: [{id: 'delivery', answer: draft}]
+  };
+
+  const invalid = {...request, answers: [{id: 'prior', answer: draft}]};
+  assert.equal((await s.post('/request-plan', invalid)).status, 400);
+  assert.deepEqual(await s.state(), initial);
+  assert.equal((await s.post('/request-plan', request)).status, 200);
+
+  const result = await waiting.result;
+  assert.equal(result.code, 0, result.stderr);
+  const receipt = JSON.parse(result.stdout);
+  assert.equal(receipt.status, 'ready_for_ai');
+  assert.equal(receipt.plan_requested, true);
+  assert.deepEqual(receipt.events.map(({kind, revision, round}) => ({kind, revision, round})), [
+    {kind: 'request_plan', revision: 1, round: 1}
+  ]);
+  assert.ok(!result.stdout.includes(draft.text));
+  const saved = await s.state();
+  assert.equal(saved.status, 'active');
+  assert.equal(saved.schema_version, 2);
+  assert.equal(saved.revision, 1);
+  assert.ok(saved.nodes.every(n => n.status === 'answered'));
+  assert.deepEqual(saved.nodes.map(n => n.answer), [confirmed, draft, deferred, deferred]);
+  assert.equal((await s.post('/round', {
+    expected_revision: 1, round: 2, nodes: [node('extra', {round: 2})]
+  })).status, 409);
+  assert.equal((await s.post('/request-plan', {...request, expected_revision: 1, answers: []})).status, 409);
+  assert.deepEqual(await s.state(), saved);
+});
+
+test('a plan request with no unanswered questions is returned by short check and survives recovery', async t => {
+  const s = await service(t);
+  await submit(s);
+  await checkOnce(opts(s));
+  const answered = await s.state();
+  assert.equal((await s.post('/request-plan', {
+    round: 1, expected_revision: answered.revision, answers: []
+  })).status, 200);
+
+  const {stdout} = await run(process.execPath, [
+    checker, '--url', s.url, '--session', s.session_id, '--after-revision', String(answered.revision)
+  ]);
+  const receipt = JSON.parse(stdout);
+  assert.equal(receipt.changed, true);
+  assert.equal(receipt.plan_requested, true);
+  assert.deepEqual(receipt.events.map(e => e.kind), ['request_plan']);
+  assert.deepEqual(await s.state(), {...answered, revision: answered.revision + 1});
+
+  const stopped = once(s.child, 'exit');
+  s.child.kill();
+  await stopped;
+  const restarted = await s.start();
+  const recovered = await checkOnce(opts(restarted));
+  assert.equal(recovered.instance_changed, true);
+  assert.equal(recovered.changed, false);
+  assert.equal(recovered.plan_requested, true);
+  const postRestart = {...s, ...restarted};
+  await control(postRestart, 'offer');
+  assert.equal((await checkOnce(opts(restarted))).status, 'waiting_for_save');
+  await control(postRestart, 'save');
+  assert.equal((await checkOnce(opts(restarted))).plan_requested, false);
+});
+
 test('check CLI through a directory symlink enters main and matches direct calls, including live user events',async t=>{
  const s=await service(t),link=join(s.root,'linked-skill'),target=fileURLToPath(new URL('..',import.meta.url));
  // Junctions are the Windows directory symlink used by ~/.claude/skills.

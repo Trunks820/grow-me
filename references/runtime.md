@@ -8,7 +8,7 @@
 
 `check.mjs --url <origin> --session <UUID>` 是一次性命令：先 GET /state 验证身份，再读文档、进度和恢复元数据；核对 session / revision / instance 后 POST /ai/check。全部网络请求共用最多 3 秒期限。输出状态和新用户事件的元数据，不打印答案。
 
-短查和等待共用 `<tree.json>.cursor.json`（session_id / revision / sequence / instance），无需手写 `--after-*`。`sequence` 是用户事件序号：提交、复核、重开、保存或重试才推进；AI 发题、offer、claim、发布章节不推进。`changed` 表示有新用户事件；`instance_changed` 表示实例变化。显式 `--after-revision` / `--after-sequence` / `--after-instance` 仍按同一规则筛选或比较。回看不重复计发现延迟。
+短查和等待共用 `<tree.json>.cursor.json`（session_id / revision / sequence / instance），无需手写 `--after-*`。`sequence` 是用户事件序号，随提交、复核、重开、确认先出方案、保存或重试推进。`changed` 表示有新用户事件，`instance_changed` 表示实例变化。显式 `--after-revision` / `--after-sequence` / `--after-instance` 仍按同一规则筛选或比较。回看不重复计发现延迟。
 
 预计末轮发布后，先趁用户作答[集中查代码](#集中查代码)，再按下列路径取回执。
 
@@ -17,6 +17,8 @@
 **B. 宿主做不到**：留在本条回复内，用宿主短等待，每约 10 秒运行一次普通 `check.mjs`，直到收到用户事件。普通 curl GET 不登记 AI 活跃，也不推进游标。
 
 发现用户提交后读 `/context`，精确原文读 `/state`。有黄叶等用户逐题复核；全答后出追问或 offer。候选使用原修订，不能改号重交。
+
+会话仍在进行时，任一种查询收到 `request_plan` 或看到 `plan_requested: true`，就停止出题。读当前答案，复核完成后直接准备 offer。已 offer 时等用户点击保存。即使游标已读过事件，恢复后也按此标记继续。把没问到的决策列入“待确认”。
 
 没有长期轮次总数。页面内确认开花不算提交。offer 后、用户保存前返回 `waiting_for_save`，不再 `ready_for_ai`，不产生／累加 `discovery_delay_ms`。requested 后才能 claim。服务仍保留旧 /wait 与 /document/wait 兼容接口。
 

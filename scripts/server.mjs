@@ -116,6 +116,41 @@ async function main() {
       if (result) waiter.done(result);
     }
   }
+  function requestPlan(data) {
+    if (tree.status !== 'active' || progress.planRequested)
+      throw new InputError('当前不能重复请求出方案。', 409);
+    if (data.expected_revision !== tree.revision || data.round !== tree.current_round)
+      throw new InputError('轮次或答案有变动，请重新确认。', 409);
+    const open = tree.nodes.filter(n => n.status !== 'answered');
+    if (open.some(n => n.round !== tree.current_round || n.status !== 'pending'))
+      throw new InputError('请先提交以前的回答并复核黄叶。', 409);
+    if (!Array.isArray(data.answers)) throw new InputError('answers must be an array');
+
+    const pending = new Map(open.map(n => [n.id, n]));
+    const drafts = new Map();
+    for (const entry of data.answers) {
+      if (!pending.has(entry?.id) || drafts.has(entry.id))
+        throw new InputError('submit unique drafts for open questions of this round');
+      drafts.set(entry.id, entry.answer);
+    }
+    const answers = [];
+    function addAnswer(id) {
+      const node = pending.get(id);
+      if (!node) return;
+      pending.delete(id);
+      // A first round may contain dependencies within the same round.
+      for (const dependency of node.depends_on) addAnswer(dependency);
+      answers.push({
+        id,
+        answer: drafts.has(id) ? drafts.get(id) : { option_ids: [], text: '', deferred: true }
+      });
+    }
+    for (const node of open) addAnswer(node.id);
+    const next = answers.length
+      ? submitRound(tree, { ...data, answers })
+      : { ...tree, revision: tree.revision + 1 };
+    save(next, 'request_plan');
+  }
   function json(res, status, value) {
     if (res.destroyed || res.writableEnded) return;
     res.writeHead(status, {
@@ -467,10 +502,14 @@ async function main() {
           return json(res, 200, result);
         }
         if (url.pathname === '/submit') save(submitRound(tree, data), 'submit');
+        else if (url.pathname === '/request-plan') requestPlan(data);
         else if (url.pathname === '/decision') save(editDecision(tree, data), 'review');
         else if (url.pathname === '/reopen') save(reopenDecision(tree, data), 'reopen');
-        else if (url.pathname === '/round') save(publishRound(tree, data));
-        else if (url.pathname === '/finish') {
+        else if (url.pathname === '/round') {
+          if (tree.status === 'active' && progress.planRequested)
+            throw new InputError('用户已确认先出方案，请进入保存流程。', 409);
+          save(publishRound(tree, data));
+        } else if (url.pathname === '/finish') {
           save(finish(tree, data));
           for (const waiter of aiWaiters) waiter.done('session_finished');
           json(res, 200, { status: 'complete', revision: tree.revision });

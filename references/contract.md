@@ -55,6 +55,7 @@ Use **仍然有效** to keep a confirmed answer or **仍待定** to keep a defer
 | GET | `/wait?round=N` | Blocks until the whole round is answered or service timeout; JSON below |
 | POST | `/ai/check` | `{expected_revision, expected_instance_id}`; identity-bound AI query receipt in memory, returns current progress |
 | POST | `/submit` | `{round, expected_revision, answers:[{id,answer}]}` for every open question of the current round |
+| POST | `/request-plan` | `{round, expected_revision, answers:[{id,answer}]}` with any locally confirmed or deferred drafts for the current round |
 | POST | `/round` | `{round, expected_revision, nodes:[...]}`; publishes the next round, preserving prior nodes |
 | POST | `/decision` | `{id, expected_revision, answer}`; revise or explicitly reconfirm one node |
 | POST | `/reopen` | `{id, expected_revision}`; mark this node and all descendants `needs_review`, retaining answers |
@@ -65,6 +66,8 @@ All POST table payloads below also require `expected_session_id`. JSON request b
 Normal wait timeout returns HTTP 200 and `{status:"pending", round, revision, review_ids:[]}`; curl exits 0. Answer return is `{status:"answered", round, revision, answers:[{id,question,answer,selected_options:[{id,label}]}]}`. Already-submitted answers can be read again; waits are not destructive. Finish releases outstanding waits as `closed`. A curl `--max-time` expiry instead exits 28: transport timeout is distinct from a normal `pending` reply.
 
 Any unresolved `needs_review`, including an old node outside the requested round, holds `/wait` pending and blocks `/round`. After receiving an answer batch, reread `/context` and check `/state` for `answer.deferred`, including earlier rounds. `selected_options` on a deferred answer lists tentative selections. Continue with other substantive questions or offer to save. Do not repeat a question because the user deferred it.
+
+Call `/request-plan` only after the user chooses **先出方案** in the confirmation bubble. Resolve yellow leaves first. The service submits supplied drafts, defers omitted questions, advances the revision even for an empty round submission, and records one `request_plan` user event. The active session then rejects new rounds. Both check modes return the event and report `plan_requested` independently of the event cursor. Prepare the save offer and wait for the user to save.
 
 ## Short queries, recovery and evidence
 
@@ -80,9 +83,9 @@ The server retains compatibility last_submission {revision,round,at,cause} in me
 
 The approved visual basis is v7.html / VISUAL-SPEC.md: paper #efe9dc, tapered ink #2f2c26, per-round watercolor, five white petals, yellow leaves and hanging fruit. The old Claude prototype is an interaction reference. Production contains no prototype questions, simulated answers, fast-forward or fake-generation controls.
 
-The workbench presents one question. A confirmed draft blooms and a deferred draft shows a pause symbol. The user submits both kinds together from the round summary. Dirty drafts warn on refresh/close. Saved answers recover through /state. The current conversation authors each next round, ordinarily 3–5 questions with a soft count. Published candidates keep the revision captured before generation.
+The workbench presents one question. A confirmed draft blooms and a deferred draft shows a pause symbol. The user submits both kinds together from the round summary or by confirming **先出方案**. Ask for confirmation even when the count of unanswered questions is zero. **我再答几题** closes the bubble and preserves drafts. Dirty drafts warn on refresh/close. Saved answers recover through /state. The current conversation authors each next round, ordinarily 3–5 questions with a soft count. Published candidates keep the revision captured before generation.
 
-Waiting loops a visual extension, without adding rounds/nodes or cumulative tree height. The exact waiting text is “正在想下一轮的问题…”, then after 60 seconds “还在想，可以先回看本轮回答”. The card always displays “生长中” and elapsed seconds, including after the last yellow leaf is reviewed. Timers use a process-local server start timestamp and a browser monotonic clock, survive polling and reconnect, and reset for a genuinely new wait/job. Transport loss reconnects. The human can edit during waiting. All transitive dependencies participate in review. A changed upstream also invalidates in-progress review drafts even when their status was already needs_review. Unrelated drafts survive. Reduced motion keeps text and stops movement.
+Waiting loops a visual extension, without adding rounds/nodes or cumulative tree height. While waiting for the next round, the card shows “正在想下一轮的问题…”, then after 60 seconds “还在想，可以先回看本轮回答”. After the user requests a plan, it shows “正在准备保存…”. The card always displays “生长中” and elapsed seconds, including after the last yellow leaf is reviewed. Timers use a process-local server start timestamp and a browser monotonic clock, survive polling and reconnect, and reset for a genuinely new wait/job. Transport loss reconnects. The human can edit during waiting. All transitive dependencies participate in review. A changed upstream also invalidates in-progress review drafts even when their status was already needs_review. Unrelated drafts survive. Reduced motion keeps text and stops movement.
 
 ### Document and projection endpoints
 

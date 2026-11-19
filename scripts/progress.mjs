@@ -3,6 +3,7 @@ export const AI_CHECK_TIMEOUT_MS = 30_000;
 export const HEARTBEAT_INTERVAL_MS = 10_000;
 export const SHORT_QUERY_TIMEOUT_MS = 60_000;
 export const HEARTBEAT_LEASE_MS = 3 * 60_000;
+const SUBMISSION_EVENTS = ['submit', 'review', 'request_plan'];
 export class InterviewProgress {
   constructor(getTree, { log = null, getPhase = () => null, onUserEvent = () => {} } = {}) {
     Object.assign(this, { getTree, log, getPhase, onUserEvent });
@@ -16,6 +17,7 @@ export class InterviewProgress {
     this.work = new Map();
     this.events = [];
     this.sequence = 0;
+    this.planRequested = log?.after(0).some(e => e.kind === 'request_plan') ?? false;
     this.status();
   }
   record(event, detail = {}) {
@@ -48,7 +50,7 @@ export class InterviewProgress {
             e =>
               e.ready_for_ai &&
               e.revision === this.getTree().revision &&
-              ['submit', 'review'].includes(e.kind)
+              SUBMISSION_EVENTS.includes(e.kind)
           )
         : null;
     let delay = null;
@@ -125,6 +127,7 @@ export class InterviewProgress {
             ready_for_ai: tree.status === 'active' && tree.nodes.every(n => n.status === 'answered')
           };
     if (!this.log) this.events.push(e);
+    if (kind === 'request_plan') this.planRequested = true;
     this.onUserEvent();
   }
   status() {
@@ -144,6 +147,7 @@ export class InterviewProgress {
       session_id: tree.session_id,
       revision: tree.revision,
       sequence: this.log?.sequence ?? this.sequence,
+      plan_requested: tree.status === 'active' && this.planRequested,
       stage: offered
         ? 'waiting_for_save'
         : waiting
@@ -184,14 +188,16 @@ export class InterviewProgress {
   }
   onMutation(cause) {
     const tree = this.getTree();
-    if (['submit', 'review'].includes(cause) && tree.nodes.every(n => n.status === 'answered'))
+    const submission = SUBMISSION_EVENTS.includes(cause);
+    if (cause === 'request_plan') this.startedAt = null;
+    if (submission && tree.nodes.every(n => n.status === 'answered'))
       this.lastSubmission = {
         revision: tree.revision,
         round: tree.current_round,
         at: Date.now(),
         cause
       };
-    if (['submit', 'review', 'reopen'].includes(cause)) this.userEvent(cause);
+    if (submission || cause === 'reopen') this.userEvent(cause);
     this.status();
   }
 }

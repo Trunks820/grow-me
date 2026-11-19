@@ -7,7 +7,8 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { composeDocument } from './compose-document.mjs';
 import { validateDocument } from './document.mjs';
-import { chapters } from '../assets/topics.mjs';
+import { answerText, chapters } from '../assets/topics.mjs';
+import { isDeferred } from '../assets/answers.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'grow-me-interactive-'));
 const stateFile = join(root, 'tree.json');
@@ -44,9 +45,9 @@ const tree = {
         { id: 'club', label: '固定读书会老成员' },
         { id: 'open', label: '任何有兴趣的新读者' }
       ],
-      answer: null,
+      answer: { option_ids: [], text: '', deferred: true },
       depends_on: [],
-      status: 'pending',
+      status: 'answered',
       round: 1
     },
     {
@@ -122,26 +123,32 @@ try {
   };
 
   const get = async path => (await fetch(started.url + path)).json();
+  const offerDocument = async state => {
+    const result = await post('/document/control', {
+      action: 'offer',
+      expected_session_id: state.session_id,
+      expected_revision: state.revision
+    });
+    if (result.phase === 'offered') console.log('Document offer triggered!');
+  };
 
   // Watch for submissions and automate round progression
   let round2Added = false;
-  let offered = false;
+  let offering = false;
   let documentBuilt = false;
 
   const loop = setInterval(async () => {
     try {
       const state = await get('/state');
       const doc = await get('/document/status');
+      const progress = await get('/progress');
+      const allAnswered = state.status === 'active' && state.nodes.every(n => n.status === 'answered');
 
       // Round 1 answered -> wait 2s -> grow Round 2 branches!
-      if (!round2Added && state.current_round === 1) {
-        const r1Answered = state.nodes
-          .filter(n => n.round === 1)
-          .every(n => n.status === 'answered');
-        if (r1Answered && state.status === 'active') {
+      if (!progress.plan_requested && allAnswered && state.current_round === 1) {
+        if (!round2Added) {
           round2Added = true;
           setTimeout(async () => {
-            const current = await get('/state');
             const round2Nodes = [
               {
                 id: 'format',
@@ -186,38 +193,31 @@ try {
                 round: 2
               }
             ];
-            await post('/round', {
-              expected_session_id: current.session_id,
-              expected_revision: current.revision,
+            const result = await post('/round', {
+              expected_session_id: state.session_id,
+              expected_revision: state.revision,
               round: 2,
               nodes: round2Nodes
-            });
-            console.log('Round 2 branches grew!');
+            }).catch(() => null);
+            if (result?.ok) console.log('Round 2 branches grew!');
+            else round2Added = false;
           }, 2000);
         }
       }
 
-      // Round 2 answered -> wait 1.5s -> offer saving document!
-      if (round2Added && !offered && state.current_round === 2) {
-        const r2Answered = state.nodes
-          .filter(n => n.round === 2)
-          .every(n => n.status === 'answered');
-        if (r2Answered && state.status === 'active') {
-          offered = true;
+      if (allAnswered && doc.phase === 'idle') {
+        if (progress.plan_requested) await offerDocument(state);
+        else if (state.current_round === 2 && !offering) {
+          offering = true;
           setTimeout(async () => {
-            const current = await get('/state');
-            await post('/document/control', {
-              action: 'offer',
-              expected_session_id: current.session_id,
-              expected_revision: current.revision
-            });
-            console.log('Document offer triggered!');
+            await offerDocument(state).catch(() => {});
+            offering = false;
           }, 1500);
         }
       }
 
       // User clicked "保存并生成任务文档" -> phase becomes 'requested' -> compose document!
-      if (offered && !documentBuilt && doc.phase === 'requested') {
+      if (!documentBuilt && doc.phase === 'requested') {
         documentBuilt = true;
         const current = await get('/state');
         const control = async (action, extra = {}) => {
@@ -247,13 +247,19 @@ try {
           view: 'chapter',
           chapter_id: chapter.id,
           title: titles[i] ?? chapter.title,
+          deferred_questions: chapter.nodes
+            .filter(n => isDeferred(n.answer))
+            .map(n => n.question),
           html:
             `<p>本章节汇总了围绕该核心主题推导的详细方案与边界约束。</p>` +
             chapter.nodes
-              .map(
-                n =>
-                  `<details><summary>${esc(n.question)}</summary><p>${esc(n.answer?.text || n.answer?.option_ids?.join(' / ') || '已确认')}</p></details>`
-              )
+              .map(n => {
+                const answer = answerText(n);
+                const text = isDeferred(n.answer)
+                  ? ['待定', answer].filter(Boolean).join(' · ')
+                  : answer || '已确认';
+                return `<details><summary>${esc(n.question)}</summary><p>${esc(text)}</p></details>`;
+              })
               .join('') +
             `<p><a href="#R${i + 1}">需求定义</a> · <a href="#W${i + 1}">开发任务</a> · <a href="#AC${i + 1}">验收标准</a></p>`
         }));
