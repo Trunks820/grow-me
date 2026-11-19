@@ -32,6 +32,7 @@ const pageId = crypto.randomUUID();
 const pauseText = () =>
   `已 ${Math.max(0, Math.floor((assistantSilenceSeconds(aiActivity) ?? 0) + (performance.now() - aiObservedAt) / 1000))} 秒没收到 AI 回应，回聊天窗口发\"继续\"`;
 let state,
+  draftsSaved = false,
   documentState = { phase: 'idle' },
   planRequested = false,
   currentId = null,
@@ -87,6 +88,53 @@ const ready = n =>
 const valid = (n, a) => ready(n) && selectionValid(n, a);
 const openQuestions = () =>
   state.nodes.filter(n => n.round === state.current_round && n.status === 'pending');
+const draftStorageKey = () => `grow-me:drafts:${state.session_id}`;
+
+function readSavedDrafts() {
+  try {
+    return JSON.parse(localStorage.getItem(draftStorageKey()));
+  } catch {
+    return null;
+  }
+}
+function removeStaleDrafts(saved) {
+  if (saved?.revision < state.revision) {
+    try {
+      localStorage.removeItem(draftStorageKey());
+    } catch {}
+  }
+}
+function saveDrafts() {
+  draftsSaved = false;
+  const saved = readSavedDrafts();
+  if (!drafts.size) {
+    removeStaleDrafts(saved);
+    return;
+  }
+  if (saved?.revision > state.revision) return;
+  try {
+    localStorage.setItem(
+      draftStorageKey(),
+      JSON.stringify({ revision: state.revision, answers: Object.fromEntries(drafts) })
+    );
+    draftsSaved = true;
+  } catch {}
+}
+function restoreDrafts() {
+  if (state.schema_version !== 2) return;
+  const saved = readSavedDrafts();
+  removeStaleDrafts(saved);
+  if (saved?.revision !== state.revision || state.status !== 'active') return;
+  for (const node of openQuestions()) {
+    const answer = saved.answers?.[node.id];
+    if (valid(node, answer)) {
+      const { option_ids, text } = answer;
+      drafts.set(node.id, { option_ids, text, ...(isDeferred(answer) ? { deferred: true } : {}) });
+    }
+  }
+  draftsSaved = drafts.size > 0;
+}
+
 const reviews = () => state.nodes.filter(n => n.status === 'needs_review');
 const isWaiting = () =>
   state?.schema_version === 2 &&
@@ -485,6 +533,7 @@ function inputs(n, host) {
       });
     else {
       drafts.set(n.id, structuredClone(answer));
+      saveDrafts();
       working.delete(n.id);
       handleAnswer(n.id);
       closeNote();
@@ -512,7 +561,10 @@ function renderSummary(host) {
     });
   const title = el('h2', `第 ${state.current_round} 轮 · 答案核对`, 'q');
   title.id = 'node-question';
-  host.append(title, list, el('p', '本轮未提交 · 刷新或关闭会丢失这些草稿。', 'draft-hint'));
+  const draftHint = draftsSaved
+    ? '本轮未提交 · 草稿已存于此浏览器。'
+    : '本轮未提交 · 刷新或关闭可能丢失草稿。';
+  host.append(title, list, el('p', draftHint, 'draft-hint'));
   const submit = button(
     '提交本轮答案',
     () =>
@@ -1364,7 +1416,7 @@ window.visualViewport?.addEventListener('resize', syncNotePosition);
 window.visualViewport?.addEventListener('scroll', syncNotePosition);
 document.querySelector('.tree-controls').addEventListener('click', syncNotePosition);
 window.addEventListener('beforeunload', event => {
-  if (state?.status === 'active' && (drafts.size || working.size)) {
+  if (state?.status === 'active' && (working.size || (drafts.size && !draftsSaved))) {
     event.preventDefault();
     event.returnValue = '';
   }
@@ -1502,6 +1554,8 @@ async function refresh(force = false) {
       waitingSince = null;
     }
     state = next;
+    if (!old) restoreDrafts();
+    else if (state.schema_version === 2) saveDrafts();
   }
   documentState = doc;
   planRequested = Boolean(progress.plan_requested);
