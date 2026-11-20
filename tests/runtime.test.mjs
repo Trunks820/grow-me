@@ -219,7 +219,22 @@ test(
       const target = realpathSync(root);
       assert.equal(dirname(target).toLowerCase(), realpathSync(tmpdir()).toLowerCase());
       assert.match(basename(target), /^grow-w11 /);
-      rmSync(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+      // The copied agy.exe can stay locked for a while after its processes exit
+      // (for example while antivirus scans it), so cleanup waits up to 15 s and
+      // then leaves the folder to the OS instead of failing a passed test.
+      for (let i = 0; ; i++) {
+        try {
+          rmSync(target, { recursive: true, force: true });
+          break;
+        } catch (error) {
+          if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(error.code)) throw error;
+          if (i === 60) {
+            t.diagnostic(`Temporary folder still in use after 15 s, left in place: ${target}`);
+            break;
+          }
+          await new Promise(resolve => setTimeout(resolve, 250));
+        }
+      }
     });
 
     const seed = tree();
