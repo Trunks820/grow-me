@@ -1,4 +1,4 @@
-"""Answer a grow-me interview in Chromium using a JSON preset."""
+"""Answer a grow-me interview in Chromium using presets or current page guidance."""
 
 import argparse
 import asyncio
@@ -6,13 +6,16 @@ import json
 import math
 import sys
 import time
+from http.client import HTTPException
 from pathlib import Path
 from urllib.parse import urlsplit
+from urllib.request import urlopen
 
 from playwright.async_api import Error as PlaywrightError, async_playwright
 
 
 PASSED, FAILED, UNTESTED, MEASURED = '通过', '失败', '未测', '已测'
+DEFAULT_TEXT = '按你推荐的来，先做最小可用的版本。'
 CHECKS = {
     'recommendation_preselected': '推荐是否预选',
     'answers_unchanged': '提交答案是否保持原样',
@@ -63,7 +66,7 @@ def read_preset(path):
     return rounds
 
 
-def match_answers(nodes, presets, number):
+def match_answers(nodes, presets, number, auto=False):
     matches, positional = {}, []
     for preset in presets:
         keyword = preset.get('keyword')
@@ -75,9 +78,26 @@ def match_answers(nodes, presets, number):
                 f'第 {number} 轮有关键词无匹配、匹配多题或重复匹配同一题。')
         matches[ids[0]] = preset
     remaining = [node['id'] for node in nodes if node['id'] not in matches]
-    require(len(positional) <= len(remaining), f'第 {number} 轮的顺序预设多于剩余题目。')
+    if auto and len(positional) < len(remaining):
+        fallback = positional[-1] if positional else {}
+        positional.extend([fallback] * (len(remaining) - len(positional)))
+    elif not auto:
+        require(len(positional) <= len(remaining), f'第 {number} 轮的顺序预设多于剩余题目。')
     matches.update(zip(remaining, positional))
     return matches
+
+
+def auto_preset(node, preset, recommended_ids):
+    text = preset.get('text', '')
+    if preset.get('deferred'):
+        return {'deferred': True, 'text': text}
+    if node['input'] == 'text':
+        return {'text': text if text.strip() else DEFAULT_TEXT}
+    options = node['options']
+    selected = [index for index, option in enumerate(options, 1) if option['id'] in recommended_ids]
+    if not selected:
+        selected = [next((i for i, option in enumerate(options, 1) if not option.get('exclusive')), 1)]
+    return {'options': selected[:1] if node['input'] == 'single_choice' else selected, 'text': text}
 
 
 def expected_answer(node, preset, description):
@@ -104,6 +124,60 @@ def expected_answer(node, preset, description):
     require(len(selected) < 2 or not any(o.get('exclusive') and o['id'] in selected for o in node['options']),
             f'{description}的互斥选项须单独选择。')
     return answer
+
+
+def page_target(url):
+    target = urlsplit(url)
+    require(target.scheme in ('http', 'https') and target.hostname and not target.username
+            and not target.password, '需要可在 Chromium 打开的 HTTP(S) 网页地址。')
+    return target
+
+
+def get_json(target, path, timeout=3):
+    endpoint = target._replace(path=path, query='', fragment='').geturl()
+    try:
+        with urlopen(endpoint, timeout=timeout) as response:
+            data = json.load(response)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, HTTPException):
+        return {}
+
+
+def startup_receipts(directory):
+    logs = []
+    for log in directory.rglob('.grow-me-server-*.log'):
+        try:
+            logs.append((log.stat().st_mtime_ns, log))
+        except OSError:
+            continue
+    for _, log in sorted(logs, reverse=True):
+        try:
+            with log.open(encoding='utf-8-sig', errors='replace') as stream:
+                for line in stream:
+                    try:
+                        receipt = json.loads(line)
+                        if not isinstance(receipt, dict):
+                            continue
+                        url, session = receipt.get('url'), receipt.get('session_id')
+                        if isinstance(url, str) and isinstance(session, str) and session:
+                            yield page_target(url), session
+                    except (ValueError, ScenarioError):
+                        continue
+        except OSError:
+            continue
+
+
+async def find_page(directory, timeout):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for target, session in startup_receipts(directory):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if get_json(target, '/state', min(1, remaining)).get('session_id') == session:
+                return target, session
+        await asyncio.sleep(min(0.5, max(0, deadline - time.monotonic())))
+    raise asyncio.TimeoutError
 
 
 def epoch_ms():
@@ -151,14 +225,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 class SimUser:
-    def __init__(self, url, rounds, state_file):
-        target = urlsplit(url)
-        require(target.scheme in ('http', 'https') and target.hostname and not target.username
-                and not target.password, '需要可在 Chromium 打开的 HTTP(S) 网页地址。')
-        self.url = url
+    def __init__(self, target, rounds, state_file, *, auto=False, session=None):
+        self.url = target.geturl()
         self.origin = self.origin_of(target)
         self.plans = rounds
         self.state_file = state_file
+        self.auto = auto
+        self.session = session
         self.tree = None
         self.document = None
         self.progress = []
@@ -198,11 +271,12 @@ class SimUser:
         source = data.get('source') if url.path == '/document/status' else data
         if not source:
             return
-        if self.tree and source.get('session_id') != self.tree['session_id']:
+        if self.session is not None and source.get('session_id') != self.session:
             if url.path == '/state':
                 self.identity_changed = True
             return
         if url.path == '/state':
+            self.session = data['session_id']
             if not self.tree or data['revision'] >= self.tree['revision']:
                 self.tree = data
             self.compare_answers(data)
@@ -234,14 +308,19 @@ class SimUser:
         require(await dialog.get_attribute('data-node-id') == node['id'], '页面打开了另一道题。')
         return dialog
 
-    async def fill_answer(self, node, dialog, answer, number, position):
+    async def recommendations_for(self, dialog, number, position):
+        # The page renders badges only for current, valid recommendations.
         recommended = await dialog.locator('label:has(.recommendation-badge) input').evaluate_all(
-            'inputs => inputs.map(input => input.checked)'
+            'inputs => inputs.map(input => ({ id: input.value, checked: input.checked }))'
         )
         if recommended:
             self.recommendations.append({
-                'round': number, 'position': position, 'preselected': any(recommended),
+                'round': number, 'position': position,
+                'preselected': any(option['checked'] for option in recommended),
             })
+        return {option['id'] for option in recommended}
+
+    async def fill_answer(self, node, dialog, answer, number, position):
         fields = dialog.locator('.choice-group input')
         for index, option in enumerate(node['options']):
             field = fields.nth(index)
@@ -310,19 +389,24 @@ class SimUser:
 
     async def answer_round(self, tree, nodes):
         number = tree['current_round']
-        require(number <= len(self.plans), f'第 {number} 轮没有预设。')
-        plan = self.plans[number - 1]
+        has_plan = number <= len(self.plans)
+        require(has_plan or self.auto, f'第 {number} 轮没有预设。')
+        plan = self.plans[number - 1] if has_plan else {}
         enough = 'enough_after' in plan
         count = plan.get('enough_after', len(nodes))
         require(count <= len(nodes) and plan.get('reload_after', 0) <= count,
                 f'第 {number} 轮题数少于预设的刷新或出方案位置。')
-        matches = match_answers(nodes, plan.get('answers', []), number)
+        matches = match_answers(nodes, plan.get('answers', []), number, self.auto)
         drafts = {}
         for index, node in enumerate(nodes[:count], 1):
             self.step = f'第 {number} 轮第 {index} 题'
             require(node['id'] in matches, f'{self.step}没有匹配的预设。')
-            answer = expected_answer(node, matches[node['id']], self.step)
+            preset = matches[node['id']]
             dialog = await self.open_question(node)
+            recommended_ids = await self.recommendations_for(dialog, number, index)
+            if self.auto:
+                preset = auto_preset(node, preset, recommended_ids)
+            answer = expected_answer(node, preset, self.step)
             await self.fill_answer(node, dialog, answer, number, index)
             drafts[node['id']] = answer
             if index == plan.get('reload_after'):
@@ -521,23 +605,39 @@ class SimUser:
         return self.report
 
 
-async def run(url, answers, state, timeout):
+async def run(args):
     actor = None
+    step = '读取预设'
     try:
-        actor = SimUser(url, read_preset(answers), state)
-        await asyncio.wait_for(actor.interview(), timeout)
+        rounds = read_preset(args.answers) if args.answers else []
+        session = None
+        if args.find is not None:
+            step = '查找访谈网页'
+            target, session = await find_page(args.find, args.find_timeout)
+        else:
+            step = '读取访谈地址'
+            target = page_target(args.url)
+        state = args.state
+        if state is None:
+            recovery = get_json(target, '/recovery')
+            path = recovery.get('state_file')
+            if isinstance(path, str) and path and (session is None or recovery.get('session_id') == session):
+                state = Path(path)
+        actor = SimUser(target, rounds, state, auto=args.auto, session=session)
+        await asyncio.wait_for(actor.interview(), args.timeout)
         report = actor.score()
         report['status'] = ('failed' if actor.page_errors or any(
             check['status'] == FAILED for check in report['checks'].values()) else 'completed')
         return report
     except asyncio.TimeoutError:
-        status, reason = 'timed_out', '达到总等待上限。'
+        status = 'timed_out'
+        reason = '等待上限内未找到可用的服务回执。' if actor is None else '达到访谈等待上限。'
     except ScenarioError as error:
         status, reason = 'failed', str(error)
     except (OSError, ValueError, PlaywrightError) as error:
         status, reason = 'failed', f'读取预设或操作网页失败（{type(error).__name__}）。'
     report = actor.score() if actor else {'rounds': [], 'checks': {}}
-    report.update(status=status, reason=reason, step=actor.step if actor else '读取预设')
+    report.update(status=status, reason=reason, step=actor.step if actor else step)
     return report
 
 
@@ -564,15 +664,23 @@ def write_report(report, path):
 def main():
     sys.stdout.reconfigure(encoding='utf-8')
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--url', required=True)
-    parser.add_argument('--answers', type=Path, required=True)
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument('--url', help='open a known interview URL')
+    target.add_argument('--find', type=Path, help='wait for a live server receipt under this directory')
+    parser.add_argument('--find-timeout', type=float, default=1800,
+                        help='time to wait for a server receipt in seconds (default: 1800)')
+    parser.add_argument('--auto', action='store_true', help='adapt answers to the questions on the page')
+    parser.add_argument('--answers', type=Path, help='JSON preset (optional with --auto)')
     parser.add_argument('--report', type=Path, default=Path('sim-user-report.json'))
-    parser.add_argument('--state', type=Path, help='tree.json path for optional runtime timing evidence')
-    parser.add_argument('--timeout', type=float, default=1800, help='total time in seconds (default: 1800)')
+    parser.add_argument('--state', type=Path, help='tree.json path for timing evidence (default: from /recovery)')
+    parser.add_argument('--timeout', type=float, default=1800, help='interview time in seconds (default: 1800)')
     args = parser.parse_args()
-    if not math.isfinite(args.timeout) or args.timeout <= 0:
-        parser.error('--timeout must be a finite positive number')
-    return write_report(asyncio.run(run(args.url, args.answers, args.state, args.timeout)), args.report)
+    if args.answers is None and not args.auto:
+        parser.error('--answers is required unless --auto is enabled')
+    for option, value in [('--timeout', args.timeout), ('--find-timeout', args.find_timeout)]:
+        if not math.isfinite(value) or value <= 0:
+            parser.error(f'{option} must be a finite positive number')
+    return write_report(asyncio.run(run(args)), args.report)
 
 
 if __name__ == '__main__':

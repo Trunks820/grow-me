@@ -7,11 +7,19 @@ import sys
 import time
 from pathlib import Path
 
-from browser_acceptance import BASE, Service, node, request, seed
+from browser_acceptance import BASE, Service, document_fixture, node, request, seed
 
 
 NOTE = '  邮件附上报名入口\n保留 <原文> 和空格  '
 DEFERRED = '等场地回复\n再定日期'
+
+
+def wait_receipt(child, kind):
+    stdout, _ = child.communicate(timeout=25)
+    assert child.returncode == 0, 'AI wait command failed'
+    result = json.loads(stdout)
+    assert [entry['kind'] for entry in result['events']] == [kind]
+    return result
 
 
 def run(work):
@@ -42,13 +50,6 @@ def run(work):
     def start_wait():
         return process(['node', str(BASE / 'scripts/check.mjs'), '--wait', '--url', service.url,
                         '--session', session_id])
-
-    def wait_receipt(child, kind):
-        stdout, _ = child.communicate(timeout=25)
-        assert child.returncode == 0, 'AI wait command failed'
-        result = json.loads(stdout)
-        assert [entry['kind'] for entry in result['events']] == [kind]
-        return result
 
     try:
         session_id = service.state()['session_id']
@@ -165,7 +166,110 @@ def run(work):
         service.close()
 
 
+def run_auto_and_find(work):
+    work.mkdir(parents=True, exist_ok=True)
+    channels = node('channels', '需要哪些通知渠道？', options=[
+        {'id': 'mail', 'label': '邮件'}, {'id': 'inbox', 'label': '站内通知'},
+        {'id': 'push', 'label': '推送'},
+    ])
+    channels.update(input='multi_choice', recommendation={
+        'option_ids': ['inbox', 'push'], 'reason': '站内通知和推送便于跟进。', 'source_ids': [],
+    })
+    priority = node('priority', '怎么安排首版？', options=[
+        {'id': 'skip', 'label': '都不做', 'exclusive': True},
+        {'id': 'basic', 'label': '先做基础版'}, {'id': 'full', 'label': '直接做完整版'},
+    ])
+    priority['input'] = 'multi_choice'
+    followup = node('check', '怎样验收？', deps=['channels'], round=2, options=[
+        {'id': 'sample', 'label': '抽样验证'}, {'id': 'all', 'label': '逐项验证'},
+    ])
+    followup['recommendation'] = {
+        'option_ids': ['all'], 'reason': '两种通知渠道都要核对。', 'source_ids': ['channels'],
+    }
+    tree = seed([channels, node('date', '何时上线？'), node('details', '补充要求？'),
+                 priority, node('venue', '场地在哪里？')])
+    preset_file = work / 'answers.json'
+    preset_file.write_text(json.dumps({'rounds': [
+        {'reload_after': 1, 'answers': [
+            {'options': [99]}, {'text': '先覆盖报名。'},
+            {'keyword': '通知渠道', 'options': [1], 'text': NOTE},
+            {'keyword': '场地', 'deferred': True, 'options': [99], 'text': DEFERRED},
+        ]},
+        {'enough_after': 1, 'answers': [{'text': '验收报名。'}, {'options': [99]}, {'text': '多余预设'}]},
+    ]}, ensure_ascii=False), encoding='utf-8')
+    report_file = work / 'sim-user-report.json'
+    user = subprocess.Popen([
+        sys.executable, str(BASE / 'tests/sim_user.py'), '--auto', '--find', str(work),
+        '--find-timeout', '15', '--answers', str(preset_file), '--report', str(report_file),
+        '--timeout', '40',
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
+    service = None
+
+    def wait(kind):
+        command = ['node', str(BASE / 'scripts/check.mjs'), '--wait', '--url', service.url,
+                   '--session', tree['session_id']]
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True, encoding='utf-8') as child:
+            try:
+                return wait_receipt(child, kind)
+            finally:
+                if child.poll() is None:
+                    child.terminate()
+
+    def post(path, **payload):
+        code, result = request(service.url, path, {'expected_revision': service.state()['revision'], **payload})
+        assert code == 200, (path, code)
+        return result
+
+    try:
+        time.sleep(1)
+        assert user.poll() is None, 'simulator exited before the service started'
+        service = Service(work / 'runtime', tree)
+        # Service runs under a managed child in browser tests. Mirror its stdout in a startup log.
+        (service.work / '.grow-me-server-test.log').write_text(
+            'starting\n' + json.dumps(service.startup) + '\n', encoding='utf-8',
+        )
+        wait('submit')
+        assert [n['answer'] for n in service.state()['nodes']] == [
+            {'option_ids': ['inbox', 'push'], 'text': NOTE},
+            {'option_ids': [], 'text': '按你推荐的来，先做最小可用的版本。'},
+            {'option_ids': [], 'text': '先覆盖报名。'},
+            {'option_ids': ['basic'], 'text': '先覆盖报名。'},
+            {'option_ids': [], 'text': DEFERRED, 'deferred': True},
+        ]
+        post('/round', round=2, nodes=[followup, node('extra', '还有什么要确认？', round=2)])
+        wait('request_plan')
+        assert [n['answer'] for n in service.state()['nodes'][-2:]] == [
+            {'option_ids': ['all'], 'text': '验收报名。'},
+            {'option_ids': [], 'text': '', 'deferred': True},
+        ]
+        post('/document/control', action='offer')
+        wait('save')
+        status = request(service.url, '/document/status')[1]
+        post('/document/control', action='claim', job_id=status['job_id'])
+        output = Path(service.startup['document_file'])
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(document_fixture(status), encoding='utf-8')
+        post('/document/control', action='ready', job_id=status['job_id'])
+
+        user.communicate(timeout=15)
+        report = json.loads(report_file.read_text(encoding='utf-8'))
+        assert user.returncode == 0 and report['status'] == 'completed', report
+        assert [entry['kind'] for entry in report['rounds']] == ['submit', 'request_plan']
+        assert report['checks']['draft_survives_reload']['status'] == '通过'
+        assert report['checks']['submission_discovery']['status'] == '已测'
+        print(json.dumps({'status': 'passed', 'auto': True, 'find': True}))
+    finally:
+        if user.poll() is None:
+            user.terminate()
+            user.communicate(timeout=5)
+        if service:
+            service.close()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--work', type=Path, required=True)
-    run(parser.parse_args().work.resolve())
+    work = parser.parse_args().work.resolve()
+    run(work)
+    run_auto_and_find(work / 'auto-find')
