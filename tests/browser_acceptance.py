@@ -170,7 +170,7 @@ def run_suite(work,scenario='all',layout_fixture='v7'):
                 assert status['phase']=='requested';request(service.url,'/document/control',{'action':'claim','expected_revision':0,'job_id':status['job_id']})
                 output=Path(service.startup['document_file']);output.parent.mkdir(parents=True,exist_ok=True);output.write_text(document_fixture(status),encoding='utf-8')
                 assert request(service.url,'/document/control',{'action':'ready','expected_revision':0,'job_id':status['job_id']})[0]==200
-                expect(page.get_by_role('link',name='打开完整任务文档',exact=True)).to_be_visible();expect(page.locator('#tree-canvas')).to_have_attribute('data-growing','false',timeout=25000)
+                expect(page.get_by_role('link',name='打开完整方案',exact=True)).to_be_visible();expect(page.locator('#tree-canvas')).to_have_attribute('data-growing','false',timeout=25000)
                 roots=len([n for n in tree['nodes'] if not n['depends_on']]);expect(page.locator('.tree-fruit')).to_have_count(roots)
                 entities=page.locator('.tree-node .tree-symbol,.tree-fruit .fruit-body').evaluate_all('items=>items.map(n=>{const r=n.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height}})')
                 overlaps=[]

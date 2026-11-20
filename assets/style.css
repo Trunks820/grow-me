@@ -12,7 +12,7 @@
   --line-strong: #b9b09c;
   --accent: #9d6844; /* focus ring, ochre of the flower heart */
   --leaf: #c9a25e; /* needs_review */
-  --fruit: #b5654a;
+  --fruit: #a4543e;
   --wash: rgba(47, 44, 38, 0.045);
   --wash-strong: rgba(47, 44, 38, 0.08);
   --bubble-fill: #fbf8f1;
@@ -498,6 +498,10 @@ main:has(#card[data-scene='questions']) {
 }
 .tree-fruit[data-availability='generating'] {
   cursor: progress;
+}
+.fruit-number {
+  font-family: var(--sans);
+  font-weight: 700;
 }
 @keyframes question-breathe {
   0%,
@@ -1314,75 +1318,102 @@ body.note-open #ai-presence:not([data-mode='wake']) {
   padding-inline: 4px;
 }
 
-/* Document scene: chapters are fruits; one ink action, two quiet ones. */
+/* Saved interviews grow with their chapters and scroll as a page. */
+body:has(#card[data-scene='saved']) {
+  height: auto;
+  min-height: 100%;
+  overflow: auto;
+}
+main:has(#card[data-scene='saved']) {
+  position: relative;
+  inset: auto;
+  height: auto;
+  min-height: 100svh;
+  margin-inline: 28px;
+  padding-block: 82px 12px;
+  grid-template-rows: minmax(300px, 1fr) auto;
+}
+main:has(#card[data-scene='saved']) .tree-viewport {
+  position: absolute;
+  inset: 0;
+}
+#subtitle-area:has(#card[data-scene='saved']) {
+  height: auto;
+}
+#card[data-scene='saved'] {
+  position: static;
+  max-height: none;
+  overflow: visible;
+  transform: none;
+  padding-bottom: 4px;
+}
+#card[data-scene='saved'] .q {
+  font-size: clamp(19px, 2vw, 24px);
+  font-weight: 600;
+}
+main:has(#card[data-scene='saved']) .tree-controls {
+  position: absolute;
+}
+#completion-mascot {
+  position: absolute;
+  right: calc(50% + clamp(72px, 17vw, 250px));
+  bottom: 0;
+  width: clamp(50px, 9vw, 72px);
+  height: auto;
+  pointer-events: none;
+}
+body.note-open #completion-mascot {
+  visibility: hidden;
+}
 .chapters {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 6px 8px;
-  margin: 8px 0 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  margin: 10px 0 12px;
   padding: 0;
   list-style: none;
+  text-align: left;
 }
-.chapters li {
-  display: inline-flex;
+.chapter-row {
+  display: flex;
   align-items: center;
-  min-height: 28px;
-  max-width: 100%;
-  padding: 0 12px;
+  gap: 8px;
+  min-height: 36px;
+  height: 100%;
+  padding: 5px 10px;
   border: 1px dashed var(--line-strong);
-  border-radius: 999px;
-  font-size: 13px;
-  line-height: 1.5;
+  border-radius: 10px;
+  font: 14px/1.4 var(--sans);
   color: var(--text-3);
   overflow-wrap: anywhere;
 }
-.chapters li:has(a) {
-  padding: 0;
-  border: 0;
-}
-.chapters a {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 28px;
-  max-width: 100%;
-  padding: 0 12px;
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  font-size: 13px;
-  line-height: 1.5;
+.chapters a.chapter-row {
+  border-style: solid;
+  border-color: var(--line);
+  background: var(--bubble-fill);
   color: var(--text);
   text-decoration: none;
   transition:
     border-color 0.15s,
     background-color 0.15s;
 }
-.chapters a::before {
-  content: '';
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--fruit);
-}
-.chapters a::after {
-  content: '↗';
-  font-family: var(--sans);
-  font-size: 11px;
-  color: var(--text-3);
-}
-.chapters a:hover {
+.chapters a.chapter-row:hover {
   border-color: var(--ink);
   background: var(--wash);
 }
-.chapter-state {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
+.chapter-number {
+  display: grid;
+  flex: 0 0 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--wash-strong);
+  font: 700 12px/1 var(--sans);
+  color: var(--text-2);
+}
+.chapters a .chapter-number {
+  background: var(--fruit);
+  color: #fffaf0;
 }
 .chapter-pending {
   margin-left: 2px;
@@ -1624,6 +1655,25 @@ body.note-open #ai-presence:not([data-mode='wake']) {
     left: 16px;
     bottom: 6px;
     max-width: calc(100% - 32px);
+  }
+  main:has(#card[data-scene='saved']) {
+    margin-inline: 0;
+    padding-top: 76px;
+    grid-template-rows: minmax(376px, 1fr) auto;
+  }
+  main:has(#card[data-scene='saved']) .tree-viewport {
+    top: 44px;
+    height: auto;
+  }
+  body:not(.note-open) main:has(#card[data-scene='saved']):has(#ai-presence:not([hidden], [data-mode='wake'])) {
+    grid-template-rows: minmax(376px, 1fr) auto auto;
+  }
+  main:has(#card[data-scene='saved']) #node-dialog[open] {
+    position: fixed;
+    inset: auto 0 max(0px, 100vh - var(--visible-height, 100vh) - var(--visible-top, 0px)) 0;
+  }
+  .chapters {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

@@ -447,7 +447,7 @@ class SimUser:
     async def wait_in_browser(self):
         page = self.page
         save = self.button('保存并生成任务文档')
-        full = page.get_by_role('link', name='打开完整任务文档', exact=True)
+        full = page.get_by_role('link', name='打开完整方案', exact=True)
         while True:
             await self.collect_pauses()
             tree = self.tree

@@ -11,6 +11,8 @@ const trunkTaper = 1.7;
 const taperWidth = (base, tip, t, power) => base + (tip - base) * Math.pow(t, power);
 const MAX_CANVAS_HEIGHT = 0.9;
 const flowerStroke = 0.55;
+const fruitRadius = 9;
+const fruitPaintRadius = fruitRadius + 1;
 const flowers = [
   { x: -7.5, y: 5.5, offset: 3, petal: 2.6, opacity: 0.9 },
   { x: 7, y: 6.5, offset: 2.6, petal: 2.2, opacity: 0.85 },
@@ -382,7 +384,7 @@ export function layoutTree(tree) {
           })
         )
       );
-  for (const c of chapters(tree)) {
+  for (const [index, c] of chapters(tree).entries()) {
     const tip = nodes
         .filter(n => n.rootId === c.id && !nodes.some(x => x.parentId === n.id))
         .sort(
@@ -400,12 +402,16 @@ export function layoutTree(tree) {
             ...nodes.map(n => Math.hypot(n.bloomX - x, n.bloomY - y)),
             ...fruit.map(f => Math.hypot(f.x - x, f.y - y))
           );
-        const clear = nodes.every(n => {
-          const dx = x - n.bloomX,
-            dy = y - n.bloomY;
-          return dx <= flowerBounds.left - 6.5 || dx >= flowerBounds.right + 6.5 ||
-            dy <= flowerBounds.top - 6.5 || dy >= flowerBounds.bottom + 6.5;
-        });
+        const clear =
+          fruit.every(f => Math.hypot(f.x - x, f.y - y) >= 2 * fruitPaintRadius) &&
+          nodes.every(n => {
+            const dx = x - n.bloomX,
+              dy = y - n.bloomY;
+            return dx <= flowerBounds.left - fruitPaintRadius ||
+              dx >= flowerBounds.right + fruitPaintRadius ||
+              dy <= flowerBounds.top - fruitPaintRadius ||
+              dy >= flowerBounds.bottom + fruitPaintRadius;
+          });
         const clearance = woodClearance(x, y),
           score = Math.min(gap, clearance + 15);
         if ((clear && !bestClear) || (clear === bestClear && score > bestScore)) {
@@ -418,6 +424,7 @@ export function layoutTree(tree) {
     fruit.push({
       id: c.id,
       anchor: c.anchor,
+      number: index + 1,
       nodeId: tip.id,
       ...best,
       stemX: stem.x - best.x,
@@ -462,8 +469,9 @@ export function layoutTree(tree) {
 // Centre the illustration while retaining the original minimum scale.
 export function cameraFrame(tree, layout = layoutTree(tree)) {
   const b = layout.paintBounds,
-    width = Math.max(820, b.width + 140),
-    height = Math.max(840, b.height / MAX_CANVAS_HEIGHT);
+    saved = tree.status === 'complete',
+    width = saved ? Math.max(490, b.width + 64) : Math.max(820, b.width + 140),
+    height = Math.max(saved ? 560 : 840, b.height / MAX_CANVAS_HEIGHT);
   return { x: b.x + (b.width - width) / 2, y: b.y + (b.height - height) / 2, width, height };
 }
 function paintBounds(tree, layout) {
@@ -490,8 +498,8 @@ function paintBounds(tree, layout) {
   }
   for (const f of layout.fruit)
     add([
-      [f.x - 6.5, f.y - 6.5],
-      [f.x + 6.5, f.y + 6.5],
+      [f.x - fruitPaintRadius, f.y - fruitPaintRadius],
+      [f.x + fruitPaintRadius, f.y + fruitPaintRadius],
       [f.x + f.stemX, f.y + f.stemY]
     ]);
   const x = Math.min(...points.map(p => p[0])) - 2,
@@ -707,7 +715,7 @@ export function createDecisionTree(container, { onNode = () => {}, onFruit = () 
   function fruitState(group, fruit) {
     const state = options.fruitStates?.get(fruit.id) ?? 'ready',
       ready = state === 'ready',
-      title = tree.nodes.find(n => n.id === fruit.id).question;
+      title = `第 ${fruit.number} 章 · ${tree.nodes.find(n => n.id === fruit.id).question}`;
     group.dataset.availability = state;
     group.setAttribute('aria-disabled', String(!ready));
     group.setAttribute(
@@ -717,8 +725,9 @@ export function createDecisionTree(container, { onNode = () => {}, onFruit = () 
     group.querySelector('title').textContent =
       (ready ? '打开章节：' : state === 'failed' ? '章节待重试：' : '章节生成中：') + title;
     const body = group.querySelector('.fruit-body');
-    body.setAttribute('fill', ready ? '#b78263' : '#efe9dc');
+    body.setAttribute('fill', ready ? 'var(--fruit, #a4543e)' : '#efe9dc');
     body.setAttribute('stroke-dasharray', ready ? 'none' : '1.4 1.4');
+    group.querySelector('.fruit-number').setAttribute('fill', ready ? '#fffaf0' : '#625b4e');
   }
   function showFruitTip(fruit, event) {
     if (!tooltip) return;
@@ -727,7 +736,7 @@ export function createDecisionTree(container, { onNode = () => {}, onFruit = () 
     const line = document.createElement('div');
     line.textContent =
       (state === 'ready' ? '可阅读 · ' : state === 'failed' ? '待重试 · ' : '生成中 · ') +
-      tree.nodes.find(n => n.id === fruit.id).question;
+      `第 ${fruit.number} 章 · ${tree.nodes.find(n => n.id === fruit.id).question}`;
     tooltip.append(line);
     tooltip.hidden = false;
     const box = event.currentTarget.getBoundingClientRect();
@@ -1120,7 +1129,7 @@ export function createDecisionTree(container, { onNode = () => {}, onFruit = () 
         view.classList.toggle('is-current', opts.currentId === n.id);
       }
       if (tree.status === 'complete' && target)
-        layout.fruit.forEach((fruit, index) => {
+        layout.fruit.forEach(fruit => {
           let group = fruitViews.get(fruit.id);
           if (group) {
             fruitState(group, fruit);
@@ -1131,44 +1140,42 @@ export function createDecisionTree(container, { onNode = () => {}, onFruit = () 
             role: 'button',
             tabindex: -1,
             'data-fruit-id': fruit.id,
-            'data-index': index,
-            transform: `translate(${fruit.x} ${fruit.y})`,
-            'aria-label': `文档章节：${tree.nodes.find(n => n.id === fruit.id).question}`
+            'data-index': fruit.number - 1,
+            transform: `translate(${fruit.x} ${fruit.y})`
           });
           const body = svg('g', { class: 'fruit-growth' });
           body.append(
             svg('circle', {
-              r: 5.2,
-              fill: '#b78263',
+              r: fruitRadius,
               stroke: '#75675f',
               'stroke-width': '.5',
               class: 'fruit-body'
             }),
             svg('ellipse', {
               cx: 1.8,
-              cy: -5.1,
+              cy: -fruitRadius,
               rx: 2.6,
               ry: 1,
               fill: '#888875',
-              transform: 'rotate(-24 1.8 -5.1)'
+              transform: `rotate(-24 1.8 ${-fruitRadius})`
             }),
-            svg('ellipse', {
-              cx: -1.8,
-              cy: -1.2,
-              rx: 0.9,
-              ry: 1.8,
-              fill: '#f7f2e8',
-              opacity: '.16'
-            })
+            svg(
+              'text',
+              {
+                class: 'fruit-number',
+                'font-size': Math.min(12, 24 / String(fruit.number).length),
+                'text-anchor': 'middle',
+                'dominant-baseline': 'central',
+                'aria-hidden': 'true',
+                'pointer-events': 'none'
+              },
+              fruit.number
+            )
           );
           group.append(
-            svg(
-              'title',
-              {},
-              `打开第 ${index + 1} 章：${tree.nodes.find(n => n.id === fruit.id).question}`
-            ),
+            svg('title'),
             svg('path', {
-              d: `M${fruit.stemX} ${fruit.stemY} Q${fruit.stemX - 2} -10 0 -5`,
+              d: `M${fruit.stemX} ${fruit.stemY} Q${fruit.stemX - 2} ${-fruitRadius - 5} 0 ${-fruitRadius}`,
               fill: 'none',
               stroke: '#2f2c26',
               'stroke-width': '.85',

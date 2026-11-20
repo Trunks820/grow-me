@@ -24,6 +24,7 @@ const card = document.querySelector('#card'),
   deliveryUndo = document.querySelector('#round-delivery-undo'),
   treeViewport = document.querySelector('.tree-viewport'),
   treeCanvas = document.querySelector('#tree-canvas'),
+  completionMascot = document.querySelector('#completion-mascot'),
   sheetLayout = matchMedia('(max-width: 720px)'),
   reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const drafts = new Map(),
@@ -781,37 +782,39 @@ function elapsedLine(since) {
   line.textContent = `已等待 ${Math.max(0, Math.floor((performance.now() - Number(line.dataset.since)) / 1000))} 秒`;
   return line;
 }
-function chapterList() {
-  const list = el('ul', undefined, 'chapters');
-  chapters(state).forEach(c => {
+function chapterList(sections) {
+  const list = el('ol', undefined, 'chapters');
+  list.setAttribute('role', 'list');
+  sections.forEach((c, index) => {
     const li = el('li'),
       ready =
         documentMatches() &&
         (documentState.phase === 'ready' ||
-          documentState.chapters?.some(x => x.id === c.id && x.status === 'ready'));
+          documentState.chapters?.some(x => x.id === c.id && x.status === 'ready')),
+      row = el(ready ? 'a' : 'span', undefined, 'chapter-row'),
+      title = el('span', c.title, 'chapter-title');
+    row.append(el('span', String(index + 1), 'chapter-number'), title);
     if (ready) {
-      const a = el('a');
-      a.append(el('span', c.title, 'chapter-title'), el('span', ' · 可阅读', 'chapter-state'));
-      a.href =
+      row.href =
         '/document' +
         (documentState.phase === 'ready' ? '' : '?chapter=' + encodeURIComponent(c.id)) +
         '#' +
         c.anchor;
-      a.target = '_blank';
-      a.rel = 'noopener';
-      li.append(a);
+      row.target = '_blank';
+      row.rel = 'noopener';
     } else
-      li.append(
-        el('span', c.title),
+      title.append(
         el('span', documentState.phase === 'failed' ? ' · 待重试' : ' · 生成中', 'chapter-pending')
       );
+    li.append(row);
     list.append(li);
   });
   return list;
 }
 function renderDocument() {
-  const phase = documentState.phase;
-  card.append(el('p', '已保存 · 只读', 'k'));
+  const phase = documentState.phase,
+    sections = chapters(state);
+  if (phase !== 'ready') card.append(el('p', '已保存 · 只读', 'k'));
   if (phase === 'ready') {
     if (!documentMatches()) {
       card.append(
@@ -822,15 +825,11 @@ function renderDocument() {
     }
     card.append(
       el('h2', '问过的，都结成了果。', 'q'),
-      el(
-        'p',
-        `已提交 ${state.nodes.length} 题 · ${chapters(state).length} 颗果子，点击打开对应章节。`,
-        'w'
-      )
+      el('p', `${sections.length} 颗果子＝方案的 ${sections.length} 章，点果子或章名都能打开`, 'w'),
+      chapterList(sections)
     );
-    card.append(chapterList());
     const actions = el('div', undefined, 'doc-actions');
-    const link = el('a', '打开完整任务文档', 'doc-link');
+    const link = el('a', '打开完整方案', 'doc-link');
     link.href = '/document';
     link.target = '_blank';
     link.rel = 'noopener';
@@ -857,7 +856,7 @@ function renderDocument() {
     card.append(
       el('h2', '文档暂时没生成。', 'q'),
       el('p', publicError(documentState.error, '文档生成遇到问题，请重试。'), 'w'),
-      chapterList(),
+      chapterList(sections),
       button('重试生成文档', () => docAction('retry'), true),
       el('p', '答案已经保存，不用重新答。', 'w')
     );
@@ -875,8 +874,8 @@ function renderDocument() {
     waitingHeader('正在生成任务文档…', '生长中 · ' + stage);
     card.append(
       elapsedLine(documentSince),
-      el('p', `已完成 ${done} / ${chapters(state).length} 章；完成的章节可以先读。`, 'w'),
-      chapterList()
+      el('p', `已完成 ${done} / ${sections.length} 章；完成的章节可以先读。`, 'w'),
+      chapterList(sections)
     );
     if (assistantDisplay === 'inactive' || assistantDisplay === 'connected')
       card.append(el('p', '答案已保存。若当前对话已中断，请回到原对话说“继续”。', 'w'));
@@ -921,7 +920,9 @@ function render() {
   renderFailed = false;
   try {
     if (delivery && (delivery.revision !== state.revision || !roundCanSubmit())) cancelRoundDelivery();
-    const previousDisplay = assistantDisplay,
+    const complete = state.status === 'complete',
+      saved = complete && state.schema_version === 2 && allSubmitted(),
+      previousDisplay = assistantDisplay,
       header = reminderButton.closest('header');
     assistantDisplay = assistantStatus();
     header.querySelector('#heartbeat-work')?.remove();
@@ -954,8 +955,8 @@ function render() {
           })
         )
       );
-    } else if (state.status === 'complete') {
-      if (allSubmitted()) renderDocument();
+    } else if (complete) {
+      if (saved) renderDocument();
       else
         card.append(
           el('p', '状态待核对', 'k'),
@@ -992,12 +993,15 @@ function render() {
         expected_instance_id: aiInstance
       }).catch(() => {});
     }
+    completionMascot.hidden = !(saved && documentState.phase === 'ready' && documentMatches());
     card.dataset.scene =
-      state.status === 'complete'
-        ? 'document'
-        : openQuestions().length || reviews().length
-          ? 'questions'
-          : 'waiting';
+      saved
+        ? 'saved'
+        : complete
+          ? 'document'
+          : openQuestions().length || reviews().length
+            ? 'questions'
+            : 'waiting';
     updateTree();
     updatePresence(previousDisplay);
     if (dialog.open) {
@@ -1500,6 +1504,9 @@ dialog.addEventListener('cancel', event => {
   if (!busy) closeNote();
 });
 window.addEventListener('resize', syncNotePosition);
+window.addEventListener('scroll', () => {
+  if (dialog.open || presence) syncNotePosition();
+});
 window.visualViewport?.addEventListener('resize', syncNotePosition);
 window.visualViewport?.addEventListener('scroll', syncNotePosition);
 document.querySelector('.tree-controls').addEventListener('click', syncNotePosition);

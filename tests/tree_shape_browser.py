@@ -61,7 +61,7 @@ def main():
                 assert all(w['width'] < 92 and w['height'] < 69 and w['opacity'] == .24 and w['centered'] for w in drawing['washes'])
                 assert drawing['decorations_pass_through']
                 expect(page.locator('#tree-flower > circle')).to_have_count(18)
-                assert page.locator('#tree-canvas text').count() == 0
+                assert page.locator('#tree-canvas text:not(.fruit-number)').count() == 0
                 page.locator('#tree-canvas').screenshot(path=str(out / f'round-{round}.png'))
                 page.screenshot(path=str(out / f'round-{round}-page.png'), full_page=True)
                 page.reload()

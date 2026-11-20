@@ -31,7 +31,11 @@
 <main>
 <img id="mascot" width="64" height="64" src="/mascot-ask.svg" alt="" aria-hidden="true" hidden>
 <svg id="bubble-link" aria-hidden="true" hidden><path class="bubble-tail-fill"/><path class="bubble-tail-edge"/></svg>
-<section id="decision-tree" aria-label="需求生长树"><div class="tree-viewport"><svg id="tree-canvas" viewBox="0 0 1000 900" preserveAspectRatio="xMidYMid meet" role="group" aria-label="问题依赖关系，芽、花、黄叶与文档果子"></svg></div><div class="tree-controls" aria-label="树的显示比例"><button type="button" data-tree-replay hidden>重看生长</button><button type="button" data-tree-zoom="out" aria-label="缩小需求树">−</button><button type="button" data-tree-zoom="fit">看全树</button><button type="button" data-tree-zoom="in" aria-label="放大需求树">＋</button></div></section>
+<section id="decision-tree" aria-label="需求生长树">
+  <div class="tree-viewport"><svg id="tree-canvas" viewBox="0 0 1000 900" preserveAspectRatio="xMidYMid meet" role="group" aria-label="问题依赖关系，芽、花、黄叶与文档果子"></svg></div>
+  <img id="completion-mascot" width="72" height="72" src="/mascot-bloom.svg" alt="" hidden>
+  <div class="tree-controls" aria-label="树的显示比例"><button type="button" data-tree-replay hidden>重看生长</button><button type="button" data-tree-zoom="out" aria-label="缩小需求树">−</button><button type="button" data-tree-zoom="fit">看全树</button><button type="button" data-tree-zoom="in" aria-label="放大需求树">＋</button></div>
+</section>
 <dialog id="node-dialog" aria-labelledby="node-question"><img id="plan-mascot" width="64" height="64" src="/mascot-ask.svg" alt="" hidden><div id="node-body"></div><div id="node-actions" class="actions"></div><button type="button" id="close-node" aria-label="关闭">×</button></dialog>
 <section id="ai-presence" aria-label="AI 连线状态" hidden>
   <button type="button" id="presence-mascot" aria-label="点我复制提醒" aria-describedby="presence-copy"><img width="64" height="64" src="/mascot-sleep.svg" alt=""></button>

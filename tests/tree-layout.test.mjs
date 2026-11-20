@@ -20,13 +20,15 @@ test('both 28-question fixtures have at least 13 units between question centers'
 test('large dependency graphs render every node without adding data or labels',()=>{const tree=specimen28();tree.current_round=8;tree.nodes=Array.from({length:120},(_,i)=>({id:'n'+i,question:'题目'+i,input:'text',options:[],answer:null,status:'pending',round:Math.floor(i/15)+1,depends_on:i<15?[]:['n'+Math.floor((i-15)/3)]}));const result=layoutTree(tree);assert.equal(result.nodes.length,120);assert.equal(result.edges.length,120);assert.ok([result.width,result.height].every(Number.isFinite));});
 
 test('camera centres the ink with fixed minimum dimensions and room around the crown',()=>{
-  const tree=specimen28(),layout=layoutTree(tree),finished={...tree,status:'complete'},frame=cameraFrame(tree,layout),b=layout.paintBounds;
-  assert.equal(frame.width,Math.max(820,b.width+140));
-  assert.equal(frame.height,Math.max(840,b.height/.9));
-  assert.ok(Math.abs(frame.x+frame.width/2-b.x-b.width/2)<1e-8);
-  assert.ok(Math.abs(frame.y+frame.height/2-b.y-b.height/2)<1e-8);
-  assert.deepEqual(cameraFrame(tree),cameraFrame(finished));
-  assert.deepEqual(layout.nodes,layoutTree(finished).nodes);
+  const tree=specimen28(), finished={...tree,status:'complete'};
+  for(const [stage,minWidth,minHeight,padding] of [[tree,820,840,140],[finished,490,560,64]]){
+    const layout=layoutTree(stage), frame=cameraFrame(stage,layout), b=layout.paintBounds;
+    assert.equal(frame.width,Math.max(minWidth,b.width+padding));
+    assert.equal(frame.height,Math.max(minHeight,b.height/.9));
+    assert.ok(Math.abs(frame.x+frame.width/2-b.x-b.width/2)<1e-8);
+    assert.ok(Math.abs(frame.y+frame.height/2-b.y-b.height/2)<1e-8);
+  }
+  assert.deepEqual(layoutTree(tree).nodes,layoutTree(finished).nodes);
 });
 test('finishing the tree tapers the leader and keeps its decorative shoots on the trunk',()=>{
   const tree=specimen28(),before=structuredClone(tree),layout=layoutTree(tree),growing=trunkGeometry(layout,tree.current_round),finished=trunkGeometry(layout,tree.current_round,1);

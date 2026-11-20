@@ -78,7 +78,7 @@ def run(work):
                 assert status['phase']=='requested';assert request(service.url,'/document/control',{'action':'claim','expected_revision':restored['revision'],'job_id':status['job_id']})[0]==200
                 output=Path(original_document);output.parent.mkdir(parents=True,exist_ok=True);output.write_text(document_fixture(status),encoding='utf-8')
                 assert request(service.url,'/document/control',{'action':'ready','expected_revision':restored['revision'],'job_id':status['job_id']})[0]==200
-                expect(page.get_by_role('link',name='打开完整任务文档',exact=True)).to_be_visible();no_overflow(page)
+                expect(page.get_by_role('link',name='打开完整方案',exact=True)).to_be_visible();no_overflow(page)
                 assert service.file.read_bytes()==frozen
                 page.screenshot(path=str(work/(label+'-recovered-ready.png')),full_page=True)
                 report['checks'][label]={'multi_keyboard_mouse_exclusive_and_no_preselection':True,'why_and_source_round':True,'visible_badge_with_collapsed_details':True,'draft_then_batch_raw_text':True,'reminder_three_fields_no_answers':True,'stale_advice_not_answer':True,'killed_service_frozen_tree_recovery':True,'no_horizontal_overflow':True}
