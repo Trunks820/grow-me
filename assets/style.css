@@ -1,9 +1,4 @@
-/* grow-me · 需求生长树
-   One stylesheet, ordered: tokens → base → frame (header, heading, stage) →
-   tree → speech bubbles → subtitle card → responsive → reduced motion.
-   Geometry that the bubble placement and browser tests rely on (main grid,
-   heading band, bubble radius, paper colour) is kept as-is; only paint,
-   type and component states are refined here. */
+/* grow-me · 需求生长树 */
 
 /* ---------- tokens ---------- */
 :root {
@@ -20,8 +15,8 @@
   --fruit: #b5654a;
   --wash: rgba(47, 44, 38, 0.045);
   --wash-strong: rgba(47, 44, 38, 0.08);
-  --bubble-fill: rgba(251, 248, 241, 0.96);
-  --bubble-edge: rgba(40, 40, 40, 0.18);
+  --bubble-fill: #fbf8f1;
+  --bubble-edge: #d4c9b4;
   --attention: #e7d6b4;
   --danger: #9a4a33;
 
@@ -34,7 +29,6 @@
   --z-tree: 1;
   --z-header: 2;
   --z-card: 2;
-  --z-heading: 3;
   --z-tail: 3;
   --z-bubble: 4;
   --z-toast: 6;
@@ -183,12 +177,20 @@ summary:focus-visible {
   color: var(--text-3);
 }
 .cap h1 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   margin: 0 0 4px;
   font-family: var(--serif);
   font-size: 17px;
   font-weight: 400;
   letter-spacing: 0.2em;
   color: #3a372f;
+}
+.cap-logo {
+  flex: none;
+  width: 31px;
+  height: 31px;
 }
 .cap > p:not(#connection) {
   display: none;
@@ -198,6 +200,10 @@ summary:focus-visible {
   margin: 0;
   font-size: 12px;
   letter-spacing: 0.02em;
+}
+.cap .question-work {
+  display: block;
+  margin-top: 4px;
 }
 .cap button {
   pointer-events: auto;
@@ -280,147 +286,83 @@ summary:focus-visible {
   transition: background 0.3s var(--ease);
 }
 
-/* ---------- question heading (top band) ---------- */
-#question-heading {
-  position: fixed;
-  top: 50px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(680px, calc(100% - 480px));
-  max-height: 60px;
-  overflow: visible;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  z-index: var(--z-heading);
-  text-align: center;
-  color: #282d27;
-}
-#question-heading:has(details[open]) {
-  max-height: 106px;
-}
-#question-heading::-webkit-scrollbar {
-  display: none;
-}
+/* The question heading and its details share the same paper surface. */
 #node-question {
-  margin: 0 0 5px;
-  font-size: 24px;
-  font-weight: 500;
+  margin: 0 24px 8px 0;
+  font-size: 19px;
+  font-weight: 600;
   line-height: 1.45;
-  letter-spacing: 0.025em;
-  color: #24231e;
+  color: var(--ink);
   overflow-wrap: anywhere;
+}
+#node-question:focus {
   outline: none;
-  text-wrap: balance;
 }
-#question-heading #node-question {
-  margin: 0 0 4px;
-  font-size: 24px;
-  line-height: 1.4;
-  color: #282d27;
+.question-details {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 14px;
+  margin: 0 0 8px;
 }
-#question-heading.long #node-question {
-  font-size: 18px;
-  line-height: 1.45;
+.question-details details[open] {
+  flex-basis: 100%;
 }
-
-.previous-answer {
-  margin: 0 0 4px;
-  padding: 0;
-  border: 0;
-  color: var(--text-3);
+.question-details details,
+.recommendation-info {
+  min-width: 0;
   font-family: var(--sans);
+  font-size: 12px;
+  color: var(--text-3);
+}
+.question-details summary,
+.recommendation-info summary {
+  width: fit-content;
+  min-height: 28px;
+  cursor: pointer;
+  text-underline-offset: 3px;
+  text-decoration: underline;
+}
+.question-details summary:hover,
+.recommendation-info summary:hover {
+  color: var(--ink);
 }
 .previous-answer summary {
   display: flex;
-  justify-content: center;
-  gap: 8px;
   align-items: baseline;
-  cursor: pointer;
-  list-style: none;
-  font-size: 12px;
-  line-height: 1.6;
+  gap: 6px;
 }
 .previous-answer summary::-webkit-details-marker {
   display: none;
 }
 .previous-answer small {
   flex: none;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  color: var(--accent);
+  font-size: inherit;
 }
 .previous-excerpt {
+  max-width: 124px;
+  color: var(--text-2);
+  font-family: var(--serif);
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
-  font-family: var(--serif);
-  font-size: 13px;
-  color: var(--text-2);
 }
 .previous-answer[open] .previous-excerpt {
-  visibility: hidden;
-}
-.previous-answer blockquote {
-  margin: 6px 0;
-  padding-left: 10px;
-  border-left: 1px solid var(--line);
-  font-family: var(--serif);
-  font-size: 13px;
-  line-height: 1.8;
-  color: var(--text-2);
-  text-align: left;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 90px;
-  overflow: auto;
-}
-
-.question-reason {
-  margin: 2px 0 0;
-  font-family: var(--sans);
-  font-size: 12px;
-  color: var(--text-3);
-  text-align: center;
-}
-.question-reason summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-  list-style: none;
-  padding: 1px 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--text-3);
-  background: rgba(47, 44, 38, 0.03);
-  transition: all 0.15s;
-}
-.question-reason summary::-webkit-details-marker {
   display: none;
 }
-.question-reason summary:hover {
-  color: var(--ink);
-  border-color: var(--line-strong);
-  background: rgba(47, 44, 38, 0.06);
-}
-.question-reason summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.question-reason[open] summary {
-  color: var(--ink);
-  border-color: var(--line-strong);
-  background: rgba(47, 44, 38, 0.07);
-}
+.previous-answer blockquote,
 .question-reason p {
-  margin: 5px auto 0;
-  font-size: 12.5px;
+  margin: 0 0 6px;
+  padding-left: 9px;
+  border-left: 1px solid var(--line);
   line-height: 1.7;
   color: var(--text-2);
-  text-align: center;
-  max-width: 44ch;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.previous-answer blockquote {
+  max-height: 90px;
+  overflow: auto;
 }
 
 /* ---------- stage: tree row + subtitle row ---------- */
@@ -429,14 +371,14 @@ main {
   position: fixed;
   left: 28px;
   right: 28px;
-  top: calc(var(--visible-top, 0px) + 128px);
-  height: calc(var(--visible-height, 100svh) - 140px);
+  top: calc(var(--visible-top, 0px) + 82px);
+  height: max(0px, calc(var(--visible-height, 100svh) - 94px));
   display: grid;
   grid-template-rows: minmax(0, 1fr) var(--subtitle-height);
   gap: 8px;
 }
 main:has(#card[data-scene='questions']) {
-  --subtitle-height: 56px;
+  --subtitle-height: 44px;
 }
 #decision-tree {
   position: relative;
@@ -521,15 +463,7 @@ main:has(#card[data-scene='questions']) {
 .tree-fruit:focus-visible {
   outline: none;
 }
-.tree-node.is-current .tree-hit {
-  stroke: #a89269;
-  stroke-width: 0.8;
-  stroke-dasharray: 1.2 3;
-}
-.tree-node[data-status='pending'] .tree-hit {
-  stroke: none;
-  fill: transparent;
-}
+.tree-node.is-current .tree-hit,
 .tree-node.is-next .tree-hit {
   stroke: #ad9261;
   stroke-width: 0.8;
@@ -537,7 +471,7 @@ main:has(#card[data-scene='questions']) {
   stroke-dasharray: 1 3;
   fill: #cfb57812;
 }
-.tree-node[data-local='true'] .tree-hit {
+.tree-node[data-local='true']:not(.is-current) .tree-hit {
   stroke: #a84232;
   stroke-width: 0.8;
   stroke-opacity: 0.7;
@@ -616,7 +550,7 @@ main:has(#card[data-scene='questions']) {
 #bubble-link .bubble-tail-fill {
   fill: var(--bubble-fill);
   stroke: none;
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.06));
+  filter: drop-shadow(0 9px 14px rgba(56, 44, 24, 0.13));
 }
 #bubble-link .bubble-tail-edge {
   fill: none;
@@ -626,53 +560,50 @@ main:has(#card[data-scene='questions']) {
   stroke-linecap: round;
 }
 
-#bud-guide {
+#mascot {
   position: fixed;
   z-index: var(--z-bubble);
-  max-width: 190px;
-  min-height: 34px;
-  padding: 8px 14px;
-  border: 0;
-  border-radius: 17px;
-  background: transparent;
-  font-family: var(--sans);
-  font-size: 13px;
-  line-height: 1.5;
-  letter-spacing: 0.03em;
-  color: #33372f;
+  pointer-events: none;
 }
-#bud-guide:hover {
-  color: #000;
-}
-
 #node-dialog {
   position: fixed;
   inset: auto;
+  left: 50%;
+  bottom: calc(60px + max(0px, 100vh - var(--visible-height, 100vh) - var(--visible-top, 0px)));
+  translate: -50% 0;
   margin: 0;
   z-index: var(--z-bubble);
-  width: 248px;
-  max-width: calc(100vw - 40px);
-  max-height: 50vh;
-  padding: 12px 16px;
-  overflow-y: auto;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(560px, max(96px, calc(var(--visible-height, 100svh) - 158px)));
+  padding: 18px 18px 16px;
+  overflow: hidden auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  border: 1px solid transparent;
+  scroll-padding: 12px;
+  border: 1px solid var(--bubble-edge);
   border-radius: 18px;
+  background: var(--bubble-fill);
+  box-shadow: 0 8px 24px rgba(40, 34, 20, 0.11);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+#node-dialog[data-placement='bubble'] {
+  left: var(--bubble-left, 0px);
+  top: var(--bubble-top, 0px);
+  bottom: auto;
+  translate: none;
+  width: var(--bubble-width, min(372px, 40vw));
+  max-height: var(--bubble-max-height, min(550px, max(36px, calc(var(--visible-height, 100svh) - 158px))));
+  border-color: transparent;
   background: transparent;
   box-shadow: none;
-  outline: none;
-  color: #33372f;
-  font-size: 14px;
-  line-height: 1.7;
-  transform-origin: center bottom;
 }
-/* No bud to point at (round summary, copy-reminder fallback): the tail path is
-   hidden, so the bubble paints its own body. Border width never changes. */
-#bubble-link[hidden] ~ #subtitle-area #node-dialog {
-  background: var(--bubble-fill);
-  border-color: var(--bubble-edge);
-  box-shadow: 0 4px 14px rgba(40, 34, 20, 0.08);
+#node-dialog[data-mode='summary'][data-placement='panel'] {
+  left: auto;
+  right: 28px;
+  translate: none;
 }
 #node-body,
 #node-actions {
@@ -707,7 +638,8 @@ main:has(#card[data-scene='questions']) {
 }
 .choice-group {
   display: block;
-  margin: 0 0 4px;
+  min-inline-size: 0;
+  margin: 0;
   padding: 0;
   border: 0;
 }
@@ -716,11 +648,11 @@ main:has(#card[data-scene='questions']) {
   display: flex;
   align-items: center;
   gap: 9px;
-  width: calc(100% + 16px);
-  min-height: 42px;
-  margin: 0 -8px;
-  padding: 6px 8px;
-  border-radius: 8px;
+  min-height: 38px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fffdf7;
   font-size: 14.5px;
   line-height: 1.45;
   color: #33372f;
@@ -728,14 +660,16 @@ main:has(#card[data-scene='questions']) {
   transition: background-color 0.15s;
 }
 .option + .option {
-  margin-top: 1px;
+  margin-top: 5px;
 }
 .option:hover {
-  background: var(--wash);
+  background: #f3eee2;
+  border-color: var(--line-strong);
   color: #1f241d;
 }
 .option:has(input:checked) {
-  background: var(--wash-strong);
+  background: #ede7d9;
+  border-color: var(--line-strong);
   color: #1f241d;
 }
 .option:has(input:focus-visible) {
@@ -803,18 +737,16 @@ main:has(#card[data-scene='questions']) {
 }
 .recommendation-badge {
   display: inline-block;
-  margin-left: 8px;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: #ead9b5;
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid #d9c6a6;
+  border-radius: 6px;
+  background: #f7efdd;
   font-family: var(--sans);
   font-size: 11px;
   line-height: 1.6;
   color: #6b4f24;
   vertical-align: 1px;
-}
-.recommendation-badge[hidden] {
-  display: none;
 }
 
 /* Free text */
@@ -853,56 +785,39 @@ main:has(#card[data-scene='questions']) {
   opacity: 0.6;
 }
 
-/* Secondary disclosures: 补一句 / 查看推荐 */
-.note-tools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-  margin: 6px 0 0;
-  font-family: var(--sans);
-  font-size: 12px;
+.note-field {
+  margin-top: 10px;
+  padding: 5px 8px;
+  min-height: 36px;
+  max-height: 128px;
+  field-sizing: content;
+  resize: none;
+  border: 0;
+  border-bottom: 1px dashed var(--line-strong);
+  border-radius: 4px 4px 0 0;
 }
-.note-tools > details {
-  margin: 0;
+.note-field:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
-.note-tools > details[open] {
-  flex: 1 0 100%;
+.defer-answer {
+  min-height: 34px;
+  padding: 4px 9px;
+  text-align: left;
 }
-.note-tools summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 28px;
-  padding: 0;
-  list-style: none;
-  cursor: pointer;
-  color: var(--text-3);
+.choice-group + .defer-answer {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
 }
-.note-tools summary::-webkit-details-marker {
-  display: none;
-}
-.note-tools summary::after {
-  content: '';
-  width: 5px;
-  height: 5px;
-  border: solid currentColor;
-  border-width: 0 1px 1px 0;
-  transform: translateY(-2px) rotate(45deg);
-  transition: transform 0.15s var(--ease);
-}
-.note-tools details[open] > summary::after {
-  transform: translateY(1px) rotate(-135deg);
-}
-.note-tools summary:hover {
-  color: var(--ink);
-}
-.notes .field {
-  margin-top: 4px;
-  min-height: 56px;
+.choice-group + .defer-answer:hover {
+  border-color: var(--line-strong);
+  background: var(--wash);
 }
 .recommendation-info {
-  font-size: 12px;
-  color: var(--text-3);
+  margin-top: 6px;
 }
 .recommendation-label {
   margin: 6px 0 2px;
@@ -947,9 +862,6 @@ main:has(#card[data-scene='questions']) {
 .question-form > .actions {
   margin: 8px 0 0;
   padding: 0;
-}
-.question-form > .actions .draft-hint {
-  display: none;
 }
 #confirm-answer {
   min-height: 36px;
@@ -998,18 +910,7 @@ main:has(#card[data-scene='questions']) {
   color: #7a5a24;
 }
 
-/* Round summary (inside the bubble) */
-/* Round summary colophon */
-#node-dialog[data-mode='summary'] {
-  border-radius: 14px;
-  border: 1px solid var(--line-strong);
-  background: rgba(253, 250, 243, 0.96);
-  box-shadow: 0 16px 40px rgba(40, 34, 20, 0.12);
-  backdrop-filter: blur(12px);
-  padding: 22px 22px 20px;
-  max-height: calc(100vh - 90px);
-  overflow-y: auto;
-}
+/* Round summary */
 #node-dialog[data-mode='summary'] #node-question {
   font-size: 16px;
   font-weight: 500;
@@ -1065,37 +966,6 @@ main:has(#card[data-scene='questions']) {
   color: var(--text-3);
 }
 
-/* Seal trigger bar (Scheme 2) */
-.seal-prompt {
-  display: inline-flex;
-  align-items: center;
-  gap: 14px;
-  padding: 7px 10px 7px 18px;
-  background: rgba(254, 251, 245, 0.95);
-  border: 1px solid rgba(40, 34, 20, 0.15);
-  border-radius: 999px;
-  box-shadow: 0 10px 30px rgba(40, 34, 20, 0.08);
-  backdrop-filter: blur(10px);
-  font-family: var(--serif);
-}
-.seal-meta {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  text-align: left;
-}
-.seal-round {
-  font-size: 12.5px;
-  color: #282622;
-  letter-spacing: 0.08em;
-  font-weight: 500;
-}
-.seal-hint {
-  font-size: 11px;
-  color: var(--text-3);
-  font-family: var(--sans);
-  letter-spacing: 0.02em;
-}
 .seal-btn {
   display: inline-flex;
   align-items: center;
@@ -1129,17 +999,6 @@ main:has(#card[data-scene='questions']) {
   font-size: 13px;
   letter-spacing: 0.08em;
   font-family: var(--serif);
-}
-@media (min-width: 768px) {
-  #card[data-scene='questions']:has(.seal-prompt) {
-    position: fixed;
-    left: auto;
-    right: 48px;
-    bottom: 36px;
-    transform: none;
-    width: auto;
-    max-width: 440px;
-  }
 }
 
 /* ---------- subtitle card ---------- */
@@ -1199,53 +1058,61 @@ main:has(#card[data-scene='questions']) {
   margin: 4px 6px;
 }
 
-/* Questions scene: one quiet row — count · next · drafts. */
+/* The progress dots also open the draft summary once there are drafts. */
 #card[data-scene='questions'] {
   display: flex;
-  flex-wrap: wrap;
+  min-height: 42px;
   align-items: center;
   justify-content: center;
-  gap: 6px 18px;
-  max-height: 90px;
+  gap: 14px;
 }
-#card[data-scene='questions'] .w {
-  flex: 1 0 100%;
-  margin: 0;
+.round-progress {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
 }
 .scene-count {
+  flex: none;
   margin: 0;
   font-family: var(--sans);
   font-size: 12px;
-  letter-spacing: 0.04em;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
-#card #next-question {
-  min-height: 38px;
-  padding: 0 20px;
-  border: 1px solid var(--ink);
-  border-radius: 999px;
-  background: var(--ink);
-  color: #f7f2e6;
-  font-size: 14px;
-  letter-spacing: 0.06em;
+.round-dots {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
+  overflow: hidden;
 }
-#card #next-question:hover {
-  background: #45413a;
-  border-color: #45413a;
-  color: #fffaf0;
+.round-dots span {
+  flex: 0 0 7px;
+  height: 7px;
+  border: 1px solid #9c927e;
+  border-radius: 50%;
 }
-#card #next-question:disabled {
-  background: var(--wash-strong);
-  border-color: transparent;
-  color: var(--text-4);
-  opacity: 1;
+.round-dots [data-done='true'] {
+  border-color: #8a704c;
+  background: #8a704c;
 }
-body.note-open #card[data-scene='questions'] {
-  max-height: 40px;
+#card #round-summary {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 5px;
+  padding-inline: 3px;
+  white-space: nowrap;
 }
-body.note-open #card[data-scene='questions'] p {
-  display: none;
+#card #round-summary:hover {
+  background: var(--wash);
+}
+#card #request-plan {
+  flex: none;
+  white-space: nowrap;
 }
 body.note-open #card:not([data-scene='questions']) {
   visibility: hidden;
@@ -1463,38 +1330,27 @@ body.note-open #card:not([data-scene='questions']) {
     top: 16px;
     max-width: 46%;
   }
-  #question-heading {
-    top: 77px;
-    width: calc(100% - 44px);
-    max-height: 78px;
-  }
-  #question-heading #node-question {
-    font-size: 22px;
-  }
-  main {
-    top: calc(var(--visible-top, 0px) + 164px);
-    height: calc(var(--visible-height, 100svh) - 176px);
-  }
 }
-@media (max-width: 680px) {
+@media (max-width: 720px) {
   .cap {
-    max-width: 180px;
+    left: 14px;
+    max-width: 46%;
   }
   .cap h1 {
     font-size: 16px;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.1em;
   }
-  .cap #connection {
-    font-size: 12px;
+  .cap-logo {
+    width: 27px;
+    height: 27px;
   }
   #copy-reminder {
-    margin-left: 8px;
-    font-size: 12px;
+    margin-left: 7px;
   }
   .meta {
-    max-width: 50%;
+    right: 14px;
+    max-width: 43%;
     gap: 2px;
-    font-size: 12px;
     line-height: 1.5;
   }
   .meta-topic {
@@ -1506,59 +1362,64 @@ body.note-open #card:not([data-scene='questions']) {
   .meta-bar {
     width: 96px;
   }
-  #question-heading {
-    top: 80px;
-    width: calc(100% - 36px);
-    max-height: 80px;
-  }
-  #question-heading #node-question {
-    font-size: 20px;
-  }
-  #question-heading.long #node-question {
-    font-size: 16px;
-    line-height: 1.5;
-  }
-  #question-heading .previous-answer summary {
-    font-size: 12px;
-  }
-  /* The tree is width-bound on phones, so a shorter subtitle row only moves
-     dead space from under the tree to beside it; it never rescales the tree. */
   main {
-    --subtitle-height: 180px;
+    --subtitle-height: 174px;
+    top: calc(var(--visible-top, 0px) + 76px);
     left: 0;
     right: 0;
-    height: calc(var(--visible-height, 100svh) - 176px - env(safe-area-inset-bottom));
+    height: max(0px, calc(var(--visible-height, 100svh) - 80px - env(safe-area-inset-bottom)));
   }
   main:has(#card[data-scene='questions']) {
-    --subtitle-height: 96px;
+    --subtitle-height: 47px;
+  }
+  main:has(#node-dialog[open]) {
+    grid-template-rows: minmax(0, 1fr) auto var(--subtitle-height);
+    gap: 0;
+  }
+  main:has(#node-dialog[open]):not(:has(#card[data-scene='questions'])) {
+    --subtitle-height: 0px;
   }
   .tree-controls {
     right: 12px;
-    bottom: 4px;
+    top: 4px;
+    bottom: auto;
   }
   .tree-controls button {
-    min-width: 40px;
-    min-height: 36px;
+    min-width: 36px;
+    min-height: 34px;
   }
   #card {
-    padding: 0 16px;
+    padding: 0 12px;
+  }
+  #card[data-scene='questions'] {
+    min-height: 46px;
+    gap: 11px;
   }
   #card .q {
     font-size: 17px;
   }
-  #node-dialog {
-    width: 224px;
-    padding: 12px 16px;
+  #node-dialog[open] {
+    position: relative;
+    grid-row: 2;
+    inset: auto;
+    translate: none;
+    width: 100%;
+    max-height: min(calc(var(--visible-height, 100svh) * 0.57), max(88px, calc(var(--visible-height, 100svh) - 188px)));
+    padding: 16px;
+    border: 1px solid var(--bubble-edge);
+    border-radius: 22px 22px 0 0;
+    background: var(--bubble-fill);
+    box-shadow: 0 -7px 24px rgba(56, 44, 24, 0.1);
+  }
+  #node-question {
+    font-size: 18px;
   }
   .option {
-    min-height: 44px;
+    min-height: 42px;
     font-size: 15px;
   }
   .field {
     font-size: 16px;
-  }
-  #bud-guide {
-    max-width: 165px;
   }
   #message {
     left: 16px;

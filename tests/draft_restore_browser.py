@@ -11,11 +11,10 @@ from browser_acceptance import Service, node, open_question, open_summary, reque
 
 def confirm_drafts(page, text):
     open_question(page, 'channel')
-    page.get_by_role('radio', name='邮件').check()
-    page.get_by_role('button', name='就这么定', exact=True).click()
+    page.get_by_role('radio', name='邮件').click()
     open_question(page, 'scope')
     page.get_by_role('textbox').fill(text)
-    page.get_by_role('button', name='就这么定', exact=True).click()
+    page.get_by_role('button', name='好了', exact=True).click()
     expect(page.locator('.tree-node[data-local=true]')).to_have_count(2)
 
 
@@ -107,7 +106,7 @@ def storage_unavailable(browser, work):
         page.goto(service.url)
         open_question(page, 'scope')
         page.get_by_role('textbox').fill(text)
-        page.get_by_role('button', name='就这么定', exact=True).click()
+        page.get_by_role('button', name='好了', exact=True).click()
         open_summary(page)
         expect(page.locator('.summary-list .answer')).to_have_text(text)
         assert service.file.read_bytes() == before

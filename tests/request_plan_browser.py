@@ -26,13 +26,12 @@ def partial_round(browser, work):
 
         open_question(page, 'scope')
         page.get_by_role('textbox').fill('先做报名入口')
-        page.get_by_role('button', name='就这么定', exact=True).click()
+        page.get_by_role('button', name='好了', exact=True).click()
         open_question(page, 'timing')
         page.get_by_role('textbox').fill('等场地回复')
-        page.get_by_role('button', name='待定', exact=True).click()
+        page.get_by_role('button', name='先待定，以后再说', exact=True).click()
         open_question(page, 'audience')
         page.get_by_role('textbox').fill('还没确认的输入')
-        page.get_by_role('button', name='关闭', exact=True).click()
 
         trigger = page.get_by_role('button', name='够了，先出方案', exact=True)
         dialog = page.get_by_role('dialog')

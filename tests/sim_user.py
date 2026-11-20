@@ -322,22 +322,22 @@ class SimUser:
 
     async def fill_answer(self, node, dialog, answer, number, position):
         fields = dialog.locator('.choice-group input')
+        await dialog.get_by_role('textbox').fill(answer['text'])
+        single = node['input'] == 'single_choice'
         for index, option in enumerate(node['options']):
-            field = fields.nth(index)
-            checked = await field.is_checked()
             wanted = option['id'] in answer['option_ids']
-            if checked != wanted:
-                if wanted:
-                    await field.check()
-                elif node['input'] == 'multi_choice':
-                    await field.uncheck()
-        if node['input'] == 'text':
-            await dialog.get_by_role('textbox').fill(answer['text'])
-        elif answer['text']:
-            await dialog.locator('.notes > summary').click()
-            await dialog.get_by_role('textbox').fill(answer['text'])
-        await self.button('待定' if answer.get('deferred') else '就这么定').click()
-        await dialog.wait_for(state='hidden')
+            if single and wanted:
+                await fields.nth(index).click()
+                if answer.get('deferred'):
+                    # Keep a tentative option by deferring the locally confirmed draft.
+                    await self.marker(node['id']).click()
+                    await self.button('改').click()
+            elif not single:
+                await fields.nth(index).set_checked(wanted)
+        if answer.get('deferred'):
+            await self.button('先待定，以后再说').click()
+        elif not single:
+            await self.button('好了').click()
         require(await self.marker(node['id']).get_attribute('data-local') == 'true',
                 f'第 {number} 轮第 {position} 题没有形成草稿。')
 

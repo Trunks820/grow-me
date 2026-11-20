@@ -26,9 +26,9 @@ def run(work):
             page.clock.install();page.route('**/document/status',lambda route:route.fulfill(status=200,content_type='text/event-stream',body='event: message\ndata: {"stream":"raw"}'))
             # Deliberate reconnect traffic has no idle network; wait for the visible recovery state instead.
             page.goto(service.url,wait_until='domcontentloaded');expect(page.locator('#card')).to_contain_text('生长中');expect(page.locator('#connection')).to_contain_text('重连');assert 'event:' not in page.locator('body').inner_text();page.unroute('**/document/status');page.clock.fast_forward(1500)
-            expect(page.locator('.scene-count')).to_have_text('2 枚花苞')
+            expect(page.locator('.scene-count')).to_have_text('第 1 轮 · 还剩 2 题')
             for id,text in zip(['A','B'],['持续可见的等待反馈','全部原文与 revision 守卫']):
-                open_question(page,id);page.get_by_role('textbox').fill(text);page.get_by_role('button',name='就这么定',exact=True).click()
+                open_question(page,id);page.get_by_role('textbox').fill(text);page.get_by_role('button',name='好了',exact=True).click()
             open_summary(page)
             raw='event: message\ndata: '+json.dumps({'content':'x'*3000})
             page.route('**/submit',lambda route:route.fulfill(status=502,content_type='text/event-stream',body=raw))
@@ -42,9 +42,9 @@ def run(work):
             assert page.locator('#wait-elapsed').get_attribute('data-since')==since;report['checks']['SSE_submit_is_safe_drafts_retry_and_reconnect_timer']=True
             revision=service.state()['revision'];post('/round',{'round':2,'expected_revision':revision,'nodes':[node('C','追问这项约束如何验证？',deps=['A'],round=2)]})
             page.clock.fast_forward(1500);open_question(page,'C');expect(page.get_by_role('heading',name='追问这项约束如何验证？',exact=True)).to_be_visible();expect(page.locator('#meta')).to_contain_text('第 2 轮')
-            page.get_by_role('textbox').fill('实际点击、截图，并保留计时证据');page.get_by_role('button',name='就这么定',exact=True).click();open_summary(page);page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.locator('#card')).to_contain_text('生长中')
-            page.locator('.tree-node[data-node-id="A"]').click();page.get_by_role('button',name='改',exact=True).click();expect(page.locator('#card')).to_contain_text('2 片黄叶待复核')
-            page.get_by_role('textbox').fill('黄叶复核之后也要持续显示等待');page.get_by_role('button',name='就这么定',exact=True).click();open_question(page,'C');expect(page.get_by_role('heading',name='追问这项约束如何验证？',exact=True)).to_be_visible();page.get_by_role('button',name='仍然有效',exact=True).click()
+            page.get_by_role('textbox').fill('实际点击、截图，并保留计时证据');page.get_by_role('button',name='好了',exact=True).click();open_summary(page);page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.locator('#card')).to_contain_text('生长中')
+            page.locator('.tree-node[data-node-id="A"]').click();page.get_by_role('button',name='改',exact=True).click();expect(page.locator('#card')).to_contain_text('2 题待复核')
+            page.get_by_role('textbox').fill('黄叶复核之后也要持续显示等待');page.get_by_role('button',name='好了',exact=True).click();open_question(page,'C');expect(page.get_by_role('heading',name='追问这项约束如何验证？',exact=True)).to_be_visible();page.get_by_role('button',name='仍然有效',exact=True).click()
             expect(page.get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible();page.clock.fast_forward(168000);expect(page.locator('#wait-elapsed')).to_contain_text('168 秒');expect(page.locator('#card')).to_contain_text('生长中');expect(page.locator('#long-wait')).to_be_visible();snap(page,'review-exit-168s')
             report['checks']['last_yellow_leaf_enters_visible_wait_168s']=True
             before=service.file.read_bytes();code,_=request(service.url,'/round',{'round':3,'expected_revision':service.state()['revision'],'nodes':[]});assert code==400 and before==service.file.read_bytes()

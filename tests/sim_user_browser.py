@@ -30,7 +30,10 @@ def run(work):
     channels.update(input='multi_choice', recommendation={
         'option_ids': ['inbox'], 'reason': '站内通知便于回看。', 'source_ids': [],
     })
-    service = Service(work / 'runtime', seed([channels, node('timing', '活动日期定在哪天？')]))
+    timing = node('timing', '活动日期定在哪天？', options=[
+        {'id': 'sat', 'label': '周六'}, {'id': 'sun', 'label': '周日'},
+    ])
+    service = Service(work / 'runtime', seed([channels, timing]))
     children = []
 
     def post(path, payload):
@@ -71,7 +74,7 @@ def run(work):
         preset_file = work / 'answers.json'
         preset_file.write_text(json.dumps({'rounds': [
             {'reload_after': 1, 'answers': [
-                {'deferred': True, 'text': DEFERRED},
+                {'deferred': True, 'options': ['周六'], 'text': DEFERRED},
                 {'keyword': '通知渠道', 'options': ['邮件', 2], 'text': NOTE},
             ]},
             {'enough_after': 1, 'answers': [{'text': '先验收报名入口。'}]},
@@ -85,7 +88,7 @@ def run(work):
         assert submitted['revision'] == 1
         assert [n['answer'] for n in service.state()['nodes']] == [
             {'option_ids': ['mail', 'inbox'], 'text': NOTE},
-            {'option_ids': [], 'text': DEFERRED, 'deferred': True},
+            {'option_ids': ['sat'], 'text': DEFERRED, 'deferred': True},
         ]
         time.sleep(2.5)  # Leave two page polling intervals before changing the stage.
         post('/round', {'round': 2, 'expected_revision': 1, 'nodes': [

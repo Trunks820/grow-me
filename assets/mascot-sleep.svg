@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><defs>
+<filter id="brush8" x="-10%" y="-10%" width="120%" height="120%">
+ <feTurbulence type="fractalNoise" baseFrequency=".75" numOctaves="1" seed="2" result="n"/>
+ <feDisplacementMap in="SourceGraphic" in2="n" scale="1.6"/>
+</filter>
+<filter id="wash8" x="-30%" y="-30%" width="160%" height="160%">
+ <feTurbulence type="fractalNoise" baseFrequency=".08" numOctaves="2" seed="5" result="n"/>
+ <feDisplacementMap in="SourceGraphic" in2="n" scale="5"/>
+ <feGaussianBlur stdDeviation=".9"/>
+</filter>
+<radialGradient id="shade8" cx=".5" cy=".85" r=".6"><stop offset="0" stop-color="#8f8774" stop-opacity=".16"/><stop offset="1" stop-color="#8f8774" stop-opacity="0"/></radialGradient>
+</defs>
+<g filter="url(#wash8)"><path d="M59 50C54 41 45 39 38 42C41 50 50 53 59 50Z" fill="#56534a" opacity="0.62"/></g>
+<path d="M59 50C54 41 45 39 38 42C41 50 50 53 59 50Z" fill="none" stroke="#2f2c26" stroke-width="1.1" opacity=".55"/>
+<g filter="url(#brush8)"><path d="M59 55C60 43 72 36 80 40" fill="none" stroke="#2f2c26" stroke-width="4" stroke-linecap="round"/></g>
+<g filter="url(#wash8)"><circle cx="82" cy="42" r="8.6" fill="#b8432f" opacity=".92"/></g><circle cx="82" cy="42" r="3.2" fill="#fbf8f1"/>
+<path d="M22 82C22 65 38 54 60 54S98 65 98 82C98 95 86 101 60 101S22 95 22 82Z" fill="#fbf8f1"/><path d="M22 82C22 65 38 54 60 54S98 65 98 82C98 95 86 101 60 101S22 95 22 82Z" fill="url(#shade8)"/>
+<g filter="url(#brush8)" fill="none" stroke="#1f1d19" stroke-linecap="round" stroke-linejoin="round">
+ <path d="M22 82C22 65 38 54 60 54S98 65 98 82C98 95 86 101 60 101S22 95 22 82Z" stroke-width="5.4" pathLength="100" stroke-dasharray="9 3 50 1.6 36.4"/>
+ <path d="M28 91C33 98 45 101 60 101S87 98 92 91" stroke-width="7.4"/>
+</g>
+<path d="M43.5 78Q49 84.5 54.5 78" fill="none" stroke="#2f2c26" stroke-width="3.6" stroke-linecap="round"/><path d="M65.5 78Q71 84.5 76.5 78" fill="none" stroke="#2f2c26" stroke-width="3.6" stroke-linecap="round"/><g filter="url(#brush8)" fill="none" stroke="#2f2c26" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M90 16H99L90 27H99"/><path d="M103 6H108L103 12H108" stroke-width="2.4"/></g></svg>

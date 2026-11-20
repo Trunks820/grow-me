@@ -22,7 +22,7 @@ def run(work):
                 page.goto(service.url);page.wait_for_load_state('networkidle');open_question(page,'channels');expect(page.locator('#node-question')).to_have_text(multi['question'])
                 boxes=page.get_by_role('checkbox');expect(boxes).to_have_count(3)
                 for box in boxes.all():expect(box).not_to_be_checked()
-                expect(page.locator('.recommendation-badge')).to_have_count(1);expect(page.locator('.recommendation-badge')).to_be_hidden();expect(page.locator('#confirm-answer')).to_be_disabled()
+                expect(page.locator('.recommendation-badge')).to_have_count(1);expect(page.locator('.recommendation-badge')).to_be_visible();expect(page.locator('#confirm-answer')).to_be_disabled()
                 expect(page.locator('.question-reason p')).to_have_text(multi['rationale'])
                 expect(page.locator('.question-reason p')).to_be_hidden();expect(page.locator('.recommendation-info .w')).to_be_hidden()
                 page.screenshot(path=str(work/(label+'-collapsed-recommendation.png')),full_page=True)
@@ -30,13 +30,13 @@ def run(work):
                 page.locator('.recommendation-info > summary').click();expect(page.locator('.recommendation-badge')).to_be_visible()
                 expect(page.locator('.recommendation-label')).to_have_count(1)
                 for box in boxes.all():expect(box).not_to_be_checked()
-                page.locator('.recommendation-info > summary').click();expect(page.locator('.recommendation-badge')).to_be_hidden()
+                page.locator('.recommendation-info > summary').click();expect(page.locator('.recommendation-badge')).to_be_visible()
                 before=service.file.read_bytes();page.keyboard.press('1');page.keyboard.press('2')
                 expect(boxes.nth(0)).to_be_checked();expect(boxes.nth(1)).to_be_checked()
                 page.keyboard.press('3');expect(boxes.nth(2)).to_be_checked();expect(boxes.nth(0)).not_to_be_checked();expect(boxes.nth(1)).not_to_be_checked()
                 page.keyboard.press('2');expect(boxes.nth(1)).to_be_checked();expect(boxes.nth(2)).not_to_be_checked();page.keyboard.press('1')
                 notes='  保留多行\n<em>原文不是 HTML</em> 🌱  '
-                page.locator('.notes > summary').click();page.get_by_label('补充说明（可选）',exact=True).fill(notes)
+                page.get_by_label('补一句（可选）',exact=True).fill(notes)
                 no_overflow(page);page.screenshot(path=str(work/(label+'-multi.png')),full_page=True)
                 page.keyboard.press('Tab');page.locator('#confirm-answer').click();expect(page.locator('.tree-node[data-local=true]')).to_have_count(1)
                 assert service.file.read_bytes()==before
@@ -58,12 +58,12 @@ def run(work):
                 expect(page.get_by_role('radio').first).not_to_be_checked()
                 page.get_by_role('button',name='回看依据',exact=True).click();page.get_by_role('button',name='改',exact=True).click()
                 expect(page.get_by_role('checkbox').nth(0)).to_be_checked();expect(page.get_by_role('checkbox').nth(1)).to_be_checked()
-                page.get_by_role('checkbox').nth(2).check();page.get_by_role('button',name='就这么定',exact=True).click();open_question(page,'follow',edit=True)
+                page.get_by_role('checkbox').nth(2).check();page.get_by_role('button',name='好了',exact=True).click();open_question(page,'follow',edit=True)
                 page.locator('.recommendation-info > summary').click();expect(page.locator('.recommendation-info')).to_contain_text('旧推荐已隐藏');expect(page.locator('.recommendation-badge')).to_have_count(0)
                 for radio in page.get_by_role('radio').all():expect(radio).not_to_be_checked()
                 assert service.state()['nodes'][0]['answer']['option_ids']==['none']
                 page.screenshot(path=str(work/(label+'-stale-recommendation.png')),full_page=True)
-                page.get_by_role('radio').nth(1).check();page.get_by_role('button',name='就这么定',exact=True).click();expect(page.locator('#card')).to_contain_text('生长中')
+                page.get_by_role('radio').nth(1).click();expect(page.locator('#card')).to_contain_text('生长中')
                 revision=service.state()['revision'];assert request(service.url,'/document/control',{'action':'offer','expected_revision':revision})[0]==200
                 page.get_by_role('button',name='保存并生成任务文档',exact=True).click();expect(page.locator('#card')).to_contain_text('正在生成任务文档')
                 frozen=service.file.read_bytes();identity=service.state()['session_id'];original_url=service.url;original_document=service.startup['document_file'];service.close()
@@ -79,7 +79,7 @@ def run(work):
                 expect(page.get_by_role('link',name='打开完整任务文档',exact=True)).to_be_visible();no_overflow(page)
                 assert service.file.read_bytes()==frozen
                 page.screenshot(path=str(work/(label+'-recovered-ready.png')),full_page=True)
-                report['checks'][label]={'multi_keyboard_mouse_exclusive_and_no_preselection':True,'why_and_source_round':True,'default_collapsed_recommendation_and_rationale':True,'draft_then_batch_raw_text':True,'reminder_three_fields_no_answers':True,'stale_advice_not_answer':True,'killed_service_frozen_tree_recovery':True,'no_horizontal_overflow':True}
+                report['checks'][label]={'multi_keyboard_mouse_exclusive_and_no_preselection':True,'why_and_source_round':True,'visible_badge_with_collapsed_details':True,'draft_then_batch_raw_text':True,'reminder_three_fields_no_answers':True,'stale_advice_not_answer':True,'killed_service_frozen_tree_recovery':True,'no_horizontal_overflow':True}
             finally:
                 context.close();service.close()
                 if detached:

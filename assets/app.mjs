@@ -5,8 +5,12 @@ import { isDeferred, selectionValid } from './answers.mjs';
 
 const card = document.querySelector('#card'),
   dialog = document.querySelector('#node-dialog'),
-  questionHeading = document.querySelector('#question-heading'),
-  budGuide = document.querySelector('#bud-guide');
+  mascot = document.querySelector('#mascot'),
+  bubbleLink = document.querySelector('#bubble-link'),
+  treeViewport = document.querySelector('.tree-viewport'),
+  treeCanvas = document.querySelector('#tree-canvas'),
+  sheetLayout = matchMedia('(max-width: 720px)'),
+  reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const drafts = new Map(),
   working = new Map();
 let noteId = null,
@@ -14,13 +18,9 @@ let noteId = null,
   noteRevision = null,
   noteBusy = false,
   noteFrame = 0,
-  noteMotion = null,
+  askNext = false,
   advanceId = null,
-  lastAnsweredId = null,
-  guideSeen = false;
-try {
-  guideSeen = sessionStorage.getItem('grow-me:bud-guide-seen') === '1';
-} catch {}
+  lastAnsweredId = null;
 let guidance = {};
 let aiActivity = null,
   aiInstance = null,
@@ -35,7 +35,6 @@ let state,
   draftsSaved = false,
   documentState = { phase: 'idle' },
   planRequested = false,
-  currentId = null,
   busy = false,
   waitingSince = null,
   documentSince = null,
@@ -162,73 +161,24 @@ function navigationTarget() {
     return active;
   return openQuestions().find(n => !drafts.has(n.id) && ready(n)) ?? null;
 }
-function guideText(target) {
-  if (!guideSeen) return '点这里开始';
-  const pending = openQuestions(),
-    draftCount = pending.filter(n => drafts.has(n.id)).length,
-    remaining = pending.length - draftCount;
-  if (draftCount === 1) return '接着聊这朵';
-  if (remaining === 1) return '就差这朵了';
-  const phrases = [
-    '顺便定下这个',
-    '这块你怎么想？',
-    '还有个细节',
-    '看下这块怎么定',
-    '这规矩定一下'
-  ];
-  const hash = [...(target?.id ?? '')].reduce((s, c) => s + c.charCodeAt(0), 0);
-  return phrases[hash % phrases.length];
-}
 function updateNavigation() {
-  const target = navigationTarget();
+  const targetId = noteId ?? navigationTarget()?.id;
+  card.dataset.currentId = noteId ?? '';
   for (const flower of document.querySelectorAll('.tree-node')) {
-    const current = flower.dataset.nodeId === target?.id;
-    flower.classList.toggle('is-next', current);
+    const current = flower.dataset.nodeId === targetId;
+    flower.classList.toggle('is-current', flower.dataset.nodeId === noteId);
+    flower.classList.toggle('is-next', current && !dialog.open);
     if (current) flower.setAttribute('aria-current', 'step');
     else flower.removeAttribute('aria-current');
   }
-  const next = document.querySelector('#next-question');
-  if (next) {
-    next.disabled = busy || !target;
-    next.dataset.target = target?.id ?? '';
-  }
   const plan = card.querySelector('#request-plan');
-  if (plan) plan.disabled = busy || dialog.open;
-  budGuide.hidden = !target || dialog.open || stopped;
-  budGuide.disabled = busy;
-  budGuide.dataset.target = target?.id ?? '';
-  budGuide.textContent = target?.status === 'needs_review' ? '这片叶子，再看看' : guideText(target);
-  budGuide.setAttribute(
-    'aria-label',
-    `${budGuide.textContent}${target ? '：' + target.question : ''}`
-  );
+  if (plan) plan.disabled = busy || noteMode === 'plan';
   syncNotePosition();
-}
-function nextQuestion() {
-  if (busy || stopped) return;
-  const n = navigationTarget();
-  if (!n) return;
-  const target = nodeTarget(n.id),
-    box = target?.getBoundingClientRect(),
-    frame = document.querySelector('.tree-viewport').getBoundingClientRect();
-  // Keep the current framing unless a manual zoom has put the destination outside the canvas.
-  if (
-    box &&
-    (box.left < frame.left ||
-      box.right > frame.right ||
-      box.top < frame.top ||
-      box.bottom > frame.bottom)
-  )
-    document.querySelector('[data-tree-zoom=fit]').click();
-  openNode(n.id, target, n.id === advanceId && working.has(n.id) ? 'edit' : undefined);
 }
 function handleAnswer(id) {
   lastAnsweredId = id;
-  guideSeen = true;
-  try {
-    sessionStorage.setItem('grow-me:bud-guide-seen', '1');
-  } catch {}
   if (advanceId === id) advanceId = null;
+  askNext = true;
 }
 function assistantStatus() {
   const writing =
@@ -366,7 +316,7 @@ function updateTree() {
     { ...state, nodes },
     {
       drafts,
-      currentId,
+      currentId: noteId,
       waiting: isWaiting() && !finished && assistantDisplay === 'connected',
       finished,
       fruitStates: new Map(
@@ -397,7 +347,11 @@ function updateTree() {
 }
 function inputs(n, host) {
   const value = working.get(n.id) ?? drafts.get(n.id) ?? n.answer ?? { option_ids: [], text: '' };
-  const form = el('form', undefined, 'question-form');
+  const form = el('form', undefined, 'question-form'),
+    single = n.input === 'single_choice',
+    defer = button('先待定，以后再说', () => saveAnswer({ ...read(), deferred: true }));
+  defer.className = 'defer-answer';
+  defer.disabled = busy || !ready(n);
   let read;
   if (n.input !== 'text') {
     const multiple = n.input === 'multi_choice',
@@ -410,7 +364,7 @@ function inputs(n, host) {
       if (advice.stale) info.append(el('p', '推荐依据已变／待复核，旧推荐已隐藏。', 'w'));
       else {
         info.append(
-          el('p', 'AI 建议，不是你的决定', 'recommendation-label'),
+          el('p', 'AI 建议', 'recommendation-label'),
           el('p', advice.reason.replace(/^AI 建议[，,]不是你的决定[：:，,。\s]*/, ''), 'w')
         );
         const choices = el('ul', undefined, 'recommended-options');
@@ -426,7 +380,6 @@ function inputs(n, host) {
           info.append(line);
         }
       }
-      form.append(info);
     }
     const group = el('fieldset', undefined, 'choice-group'),
       legend = el('legend', multiple ? '选择一项或多项' : '选择一项', 'sr-only');
@@ -442,8 +395,9 @@ function inputs(n, host) {
       input.dataset.exclusive = String(Boolean(o.exclusive));
       const copy = el('span', o.label, 'option-copy');
       if (advice && !advice.stale && advice.option_ids.includes(o.id)) {
-        const badge = el('span', '推荐', 'recommendation-badge');
-        badge.hidden = true;
+        const badge = el('span', 'AI 建议', 'recommendation-badge');
+        badge.id = `recommendation-${i + 1}`;
+        input.setAttribute('aria-describedby', badge.id);
         copy.append(badge);
       }
       if (o.exclusive) copy.append(el('span', '与其他选项互斥', 'exclusive-hint'));
@@ -451,9 +405,8 @@ function inputs(n, host) {
       group.append(label);
       input.dataset.shortcut = String(i + 1);
     });
-    recommendation?.addEventListener('toggle', () => {
-      for (const badge of group.querySelectorAll('.recommendation-badge'))
-        badge.hidden = !recommendation.open;
+    group.addEventListener('click', event => {
+      if (single && event.target.matches('input[type=radio]')) saveAnswer(read());
     });
     group.addEventListener('change', event => {
       const input = event.target;
@@ -465,16 +418,15 @@ function inputs(n, host) {
         )
           other.checked = false;
     });
-    const notes = el('details', undefined, 'notes'),
-      summary = el('summary', '补一句'),
-      label = el('label', '补充说明（可选）', 'sr-only'),
-      area = el('textarea', undefined, 'field');
+    const label = el('label', '补一句（可选）', 'sr-only'),
+      area = el('textarea', undefined, 'field note-field');
     area.id = 'answer-note';
     label.htmlFor = area.id;
     area.value = value.text;
-    notes.open = Boolean(value.text);
-    notes.append(summary, label, area);
-    form.append(group, notes);
+    area.rows = 1;
+    area.placeholder = '想补充就写这儿，可不填';
+    form.append(group, defer, label, area);
+    if (recommendation) form.append(recommendation);
     read = () => ({
       option_ids: [...group.querySelectorAll('input:checked')].map(n => n.value),
       text: area.value
@@ -489,58 +441,50 @@ function inputs(n, host) {
     form.append(label, area);
     read = () => ({ option_ids: [], text: area.value });
   }
-  const tools = el('div', undefined, 'note-tools');
-  for (const selector of ['.notes', '.recommendation-info']) {
-    const detail = form.querySelector(selector);
-    if (detail) tools.append(detail);
+  let confirm;
+  if (!single) {
+    const toolbar = el('div', undefined, 'actions');
+    confirm = el('button', '好了', 'primary');
+    confirm.type = 'submit';
+    confirm.id = 'confirm-answer';
+    if (n.input === 'text') toolbar.append(defer);
+    toolbar.append(confirm);
+    form.append(toolbar);
   }
-  form.append(tools);
-  const toolbar = el('div', undefined, 'actions'),
-    defer = button('待定', () => saveAnswer({ ...read(), deferred: true })),
-    confirm = el('button', '就这么定', 'primary');
-  defer.disabled = busy || !ready(n);
-  confirm.type = 'submit';
-  confirm.id = 'confirm-answer';
-  toolbar.append(
-    el(
-      'span',
-      n.status === 'needs_review' ? '保存修改 · 下游需复核' : '整轮提交后保存',
-      'draft-hint'
-    ),
-    defer,
-    confirm
-  );
-  form.append(toolbar);
+  const reword = el('button', '没看懂，换个说法');
+  reword.type = 'button';
+  reword.id = 'reword-question';
+  reword.hidden = true;
+  form.append(reword);
   const update = () => {
     if (rendering || !form.isConnected) return;
     const answer = read();
     working.set(n.id, answer);
-    confirm.disabled = busy || !valid(n, answer);
+    if (confirm) confirm.disabled = busy || !valid(n, answer);
   };
   form.addEventListener('input', update);
   form.addEventListener('change', update);
-  confirm.disabled = busy || !valid(n, read());
+  if (confirm) confirm.disabled = busy || !valid(n, read());
   if (!ready(n)) {
     form.querySelectorAll('input,textarea').forEach(x => (x.disabled = true));
     host.append(el('p', '请先处理上游的黄叶，再回来作答。', 'review-note'));
   }
   form.addEventListener('submit', event => {
     event.preventDefault();
-    if (!confirm.disabled) saveAnswer(read());
+    saveAnswer(read());
   });
   function saveAnswer(answer) {
+    if (busy || stopped || !valid(n, answer)) return;
     if (n.status === 'needs_review')
       act(async () => {
         await post('/decision', { id: n.id, expected_revision: state.revision, answer });
         handleAnswer(n.id);
-        closeNote();
       });
     else {
       drafts.set(n.id, structuredClone(answer));
       saveDrafts();
       working.delete(n.id);
       handleAnswer(n.id);
-      closeNote();
       message('');
       render();
     }
@@ -611,8 +555,8 @@ function planConfirmation(unanswered, confirm, cancel) {
   actions.append(button('我再答几题', cancel), button('先出方案', confirm, true));
   return [question, actions];
 }
-function openPlanConfirmation() {
-  if (busy || dialog.open) return;
+function openPlanConfirmation(event) {
+  if (busy || stopped || noteMode === 'plan') return;
   const pending = openQuestions();
   const answers = pending
     .filter(n => drafts.has(n.id))
@@ -623,9 +567,11 @@ function openPlanConfirmation() {
       await post('/request-plan', request);
       closeNote();
     });
-  noteId = currentId = null;
+  noteId = null;
+  askNext = false;
   noteMode = 'plan';
   noteRevision = state.revision;
+  returnFocus = event.currentTarget;
   dialog.dataset.mode = noteMode;
   delete dialog.dataset.nodeId;
   document.querySelector('#close-node').disabled = false;
@@ -634,7 +580,6 @@ function openPlanConfirmation() {
     .querySelector('#node-body')
     .replaceChildren(...planConfirmation(pending.length - answers.length, confirm, closeNote));
   showNote();
-  updateNavigation();
 }
 function renderWaiting() {
   card.append(el('p', `第 ${state.current_round} 轮 · 已提交`, 'k'));
@@ -768,19 +713,53 @@ function renderDocument() {
       card.append(el('p', '答案已保存。若当前对话已中断，请回到原对话说“继续”。', 'w'));
   }
 }
+function renderRoundProgress(pending, review) {
+  const round = state.nodes.filter(n => n.round === state.current_round),
+    remaining = pending.filter(n => !drafts.has(n.id)).length,
+    canSubmit = remaining === 0 && review.length === 0,
+    progress = el('div', undefined, 'round-progress'),
+    dots = el('span', undefined, 'round-dots');
+  dots.setAttribute('aria-hidden', 'true');
+  for (const n of round) {
+    const dot = el('span');
+    dot.dataset.done = String(drafts.has(n.id) || n.status === 'answered');
+    dots.append(dot);
+  }
+  const count = el(
+    'span',
+    `第 ${state.current_round} 轮 · 还剩 ${remaining} 题${review.length ? ` · ${review.length} 题待复核` : ''}`,
+    'scene-count'
+  );
+  count.id = 'round-count';
+  if (drafts.size) {
+    const label = canSubmit ? '回看汇总，提交本轮' : '查看本轮草稿',
+      summary = button('', openSummary);
+    summary.id = 'round-summary';
+    summary.title = label;
+    summary.setAttribute('aria-label', label);
+    summary.setAttribute('aria-describedby', count.id);
+    summary.dataset.ready = String(canSubmit);
+    summary.disabled = busy;
+    summary.append(count, dots);
+    if (canSubmit) summary.append(el('span', '提交本轮'));
+    progress.append(summary);
+  } else progress.append(count, dots);
+  card.append(progress);
+}
 function render() {
   if (!state) return;
   rendering = true;
   renderFailed = false;
   try {
     assistantDisplay = assistantStatus();
-    const reminder = document.querySelector('#copy-reminder');
+    const reminder = document.querySelector('#copy-reminder'),
+      header = reminder.closest('header');
+    header.querySelector('#heartbeat-work')?.remove();
     reminder.classList.toggle('needs-attention', assistantDisplay === 'paused');
     if (assistantDisplay === 'paused') reminder.setAttribute('aria-describedby', 'ai-wait-notice');
     else reminder.removeAttribute('aria-describedby');
     card.replaceChildren();
     if (state.schema_version === 1) {
-      currentId = null;
       card.append(
         el('p', 'v1 历史访谈 · 只读', 'k'),
         el('h2', '原来的回答，仍在这棵树上。', 'q'),
@@ -808,7 +787,6 @@ function render() {
         )
       );
     } else if (state.status === 'complete') {
-      currentId = null;
       if (allSubmitted()) renderDocument();
       else
         card.append(
@@ -824,45 +802,11 @@ function render() {
       const pending = openQuestions(),
         review = reviews();
       if (pending.length || review.length) {
-        const count = pending.filter(n => drafts.has(n.id)).length,
-          ready = count === pending.length && !review.length;
-        card.append(
-          el(
-            'p',
-            `${count ? `本轮 ${count} 个草稿 · ` : ''}${pending.length - count} 枚花苞${review.length ? ` · ${review.length} 片黄叶待复核` : ''}`,
-            'scene-count'
-          )
-        );
-        if (navigationTarget()) {
-          const next = button('下一题 →', nextQuestion);
-          next.id = 'next-question';
-          card.append(next);
-        }
-        if (count) {
-          if (ready) {
-            const prompt = el('div', undefined, 'seal-prompt');
-            const meta = el('div', undefined, 'seal-meta');
-            meta.append(
-              el('span', `第 ${state.current_round} 轮齐了`, 'seal-round'),
-              el('span', '敲空格或轻触盖章', 'seal-hint')
-            );
-            const summary = button('回看汇总，提交本轮', openSummary, true);
-            summary.className = 'primary seal-btn';
-            summary.setAttribute('aria-label', '回看汇总，提交本轮');
-            summary.innerHTML =
-              '<span class="seal-mark">盖章</span><span class="seal-text">接着长 ↗</span>';
-            prompt.append(meta, summary);
-            card.append(prompt);
-          } else {
-            const summary = button('查看本轮草稿', openSummary, false);
-            card.append(summary);
-          }
-        }
-        if (review.length) card.append(el('p', '点黄叶回看；确认上游后，再复核下游。', 'w'));
-        const work = el('p', heartbeatNote(), 'w');
+        renderRoundProgress(pending, review);
+        const work = el('span', heartbeatNote(), 'question-work');
         work.id = 'heartbeat-work';
         work.hidden = !work.textContent;
-        card.append(work);
+        header.append(work);
       } else renderWaiting();
       if (!planRequested && !review.length && !saveOffered()) {
         const plan = button('够了，先出方案', openPlanConfirmation);
@@ -880,7 +824,6 @@ function render() {
         expected_instance_id: aiInstance
       }).catch(() => {});
     }
-    card.dataset.currentId = currentId ?? '';
     card.dataset.scene =
       state.status === 'complete'
         ? 'document'
@@ -892,7 +835,7 @@ function render() {
       if (noteMode === 'plan') {
         if (noteRevision !== state.revision) closeNote();
         else dialog.querySelectorAll('button').forEach(b => (b.disabled = busy));
-      } else if (noteRevision !== state.revision || noteBusy !== busy) {
+      } else if (!askNext && (noteRevision !== state.revision || noteBusy !== busy)) {
         if (noteId) renderNote();
         else if (noteMode === 'summary') renderSummaryNote();
       }
@@ -916,37 +859,61 @@ function nodeTarget(id) {
   return [...document.querySelectorAll('.tree-node')].find(n => n.dataset.nodeId === id);
 }
 function closeNote() {
-  dialog.close();
+  const trigger = returnFocus;
+  if (dialog.open) dialog.close();
   noteId = null;
-  currentId = null;
-  questionHeading.hidden = true;
-  document.querySelector('#bubble-link').setAttribute('hidden', '');
+  noteMode = 'read';
+  askNext = false;
+  returnFocus = null;
+  mascot.getAnimations().forEach(animation => animation.cancel());
+  mascot.setAttribute('hidden', '');
+  bubbleLink.toggleAttribute('hidden', true);
   document.body.classList.remove('note-open');
   updateNavigation();
+  const target = trigger?.isConnected ? trigger : document.getElementById(trigger?.id ?? '');
+  target?.focus({ preventScroll: true });
 }
 function showNote() {
-  noteMotion?.cancel();
-  if (!dialog.open) dialog.show();
+  const wasOpen = dialog.open,
+    oldPlacement = dialog.dataset.placement,
+    moved = !mascot.hasAttribute('hidden') && mascot.dataset.nodeId !== noteId,
+    from = moved ? mascot.getBoundingClientRect() : null,
+    heading = dialog.querySelector('#node-question');
+  dialog.dataset.placement = sheetLayout.matches ? 'sheet' : 'panel';
+  if (!wasOpen) {
+    heading.setAttribute('autofocus', '');
+    dialog.show();
+  }
   document.body.classList.add('note-open');
-  questionHeading.hidden = !noteId;
-  budGuide.hidden = true;
   dialog.scrollTop = 0;
   positionNote();
-  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    noteMotion = dialog.animate(
-      [
-        { opacity: 0, transform: 'scale(.96)' },
-        { opacity: 1, transform: 'none' }
-      ],
-      { duration: 150, easing: 'ease-out' }
+  if (!reducedMotion.matches) {
+    if (from && !mascot.hasAttribute('hidden')) {
+      mascot.getAnimations().forEach(animation => animation.cancel());
+      const to = mascot.getBoundingClientRect(),
+        dx = from.x - to.x,
+        dy = from.y - to.y;
+      mascot.animate(
+        [
+          { transform: `translate(${dx}px, ${dy}px)` },
+          { transform: `translate(${dx * 0.45}px, ${dy * 0.45 - 14}px)`, offset: 0.55 },
+          { transform: 'none' }
+        ],
+        { duration: 300, easing: 'ease-out' }
+      );
+    }
+    dialog.getAnimations().forEach(animation => animation.cancel());
+    bubbleLink.getAnimations().forEach(animation => animation.cancel());
+    const slide = sheetLayout.matches && (!wasOpen || oldPlacement !== 'sheet');
+    dialog.animate(
+      [{ opacity: 0.35, transform: slide ? 'translateY(12px)' : 'none' }, { opacity: 1, transform: 'none' }],
+      { duration: 160, easing: 'ease-out' }
     );
-    document
-      .querySelector('#bubble-link')
-      .animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: 'ease-out' });
+    if (!bubbleLink.hasAttribute('hidden'))
+      bubbleLink.animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
   }
-  document.querySelector('#node-question')?.focus({ preventScroll: true });
-  syncNotePosition();
-  setTimeout(syncNotePosition, 120);
+  heading.focus({ preventScroll: true });
+  updateNavigation();
 }
 function editDraft(id) {
   const value = drafts.get(id);
@@ -955,9 +922,10 @@ function editDraft(id) {
 }
 function openNode(id, trigger, mode) {
   if (busy || stopped) return;
-  const n = state.nodes.find(n => n.id === id);
+  const n = state?.nodes.find(n => n.id === id);
   if (!n) return;
-  noteId = currentId = id;
+  askNext = false;
+  noteId = id;
   returnFocus = nodeTarget(id) ?? trigger;
   noteMode =
     mode ??
@@ -970,7 +938,6 @@ function openNode(id, trigger, mode) {
   if ((noteMode === 'edit' || n.status === 'needs_review') && ready(n)) advanceId = id;
   renderNote();
   showNote();
-  render();
 }
 async function modifyAnswer(id) {
   if (drafts.has(id)) return editDraft(id);
@@ -998,10 +965,20 @@ function renderNote() {
   if (state.schema_version === 1 || state.status !== 'active' || n.status === 'answered')
     noteMode = 'read';
   const body = document.querySelector('#node-body'),
-    actions = document.querySelector('#node-actions');
+    actions = document.querySelector('#node-actions'),
+    hadFocus = dialog.contains(document.activeElement);
   body.replaceChildren();
   actions.replaceChildren();
-  questionHeading.replaceChildren();
+  const heading = el('h2', n.question);
+  heading.id = 'node-question';
+  heading.tabIndex = -1;
+  body.append(heading);
+  const details = el('div', undefined, 'question-details');
+  if (n.rationale) {
+    const reason = el('details', undefined, 'question-reason');
+    reason.append(el('summary', '为什么问这个'), el('p', n.rationale));
+    details.append(reason);
+  }
   const previous =
     state.nodes.find(
       p => p.id === lastAnsweredId && p.id !== n.id && (drafts.has(p.id) || p.status === 'answered')
@@ -1016,13 +993,9 @@ function renderNote() {
       summary = el('summary');
     summary.append(el('small', '上一句'), el('span', text, 'previous-excerpt'));
     aside.append(summary, el('blockquote', text));
-    questionHeading.append(aside);
-    aside.addEventListener('toggle', positionNote);
+    details.append(aside);
   }
-  const heading = el('h2', n.question);
-  heading.id = 'node-question';
-  heading.tabIndex = -1;
-  questionHeading.append(heading);
+  if (details.childElementCount) body.append(details);
   if (n.status === 'needs_review')
     body.append(el('p', '上游或本题有改动，这个回答需要再确认。', 'review-note'));
   if (noteMode === 'edit') inputs(n, body);
@@ -1053,31 +1026,20 @@ function renderNote() {
       act(async () => {
         await post('/decision', { id: n.id, expected_revision: state.revision, answer: n.answer });
         handleAnswer(n.id);
-        closeNote();
       })
     );
     keep.disabled = busy || !ready(n);
     actions.append(keep);
   }
-  if (n.rationale) {
-    const reason = el('details', undefined, 'question-reason');
-    reason.append(el('summary', '为什么问这句'), el('p', n.rationale));
-    questionHeading.append(reason);
-    reason.addEventListener('toggle', positionNote);
-  }
-  for (const detail of body.querySelectorAll('.note-tools > details'))
-    detail.addEventListener('toggle', positionNote);
   noteRevision = state.revision;
   noteBusy = busy;
   dialog.dataset.mode = noteMode;
   dialog.dataset.nodeId = n.id;
   if (busy) dialog.querySelectorAll('input,textarea,button').forEach(n => (n.disabled = true));
   else document.querySelector('#close-node').disabled = false;
-  positionNote();
+  if (hadFocus) heading.focus({ preventScroll: true });
 }
 function renderSummaryNote() {
-  questionHeading.replaceChildren();
-  questionHeading.hidden = true;
   const body = document.querySelector('#node-body');
   body.replaceChildren();
   document.querySelector('#node-actions').replaceChildren();
@@ -1090,141 +1052,147 @@ function renderSummaryNote() {
   delete dialog.dataset.nodeId;
 }
 function openSummary(event) {
-  if (busy) return;
-  noteId = currentId = null;
+  if (busy || stopped) return;
+  askNext = false;
+  noteId = null;
   noteMode = 'summary';
   returnFocus = event?.currentTarget;
   renderSummaryNote();
   showNote();
-  updateTree();
 }
+const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+
+function visibleBud(id) {
+  const node = nodeTarget(id);
+  if (node?.dataset.visible !== 'true') return null;
+  const box = node.querySelector('.tree-hit').getBoundingClientRect(),
+    frame = treeViewport.getBoundingClientRect();
+  if (
+    box.left >= frame.left && box.right <= frame.right &&
+    box.top >= frame.top && box.bottom <= frame.bottom
+  ) return box;
+  return null;
+}
+
+function mascotPlace(bud, frame, size) {
+  const gap = 5,
+    center = bud.left + bud.width / 2,
+    outward = center < frame.left + frame.width / 2 ? -1 : 1,
+    left = frame.left + gap,
+    right = frame.right - size - gap,
+    x = clamp(center + outward * 10 - size / 2, left, right);
+  if (bud.top - gap - size >= frame.top) return { x, y: bud.top - gap - size };
+  if (bud.bottom + gap + size <= frame.bottom) return { x, y: bud.bottom + gap };
+  const beside = outward === -1 ? bud.left - gap - size : bud.right + gap;
+  return {
+    x: beside >= left && beside <= right ? beside : outward === -1 ? bud.right + gap : bud.left - gap - size,
+    y: clamp(bud.top + (bud.height - size) / 2, frame.top, frame.bottom - size)
+  };
+}
+
+function bubblePlace(bud, frame, mochi, size) {
+  const ideal = dialog.offsetWidth,
+    left = frame.left,
+    right = frame.right,
+    top = frame.top + 4,
+    bottom = frame.bottom - 4,
+    gap = 10,
+    center = mochi.y + size * 0.67,
+    edges = [
+      { x: Math.min(mochi.x - gap, bud.left - gap), side: -1 },
+      { x: Math.max(mochi.x + size + gap, bud.right + gap), side: 1 }
+    ],
+    outward = bud.left < left + frame.width / 2 ? -1 : 1,
+    buds = [...treeCanvas.querySelectorAll('.tree-node[data-visible="true"]')]
+      .filter(node => node.dataset.nodeId !== noteId)
+      .map(node => node.getBoundingClientRect()),
+    trunk = treeCanvas.querySelector('.tree-trunk')?.getBoundingClientRect(),
+    controls = document.querySelector('.tree-controls').getBoundingClientRect(),
+    matrix = treeCanvas.getScreenCTM(),
+    branches = matrix
+      ? view.getLayout().nodes.flatMap(n =>
+          n.points.map(([x, y]) => ({ x: x * matrix.a + matrix.e, y: y * matrix.d + matrix.f }))
+        )
+      : [],
+    candidates = [];
+  function add(x, y, width, height, penalty, maxHeight) {
+    const overlaps = b =>
+      b && x < b.right + 4 && x + width > b.left - 4 && y < b.bottom + 4 && y + height > b.top - 4;
+    const score =
+      penalty +
+      1000 * (buds.filter(overlaps).length + Number(overlaps(controls))) +
+      (overlaps(trunk) ? 35 : 0) +
+      branches.filter(p => p.x > x && p.x < x + width && p.y > y && p.y < y + height).length +
+      Math.abs(y + height / 2 - center) / 32;
+    candidates.push({ x, y, width, maxHeight, score });
+  }
+
+  for (const edge of edges) {
+    const room = edge.side === -1 ? edge.x - left : right - edge.x,
+      width = Math.min(ideal, Math.floor(room));
+    if (width < Math.min(212, ideal)) continue;
+    dialog.style.setProperty('--bubble-width', width + 'px');
+    const height = Math.min(dialog.offsetHeight, bottom - top),
+      x = edge.side === -1 ? edge.x - width : edge.x,
+      penalty = (ideal - width) / 9 + (edge.side === outward ? 0 : 2),
+      obstacles = [...buds, controls].filter(b => b.right > x && b.left < x + width),
+      positions = [center - height / 2, ...obstacles.flatMap(b => [b.top - height - 5, b.bottom + 5])];
+    for (const y of positions) add(x, clamp(y, top, bottom - height), width, height, penalty, height);
+  }
+
+  dialog.style.removeProperty('--bubble-width');
+  const height = dialog.offsetHeight,
+    width = ideal,
+    x = clamp(mochi.x + (size - width) / 2, left, right - width),
+    above = Math.min(bud.top, mochi.y) - gap,
+    below = Math.max(bud.bottom, mochi.y + size) + gap;
+  // Use the space above or below when a side would cover another bud.
+  for (const [y, room] of [[null, above - top], [below, bottom - below]]) {
+    if (room < 36) continue;
+    const fit = Math.min(room, height);
+    add(x, y ?? above - fit, width, fit, 32 + (height - fit) / 5, fit);
+  }
+  return candidates.sort((a, b) => a.score - b.score)[0];
+}
+
 function positionNote() {
   const viewport = window.visualViewport;
-  document.documentElement.style.setProperty(
-    '--visible-height',
-    `${viewport?.height ?? innerHeight}px`
-  );
+  document.documentElement.style.setProperty('--visible-height', `${viewport?.height ?? innerHeight}px`);
   document.documentElement.style.setProperty('--visible-top', `${viewport?.offsetTop ?? 0}px`);
-  const link = document.querySelector('#bubble-link');
-  link.setAttribute('hidden', '');
-  if (!budGuide.hidden) {
-    const point = flowerPoint(budGuide.dataset.target);
-    budGuide.style.visibility = point ? 'visible' : 'hidden';
-    if (point) {
-      const width = budGuide.offsetWidth,
-        height = budGuide.offsetHeight,
-        place =
-          bubblePlace(point, width, height, budGuide.dataset.target, true) ??
-          bubblePlace(point, width, height, budGuide.dataset.target, true, true, true);
-      budGuide.style.visibility = place ? 'visible' : 'hidden';
-      if (place) {
-        budGuide.style.left = place.x + 'px';
-        budGuide.style.top = place.y + 'px';
-        drawBubbleTail(budGuide, place, point, 17);
-      }
-    }
-  }
   if (!dialog.open) return;
-  const n = state?.nodes.find(n => n.id === noteId),
-    point = n ? flowerPoint(n.id) : null;
-  // Every question is a speech bubble beside its bud; long question text wraps
-  // in the top heading and many options make the bubble taller (scrolls inside).
-  questionHeading.classList.toggle('long', !!n && n.question.length > 36);
-  dialog.dataset.placement = 'bubble';
-  dialog.style.left = '0px';
-  dialog.style.top = '0px';
-  const wide =
-    n && (n.options.some(o => o.label.length > 12) || n.input === 'text' || noteMode === 'read');
-  // Notes without a bud can use the wider bubble.
-  dialog.style.width =
-    (!n
-      ? Math.min(360, innerWidth - 32)
-      : wide && innerWidth >= 600
-        ? 300
-        : Math.min(248, innerWidth - 40)) + 'px';
-  if (!point) {
-    if (noteMode === 'summary' && innerWidth >= 768) {
-      dialog.style.left = 'auto';
-      dialog.style.right = '44px';
-      dialog.style.top = 'auto';
-      dialog.style.bottom = '36px';
-      return;
-    }
-    dialog.style.left = Math.max(10, (innerWidth - dialog.offsetWidth) / 2) + 'px';
-    dialog.style.top = Math.max(10, innerHeight - dialog.offsetHeight - 20) + 'px';
+
+  const mobile = sheetLayout.matches;
+  if (mobile) dialog.dataset.placement = 'sheet';
+  const bud = noteId ? visibleBud(noteId) : null;
+  if (!mobile) dialog.dataset.placement = bud ? 'bubble' : 'panel';
+  mascot.toggleAttribute('hidden', !bud);
+  bubbleLink.toggleAttribute('hidden', mobile || !bud);
+  if (!bud) return;
+
+  const frame = treeViewport.getBoundingClientRect(),
+    size = mascot.width.baseVal.value,
+    mochi = mascotPlace(bud, frame, size);
+  mascot.dataset.nodeId = noteId;
+  mascot.style.left = mochi.x + 'px';
+  mascot.style.top = mochi.y + 'px';
+  if (mobile) return;
+
+  dialog.style.removeProperty('--bubble-max-height');
+  dialog.style.removeProperty('--bubble-width');
+  const place = bubblePlace(bud, frame, mochi, size);
+  if (!place) {
+    dialog.dataset.placement = 'panel';
+    bubbleLink.setAttribute('hidden', '');
     return;
   }
-  let place =
-    bubblePlace(point, dialog.offsetWidth, dialog.offsetHeight, n.id) ??
-    bubblePlace(point, dialog.offsetWidth, dialog.offsetHeight, n.id, false, true) ??
-    bubblePlace(point, dialog.offsetWidth, dialog.offsetHeight, n.id, false, true, true);
-  let w = dialog.offsetWidth,
-    h = dialog.offsetHeight;
-  dialog.style.maxHeight = '';
-  const covers = p =>
-    p.x - 6 < point.x && point.x < p.x + w + 6 && p.y - 6 < point.y && point.y < p.y + h + 6;
-  const tr = document.querySelector('.tree-trunk')?.getBoundingClientRect(),
-    onTrunk = p => tr && p.x < tr.right && p.x + w > tr.left && p.y < tr.bottom && p.y + h > tr.top;
-  // Cramped viewports (e.g. mobile keyboard open): try a slimmer bubble at the side first.
-  for (const width of [220, 200, 180, 168, 156]) {
-    if (!(covers(place) || onTrunk(place)) || innerWidth >= 600 || n.options.length > 4) break;
-    dialog.style.width = width + 'px';
-    w = dialog.offsetWidth;
-    h = dialog.offsetHeight;
-    const p = bubblePlace(point, w, h, n.id) ?? bubblePlace(point, w, h, n.id, false, true);
-    if (p && !covers(p) && !onTrunk(p)) {
-      place = p;
-      break;
-    }
-  }
-  if (covers(place) || onTrunk(place)) {
-    // Never sit on the bud: hang below it (or above), shrinking with inner scroll.
-    const limit = innerHeight - 64,
-      x = Math.max(10, Math.min(innerWidth - w - 10, point.x - w / 2)),
-      top = Math.max(
-        64,
-        questionHeading.hidden ? 0 : questionHeading.getBoundingClientRect().bottom + 10
-      );
-    const below = limit - (point.y + 18),
-      above = point.y - 18 - top;
-    const trunk = document.querySelector('.tree-trunk')?.getBoundingClientRect(),
-      hitsTrunk = (y, hh) =>
-        trunk && x < trunk.right && x + w > trunk.left && y < trunk.bottom && y + hh > trunk.top;
-    const under = trunk && trunk.bottom > point.y ? trunk.bottom + 8 : null;
-    const opts = [
-      { y: point.y + 18, room: below, down: true, pen: 0 },
-      { y: null, room: above, down: false, pen: 0 },
-      ...(under && point.y + 18 + 60 > under
-        ? [{ y: under, room: limit - under, down: true, pen: 0.5 }]
-        : [])
-    ]
-      .map(o => {
-        const hh = Math.min(h, o.room),
-          y = o.down ? o.y : point.y - 18 - hh;
-        return {
-          ...o,
-          hh,
-          y,
-          score: (hitsTrunk(y, hh) ? 2 : 0) + (o.room >= h ? 0 : 1) + o.pen - o.room / 1e4
-        };
-      })
-      .filter(o => o.room > 40)
-      .sort((a, b) => a.score - b.score);
-    const o = opts[0];
-    if (o) {
-      if (o.hh < h) {
-        dialog.style.maxHeight = o.hh + 'px';
-        h = dialog.offsetHeight;
-      }
-      place = { x, y: o.down ? o.y : point.y - 18 - h };
-    }
-  }
-  dialog.style.left = place.x + 'px';
-  dialog.style.top = place.y + 'px';
-  drawBubbleTail(dialog, place, point, 18);
+  dialog.style.setProperty('--bubble-left', place.x + 'px');
+  dialog.style.setProperty('--bubble-top', place.y + 'px');
+  dialog.style.setProperty('--bubble-width', place.width + 'px');
+  dialog.style.setProperty('--bubble-max-height', place.maxHeight + 'px');
+  drawBubbleTail(dialog, place, { x: mochi.x + size / 2, y: mochi.y + size * 0.67 }, 18);
 }
 // One closed path: rounded body (radius r) with a small blunt tail that grows
-// out of the side facing the bud. No box-plus-triangle seams.
+// out of the side facing the mascot. No box-plus-triangle seams.
 function drawBubbleTail(element, place, point, radius) {
   const w = element.offsetWidth,
     h = element.offsetHeight,
@@ -1233,7 +1201,7 @@ function drawBubbleTail(element, place, point, radius) {
     x1 = x0 + w,
     y1 = y0 + h,
     r = Math.min(radius, h / 2, w / 2),
-    half = element === budGuide ? 6 : 7;
+    half = 7;
   const clamp = (n, min, max) => Math.max(min, Math.min(max, n)),
     f = n => Math.round(n * 10) / 10;
   const side =
@@ -1257,7 +1225,7 @@ function drawBubbleTail(element, place, point, radius) {
   const dist = Math.hypot(dx, dy) || 1;
   dx /= dist;
   dy /= dist;
-  const len = clamp(dist - 9, 8, 90),
+  const len = clamp(dist - 26, 8, 70),
     tip = { x: c.x + dx * len, y: c.y + dy * len };
   // Traversal is clockwise: top L→R, right T→B, bottom R→L, left B→T.
   const along = { top: [1, 0], right: [0, 1], bottom: [-1, 0], left: [0, -1] }[side];
@@ -1272,117 +1240,34 @@ function drawBubbleTail(element, place, point, radius) {
     bo = side === 'bottom' ? tail : '',
     le = side === 'left' ? tail : '';
   const d = `M${f(x0 + r)} ${f(y0)} ${t}L${f(x1 - r)} ${f(y0)} Q${f(x1)} ${f(y0)} ${f(x1)} ${f(y0 + r)} ${ri}L${f(x1)} ${f(y1 - r)} Q${f(x1)} ${f(y1)} ${f(x1 - r)} ${f(y1)} ${bo}L${f(x0 + r)} ${f(y1)} Q${f(x0)} ${f(y1)} ${f(x0)} ${f(y1 - r)} ${le}L${f(x0)} ${f(y0 + r)} Q${f(x0)} ${f(y0)} ${f(x0 + r)} ${f(y0)} Z`;
-  const link = document.querySelector('#bubble-link');
-  link.querySelector('.bubble-tail-fill').setAttribute('d', d);
-  link.querySelector('.bubble-tail-edge').setAttribute('d', d);
-  link.dataset.target = element === budGuide ? budGuide.dataset.target : noteId;
-  link.dataset.kind = element === budGuide ? 'guide' : 'options';
-  link.dataset.side = side;
-  link.dataset.tipX = f(tip.x);
-  link.dataset.tipY = f(tip.y);
-  element.dataset.side = side;
-  element.style.transformOrigin =
-    side === 'left'
-      ? '0 50%'
-      : side === 'right'
-        ? '100% 50%'
-        : side === 'top'
-          ? '50% 0'
-          : '50% 100%';
-  link.removeAttribute('hidden');
-}
-function flowerPoint(id) {
-  const node = nodeTarget(id);
-  if (!node || node.dataset.visible === 'false') return null;
-  const box = node.querySelector('.tree-hit').getBoundingClientRect();
-  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-}
-function bubblePlace(point, width, height, id, guide = false, relaxed = false, fallback = false) {
-  const frame = document.querySelector('.tree-viewport').getBoundingClientRect(),
-    matrix = document.querySelector('#tree-canvas').getScreenCTM();
-  if (!matrix) return null;
-  const minTop = questionHeading.hidden
-    ? frame.top
-    : Math.max(64, questionHeading.getBoundingClientRect().bottom + 10);
-  const ink = [...document.querySelectorAll('.tree-trunk,.tree-node')]
-    .filter(n => n.dataset.nodeId !== id)
-    .map(n => n.getBoundingClientRect());
-  const samples = view
-    .getLayout()
-    .nodes.flatMap(n =>
-      n.points.map(([x, y]) => ({ x: x * matrix.a + matrix.e, y: y * matrix.d + matrix.f }))
-    );
-  const gap = 18,
-    outward = point.x < innerWidth / 2 ? -1 : 1,
-    clampX = x => Math.max(10, Math.min(innerWidth - width - 10, x));
-  const sides = [18, 42, 66].flatMap(distance =>
-    [outward, -outward].flatMap(side => {
-      const x = side > 0 ? point.x + distance : point.x - width - distance;
-      return [
-        { x, y: point.y - height / 2 },
-        { x, y: point.y + gap },
-        { x, y: point.y - height - gap }
-      ];
-    })
-  );
-  const vertical = [18, 42, 66, 90].flatMap(distance =>
-    [
-      point.x - width / 2,
-      point.x - width / 2 + 24,
-      point.x - width / 2 - 24,
-      point.x - width + 10,
-      point.x - 10
-    ].flatMap(x => [
-      { x: clampX(x), y: Math.max(minTop, point.y - height - distance) },
-      { x: clampX(x), y: point.y + distance }
-    ])
-  );
-  const candidates = guide ? [...vertical, ...sides] : [...sides, ...vertical];
-  if (relaxed) {
-    for (let y = minTop; y + height <= frame.bottom; y += 16)
-      for (let x = 10; x + width <= innerWidth - 10; x += 16) candidates.push({ x, y });
-  }
-  const distance = p =>
-    Math.hypot(
-      Math.max(p.x - point.x, 0, point.x - p.x - width),
-      Math.max(p.y - point.y, 0, point.y - p.y - height)
-    );
-  candidates.sort((a, b) => distance(a) - distance(b));
-  const inFrame = p =>
-    p.x >= 10 && p.x + width <= innerWidth - 10 && p.y >= minTop && p.y + height <= frame.bottom;
-  const collisions = p =>
-    ink.filter(
-      b =>
-        p.x < b.right + 5 &&
-        p.x + width > b.left - 5 &&
-        p.y < b.bottom + 5 &&
-        p.y + height > b.top - 5
-    ).length;
-  const best = candidates.find(
-    p =>
-      inFrame(p) &&
-      !collisions(p) &&
-      (relaxed ||
-        !samples.some(
-          q => q.x > p.x - 6 && q.x < p.x + width + 6 && q.y > p.y - 6 && q.y < p.y + height + 6
-        ))
-  );
-  if (best || !fallback) return best;
-  // Tiny viewports may have no empty rectangle: retain the bubble outline and
-  // use the least obstructive location; the existing zoom controls stay usable.
-  return (
-    candidates.filter(inFrame).sort((a, b) => collisions(a) - collisions(b))[0] ?? {
-      x: clampX(point.x - width / 2),
-      y: Math.max(frame.top, frame.bottom - height)
-    }
-  );
+  bubbleLink.querySelector('.bubble-tail-fill').setAttribute('d', d);
+  bubbleLink.querySelector('.bubble-tail-edge').setAttribute('d', d);
+  bubbleLink.dataset.target = noteId;
+  bubbleLink.dataset.tipX = f(tip.x);
+  bubbleLink.dataset.tipY = f(tip.y);
 }
 function syncNotePosition() {
   if (noteFrame) return;
   noteFrame = requestAnimationFrame(() => {
     noteFrame = 0;
+    if (askNext && !busy && !stopped) {
+      const next = navigationTarget(),
+        target = nodeTarget(next?.id);
+      if (!next) {
+        askNext = false;
+        if (noteId && noteId === lastAnsweredId) {
+          closeNote();
+          card.querySelector('#round-summary[data-ready="true"]')?.focus({ preventScroll: true });
+        }
+      } else if (target?.dataset.visible === 'true') {
+        if (!visibleBud(next.id)) document.querySelector('[data-tree-zoom=fit]').click();
+        openNode(next.id, target, next.id === advanceId && working.has(next.id) ? 'edit' : undefined);
+        return;
+      }
+    }
     positionNote();
-    if (document.querySelector('#tree-canvas').dataset.growing === 'true') syncNotePosition();
+    if (!stopped && ((askNext && !busy) || (dialog.open && treeCanvas.dataset.growing === 'true')))
+      syncNotePosition();
   });
 }
 function openFruit(fruit) {
@@ -1404,21 +1289,22 @@ function openFruit(fruit) {
   );
 }
 document.querySelector('#close-node').addEventListener('click', closeNote);
-budGuide.addEventListener('click', nextQuestion);
-dialog.addEventListener('close', () => {
-  if (dialog.open) return;
-  noteId = currentId = null;
-  questionHeading.hidden = true;
-  document.querySelector('#bubble-link').setAttribute('hidden', '');
-  document.body.classList.remove('note-open');
-  const target = noteMode === 'plan' ? card.querySelector('#request-plan') : returnFocus;
-  target?.focus({ preventScroll: true });
-  if (state) updateTree();
+dialog.addEventListener('cancel', event => {
+  event.preventDefault();
+  if (!busy) closeNote();
 });
 window.addEventListener('resize', syncNotePosition);
 window.visualViewport?.addEventListener('resize', syncNotePosition);
 window.visualViewport?.addEventListener('scroll', syncNotePosition);
 document.querySelector('.tree-controls').addEventListener('click', syncNotePosition);
+const noteResize = new ResizeObserver(syncNotePosition);
+noteResize.observe(treeViewport);
+noteResize.observe(dialog);
+reducedMotion.addEventListener('change', () => {
+  for (const element of [mascot, dialog, bubbleLink])
+    element.getAnimations().forEach(animation => animation.cancel());
+  syncNotePosition();
+});
 window.addEventListener('beforeunload', event => {
   if (state?.status === 'active' && (working.size || (drafts.size && !draftsSaved))) {
     event.preventDefault();
@@ -1426,7 +1312,7 @@ window.addEventListener('beforeunload', event => {
   }
 });
 document.addEventListener('keydown', event => {
-  if (!state || busy) return;
+  if (!state || busy || stopped || event.defaultPrevented || event.isComposing) return;
   if (event.key === 'Escape') {
     if (dialog.open) {
       event.preventDefault();
@@ -1437,20 +1323,20 @@ document.addEventListener('keydown', event => {
   if (
     (event.code === 'Space' || event.key === ' ') &&
     !dialog.open &&
-    !event.target.matches('button,textarea,input')
+    !event.target.matches('button,textarea,input,a,summary,[role=button]')
   ) {
-    const seal = card.querySelector('.seal-btn');
-    if (seal && !seal.disabled) {
+    const summary = card.querySelector('#round-summary[data-ready="true"]');
+    if (summary && !summary.disabled) {
       event.preventDefault();
-      seal.click();
+      summary.click();
       return;
     }
   }
-  if (!dialog.open) return;
+  if (!dialog.open || !dialog.contains(event.target)) return;
   if (noteMode === 'summary') {
     if (event.key === 'Enter' || event.code === 'Space') {
       const submit = dialog.querySelector('.seal-btn,.primary');
-      if (submit && !submit.disabled && !event.target.matches('button')) {
+      if (submit && !submit.disabled && event.target.id === 'node-question') {
         event.preventDefault();
         submit.click();
       }
@@ -1462,7 +1348,7 @@ document.addEventListener('keydown', event => {
   if (inText) {
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
-      dialog.querySelector('#confirm-answer')?.click();
+      event.target.form?.requestSubmit();
     }
     return;
   }
@@ -1470,16 +1356,22 @@ document.addEventListener('keydown', event => {
     const input = dialog.querySelector(`[data-shortcut="${event.key}"]`);
     if (input && !input.disabled) {
       event.preventDefault();
-      input.checked = input.type === 'checkbox' ? !input.checked : true;
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-      input.focus();
+      input.click();
+      if (input.type === 'checkbox') input.focus();
     }
   } else if (
     event.key === 'Enter' &&
     event.target.matches('input[type=radio],input[type=checkbox]')
   ) {
     event.preventDefault();
-    dialog.querySelector('#confirm-answer')?.click();
+    if (event.target.type === 'radio') event.target.click();
+    else event.target.form?.requestSubmit();
+  } else if (event.key.startsWith('Arrow') && event.target.matches('input[type=radio]')) {
+    const group = [...dialog.querySelectorAll('input[type=radio]:enabled')],
+      step = ['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1,
+      index = (group.indexOf(event.target) + step + group.length) % group.length;
+    event.preventDefault();
+    group[index]?.focus();
   }
 });
 
@@ -1553,8 +1445,8 @@ async function refresh(force = false) {
         drafts.delete(n.id);
         working.delete(n.id);
       }
-    if (old && old.current_round !== next.current_round) {
-      currentId = null;
+    if (!old || old.current_round !== next.current_round) {
+      if (!dialog.open) askNext = true;
       waitingSince = null;
     }
     state = next;
@@ -1640,14 +1532,13 @@ document.querySelector('#copy-reminder').addEventListener('click', async () => {
     await navigator.clipboard.writeText(text);
     message('提醒已复制，粘回原对话即可继续。');
   } catch {
-    questionHeading.replaceChildren();
-    questionHeading.hidden = true;
     const body = document.querySelector('#node-body'),
       actions = document.querySelector('#node-actions'),
       heading = el('h2', '复制续接提醒');
     heading.id = 'node-question';
     heading.tabIndex = -1;
-    noteId = currentId = null;
+    askNext = false;
+    noteId = null;
     noteMode = 'reminder';
     returnFocus = document.querySelector('#copy-reminder');
     body.replaceChildren(heading);

@@ -201,7 +201,7 @@ def run(work):
             assert not ai_check(thinking)['changed'] and not ai_status(thinking)['work_active']
             interview.evaluate('window.simUserPauses.length = 0')
             interview.get_by_role('textbox').fill('用户提交后由 AI 准备下一轮。')
-            interview.get_by_role('button', name='就这么定', exact=True).click()
+            interview.get_by_role('button', name='好了', exact=True).click()
             open_summary(interview)
             with interview.expect_response('**/submit') as submitted:
                 interview.get_by_role('button', name='提交本轮答案', exact=True).click()

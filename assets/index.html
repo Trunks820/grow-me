@@ -2,15 +2,38 @@
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>grow-me · 需求生长树</title><link rel="stylesheet" href="/style.css"></head>
 <body>
 <svg class="paper-grain" aria-hidden="true"><filter id="paper"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="3" seed="3"/><feColorMatrix values="0 0 0 0 .4 0 0 0 0 .36 0 0 0 0 .3 0 0 0 .09 0"/></filter><rect width="100%" height="100%" filter="url(#paper)"/></svg>
-<header class="cap"><h1>需求生长树</h1><p>一个问题落下，树就安静地长高一点。</p><p id="connection" role="status">连接中…</p><button type="button" id="copy-reminder" class="small-action" disabled>复制提醒</button></header>
+<header class="cap"><h1><svg class="cap-logo" viewBox="10 9 100 100" aria-hidden="true" focusable="false">
+<defs>
+<filter id="mascot-ask-brush" x="-10%" y="-10%" width="120%" height="120%">
+ <feTurbulence type="fractalNoise" baseFrequency=".75" numOctaves="1" seed="2" result="n"/>
+ <feDisplacementMap in="SourceGraphic" in2="n" scale="1.6"/>
+</filter>
+<filter id="mascot-ask-wash" x="-30%" y="-30%" width="160%" height="160%">
+ <feTurbulence type="fractalNoise" baseFrequency=".08" numOctaves="2" seed="5" result="n"/>
+ <feDisplacementMap in="SourceGraphic" in2="n" scale="5"/>
+ <feGaussianBlur stdDeviation=".9"/>
+</filter>
+<radialGradient id="mascot-ask-shade" cx=".5" cy=".85" r=".6"><stop offset="0" stop-color="#8f8774" stop-opacity=".16"/><stop offset="1" stop-color="#8f8774" stop-opacity="0"/></radialGradient>
+<g id="mascot-ask-art">
+<g filter="url(#mascot-ask-wash)"><path d="M59 45C54 36 45 34 38 37C41 45 50 48 59 45Z" fill="#56534a" opacity="0.62"/></g>
+<path d="M59 45C54 36 45 34 38 37C41 45 50 48 59 45Z" fill="none" stroke="#2f2c26" stroke-width="1.1" opacity=".55"/>
+<g filter="url(#mascot-ask-brush)"><path d="M59 51C59 43 63 37 67 31" fill="none" stroke="#2f2c26" stroke-width="4" stroke-linecap="round"/></g>
+<g filter="url(#mascot-ask-wash)"><circle cx="68" cy="26" r="8.6" fill="#b8432f" opacity=".92"/></g><circle cx="68" cy="26" r="3.2" fill="#fbf8f1"/>
+<path d="M22 82C22 61 38 50 60 50S98 61 98 82C98 95 86 101 60 101S22 95 22 82Z" fill="#fbf8f1"/><path d="M22 82C22 61 38 50 60 50S98 61 98 82C98 95 86 101 60 101S22 95 22 82Z" fill="url(#mascot-ask-shade)"/>
+<g filter="url(#mascot-ask-brush)" fill="none" stroke="#1f1d19" stroke-linecap="round" stroke-linejoin="round">
+ <path d="M22 82C22 61 38 50 60 50S98 61 98 82C98 95 86 101 60 101S22 95 22 82Z" stroke-width="5.4" pathLength="100" stroke-dasharray="9 3 50 1.6 36.4"/>
+ <path d="M28 91C33 98 45 101 60 101S87 98 92 91" stroke-width="7.4"/>
+</g>
+<ellipse cx="49" cy="76" rx="3.6" ry="4.2" fill="#2f2c26"/><ellipse cx="71" cy="76" rx="3.6" ry="4.2" fill="#2f2c26"/>
+</g></defs>
+<use href="#mascot-ask-art"/></svg>需求生长树</h1><p>一个问题落下，树就安静地长高一点。</p><p id="connection" role="status">连接中…</p><button type="button" id="copy-reminder" class="small-action" disabled>复制提醒</button></header>
 <div id="meta" class="meta" aria-live="polite"></div>
-<section id="question-heading" aria-live="polite" hidden></section>
-<button type="button" id="bud-guide" hidden></button>
 <main>
+<svg id="mascot" width="64" height="64" viewBox="10 9 100 100" aria-hidden="true" focusable="false" hidden><use href="#mascot-ask-art"/></svg>
 <svg id="bubble-link" aria-hidden="true" hidden><path class="bubble-tail-fill"/><path class="bubble-tail-edge"/></svg>
 <section id="decision-tree" aria-label="需求生长树"><div class="tree-viewport"><svg id="tree-canvas" viewBox="0 0 1000 900" preserveAspectRatio="xMidYMid meet" role="group" aria-label="问题依赖关系，芽、花、黄叶与文档果子"></svg></div><div class="tree-controls" aria-label="树的显示比例"><button type="button" data-tree-replay hidden>重看生长</button><button type="button" data-tree-zoom="out" aria-label="缩小需求树">−</button><button type="button" data-tree-zoom="fit">看全树</button><button type="button" data-tree-zoom="in" aria-label="放大需求树">＋</button></div></section>
-<section id="subtitle-area" aria-label="树下答题区">
 <dialog id="node-dialog" aria-labelledby="node-question"><div id="node-body"></div><div id="node-actions" class="actions"></div><button type="button" id="close-node" aria-label="关闭">×</button></dialog>
+<section id="subtitle-area" aria-label="进度与状态">
 <section id="card" aria-live="polite"><h2 class="q">正在读取需求树…</h2><p class="growth-status">生长中</p><p class="w">正在连接本机服务，将自动重连。</p></section>
 </section>
 </main>

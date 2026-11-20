@@ -26,9 +26,9 @@ def run(work):
             page.goto(service.url)
 
             open_question(page, 'delivery')
-            expect(page.locator('#confirm-answer')).to_be_disabled()
-            page.get_by_role('button', name='待定', exact=True).click()
-            expect(page.locator('#node-dialog')).to_be_hidden()
+            expect(page.locator('#confirm-answer')).to_have_count(0)
+            page.get_by_role('button', name='先待定，以后再说', exact=True).click()
+            expect(page.locator('#node-dialog')).to_have_attribute('data-node-id', 'timing')
             marker = page.locator('.tree-node[data-node-id="delivery"]')
             expect(marker).to_have_attribute('data-status', 'deferred')
             expect(marker).to_have_attribute('data-local', 'true')
@@ -36,10 +36,10 @@ def run(work):
 
             open_question(page, 'timing')
             page.get_by_role('textbox').fill(note)
-            page.get_by_role('button', name='待定', exact=True).click()
+            page.get_by_role('button', name='先待定，以后再说', exact=True).click()
             open_question(page, 'signup')
             page.get_by_role('textbox').fill('统一报名入口')
-            page.get_by_role('button', name='就这么定', exact=True).click()
+            page.get_by_role('button', name='好了', exact=True).click()
             expect(page.locator('.tree-node[data-node-id="signup"] use')).to_have_attribute('href', '#tree-flower')
 
             open_summary(page)
