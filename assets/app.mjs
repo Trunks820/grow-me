@@ -1,12 +1,21 @@
 import { createDecisionTree } from './tree.mjs';
 import { chapters, answerText } from './topics.mjs';
-import { publicError, assistantConnection, assistantSilenceSeconds } from './presentation.mjs';
+import { publicError, assistantConnection } from './presentation.mjs';
 import { isDeferred, selectionValid } from './answers.mjs';
 
 const card = document.querySelector('#card'),
   dialog = document.querySelector('#node-dialog'),
   mascot = document.querySelector('#mascot'),
+  planMascot = document.querySelector('#plan-mascot'),
   bubbleLink = document.querySelector('#bubble-link'),
+  reminderButton = document.querySelector('#copy-reminder'),
+  presencePanel = document.querySelector('#ai-presence'),
+  presenceMascot = document.querySelector('#presence-mascot'),
+  presenceImage = presenceMascot.querySelector('img'),
+  presenceBubble = document.querySelector('#presence-bubble'),
+  presenceCopy = document.querySelector('#presence-copy'),
+  presenceReminder = document.querySelector('#presence-reminder'),
+  presenceRetry = document.querySelector('#presence-retry'),
   deliveryPanel = document.querySelector('#round-delivery'),
   deliveryArt = document.querySelector('.delivery-art'),
   deliveryCopy = document.querySelector('#round-delivery-copy'),
@@ -20,6 +29,7 @@ const card = document.querySelector('#card'),
 const drafts = new Map(),
   working = new Map();
 const deliveryDelay = 5000;
+const replyDelay = 1500;
 let delivery = null;
 const bloomReplies = [
   '记下啦，这里又开了一朵花。',
@@ -48,12 +58,11 @@ let guidance = {};
 let aiActivity = null,
   aiInstance = null,
   aiOpenedAt = performance.now(),
-  aiObservedAt = performance.now(),
   assistantDisplay = 'inactive',
+  presence = null,
+  wakeTimer = null,
   reportedPause = false;
 const pageId = crypto.randomUUID();
-const pauseText = () =>
-  `已 ${Math.max(0, Math.floor((assistantSilenceSeconds(aiActivity) ?? 0) + (performance.now() - aiObservedAt) / 1000))} 秒没收到 AI 回应，回聊天窗口发\"继续\"`;
 let state,
   draftsSaved = false,
   documentState = { phase: 'idle' },
@@ -220,6 +229,7 @@ function handleAnswer(node, answer) {
   lastAnsweredId = node.id;
   if (advanceId === node.id) advanceId = null;
   noteMode = 'reply';
+  noteRevision = state.revision;
   dialog.dataset.mode = noteMode;
   const heading = el('h2', answerReply(node, answer));
   heading.id = 'node-question';
@@ -227,11 +237,14 @@ function handleAnswer(node, answer) {
   document.querySelector('#node-body').replaceChildren(heading);
   document.querySelector('#node-actions').replaceChildren();
   askNext = true;
-  replyTimer = setTimeout(() => {
-    replyTimer = null;
-    syncNotePosition();
-  }, 1500);
+  replyTimer = setTimeout(finishAnswerReply, replyDelay);
   showNote();
+}
+function finishAnswerReply() {
+  clearTimeout(replyTimer);
+  replyTimer = null;
+  if (noteRevision === state.revision && startRoundDelivery(noteId)) return;
+  syncNotePosition();
 }
 function assistantStatus() {
   const writing =
@@ -241,6 +254,49 @@ function assistantStatus() {
   if (state?.schema_version !== 2 || !((isWaiting() && !saveOffered()) || writing))
     return 'inactive';
   return assistantConnection(aiActivity, performance.now() - aiOpenedAt);
+}
+function isSleeping(status = assistantDisplay) {
+  return status === 'paused' || status === 'connecting';
+}
+function hidePresence() {
+  clearTimeout(wakeTimer);
+  if (presencePanel.contains(document.activeElement)) reminderButton.focus({ preventScroll: true });
+  presence = null;
+  presencePanel.hidden = true;
+}
+function updatePresence(previousDisplay) {
+  if (assistantDisplay === previousDisplay) return;
+  if (isSleeping()) {
+    clearTimeout(wakeTimer);
+    const answered = state.nodes.filter(node => node.status === 'answered'),
+      flowers = answered.filter(node => !isDeferred(node.answer)),
+      anchor = flowers.find(node => node.id === lastAnsweredId) ?? flowers.at(-1) ?? answered.at(-1);
+    presence = { anchor: anchor?.id };
+    presencePanel.dataset.mode = assistantDisplay;
+    presenceMascot.dataset.nodeId = presence.anchor ?? '';
+    presenceImage.src = '/mascot-sleep.svg';
+    presenceMascot.disabled = false;
+    presenceBubble.hidden = false;
+    presenceRetry.hidden = true;
+    presenceReminder.hidden = true;
+    presenceReminder.value = '';
+    presenceCopy.textContent = assistantDisplay === 'paused'
+      ? 'AI 那边好像停下了，我先眯一会儿。点我叫醒'
+      : 'AI 还没连上，我先眯一会儿。点我复制提醒';
+    presencePanel.hidden = false;
+  } else if (isSleeping(previousDisplay)) {
+    const online = assistantConnection(aiActivity, Infinity) === 'connected';
+    if (!online) {
+      hidePresence();
+      return;
+    }
+    if (presencePanel.contains(document.activeElement)) reminderButton.focus({ preventScroll: true });
+    presencePanel.dataset.mode = 'wake';
+    presenceImage.src = '/mascot-wake.svg';
+    presenceMascot.disabled = true;
+    presenceBubble.hidden = true;
+    wakeTimer = setTimeout(hidePresence, 1000);
+  }
 }
 function heartbeatNote() {
   const text = aiActivity?.heartbeat_active
@@ -253,19 +309,7 @@ function heartbeatNote() {
   return text ? '心跳报告：' + text : '';
 }
 function waitingHeader(title, progress) {
-  if (['paused', 'connecting'].includes(assistantDisplay)) {
-    const paused = assistantDisplay === 'paused',
-      notice = el(
-        'p',
-        paused
-          ? pauseText()
-          : '请回到聊天窗口让 AI 继续，或点「复制提醒」粘贴过去。你的答案已保存。',
-        'ai-wait-notice'
-      );
-    notice.id = 'ai-wait-notice';
-    card.append(el('h2', paused ? '等待 AI 对话续接' : '等待 AI 对话连接', 'q'), notice);
-    if (paused) card.append(el('p', '也可以点「复制提醒」粘贴过去。你的答案已保存，不会丢。', 'w'));
-  } else card.append(el('h2', title, 'q'), el('p', progress, 'growth-status'));
+  if (!isSleeping()) card.append(el('h2', title, 'q'), el('p', progress, 'growth-status'));
   const note = el('p', heartbeatNote(), 'w');
   note.id = 'heartbeat-work';
   note.hidden = !note.textContent;
@@ -533,9 +577,10 @@ function inputs(n, host) {
       drafts.set(n.id, structuredClone(answer));
       saveDrafts();
       working.delete(n.id);
-      if (!startRoundDelivery(n.id)) handleAnswer(n, answer);
+      handleAnswer(n, answer);
       message('');
       render();
+      if (reducedMotion.matches && roundCanSubmit()) finishAnswerReply();
     }
   }
   host.append(form);
@@ -543,9 +588,12 @@ function inputs(n, host) {
 async function saveReviewAnswer(node, answer) {
   const ok = await act(async () => {
     await post('/decision', { id: node.id, expected_revision: state.revision, answer });
-    handleAnswer(node, answer);
+    lastAnsweredId = node.id;
   });
-  if (ok) startRoundDelivery(node.id);
+  if (ok && !stopped) {
+    handleAnswer(node, answer);
+    if (reducedMotion.matches && roundCanSubmit()) finishAnswerReply();
+  }
 }
 function startRoundDelivery(id) {
   if (busy || stopped || !roundCanSubmit()) return false;
@@ -655,13 +703,13 @@ function planConfirmation(unanswered, confirm, cancel) {
   const question = el(
     'h2',
     unanswered
-      ? `这一轮还有 ${unanswered} 题没答，会记成待定，直接出方案吗？`
-      : '这一轮已答完，直接出方案吗？'
+      ? `这一轮还有 ${unanswered} 题没答。没答的会记成「待定」，写进方案的「待确认」。现在就出方案吗？`
+      : '这一轮都答完了。现在就出方案吗？'
   );
   question.id = 'node-question';
   question.tabIndex = -1;
   const actions = el('div', undefined, 'actions');
-  actions.append(button('我再答几题', cancel), button('先出方案', confirm, true));
+  actions.append(button('就先出方案', confirm, true), button('再答几题', cancel));
   return [question, actions];
 }
 function openPlanConfirmation(event) {
@@ -862,13 +910,11 @@ function render() {
   renderFailed = false;
   try {
     if (delivery && (delivery.revision !== state.revision || !roundCanSubmit())) cancelRoundDelivery();
+    const previousDisplay = assistantDisplay,
+      header = reminderButton.closest('header');
     assistantDisplay = assistantStatus();
-    const reminder = document.querySelector('#copy-reminder'),
-      header = reminder.closest('header');
     header.querySelector('#heartbeat-work')?.remove();
-    reminder.classList.toggle('needs-attention', assistantDisplay === 'paused');
-    if (assistantDisplay === 'paused') reminder.setAttribute('aria-describedby', 'ai-wait-notice');
-    else reminder.removeAttribute('aria-describedby');
+    reminderButton.classList.toggle('needs-attention', assistantDisplay === 'paused');
     card.replaceChildren();
     if (state.schema_version === 1) {
       card.append(
@@ -942,12 +988,14 @@ function render() {
           ? 'questions'
           : 'waiting';
     updateTree();
+    updatePresence(previousDisplay);
     if (dialog.open) {
       if (noteMode === 'plan') {
         if (noteRevision !== state.revision) closeNote();
         else dialog.querySelectorAll('button').forEach(b => (b.disabled = busy));
       } else if (noteMode === 'reply') {
-        document.querySelector('#close-node').disabled = busy;
+        if (noteRevision !== state.revision) closeNote();
+        else document.querySelector('#close-node').disabled = busy;
       } else if (!askNext && (noteRevision !== state.revision || noteBusy !== busy)) {
         if (noteId) renderNote();
         else if (noteMode === 'summary') renderSummaryNote();
@@ -994,6 +1042,7 @@ function showNote() {
     heading = dialog.querySelector('#node-question');
   const image = noteMode === 'reply' ? '/mascot-bloom.svg' : '/mascot-ask.svg';
   if (mascot.getAttribute('src') !== image) mascot.src = image;
+  planMascot.hidden = noteMode !== 'plan';
   dialog.dataset.placement = sheetLayout.matches ? 'sheet' : 'panel';
   if (!wasOpen) {
     heading.setAttribute('autofocus', '');
@@ -1202,6 +1251,30 @@ function mascotPlace(bud, frame, size) {
   };
 }
 
+function positionPresence() {
+  if (!presence) return;
+  const frame = treeViewport.getBoundingClientRect(),
+    size = presenceImage.width,
+    bud = visibleBud(presence.anchor),
+    spot = bud ? mascotPlace(bud, frame, size) : {
+      x: frame.left + (frame.width - size) / 2,
+      y: Math.max(frame.top, frame.bottom - size - 8)
+    };
+  presenceMascot.style.left = `${spot.x}px`;
+  presenceMascot.style.top = `${spot.y}px`;
+  if (sheetLayout.matches || presenceBubble.hidden) return;
+  const width = presenceBubble.offsetWidth,
+    height = presenceBubble.offsetHeight,
+    center = spot.y + size / 2,
+    toRight = spot.x + size + width <= frame.right,
+    x = toRight ? spot.x + size : spot.x - width,
+    y = clamp(center - height / 2, frame.top, frame.bottom - height);
+  presenceBubble.dataset.side = toRight ? 'right' : 'left';
+  presenceBubble.style.setProperty('--presence-left', `${x}px`);
+  presenceBubble.style.setProperty('--presence-top', `${y}px`);
+  presenceBubble.style.setProperty('--presence-tip', `${clamp(center - y, 12, height - 12)}px`);
+}
+
 function bubblePlace(bud, frame, mochi, size) {
   const ideal = dialog.offsetWidth,
     left = frame.left,
@@ -1271,6 +1344,7 @@ function positionNote() {
   const viewport = window.visualViewport;
   document.documentElement.style.setProperty('--visible-height', `${viewport?.height ?? innerHeight}px`);
   document.documentElement.style.setProperty('--visible-top', `${viewport?.offsetTop ?? 0}px`);
+  positionPresence();
   if (!dialog.open) return;
 
   const mobile = sheetLayout.matches;
@@ -1379,7 +1453,7 @@ function syncNotePosition() {
       }
     }
     positionNote();
-    if (!stopped && ((advancing && askNext) || (dialog.open && treeCanvas.dataset.growing === 'true')))
+    if (!stopped && ((advancing && askNext) || ((dialog.open || presence) && treeCanvas.dataset.growing === 'true')))
       syncNotePosition();
   });
 }
@@ -1415,9 +1489,11 @@ document.querySelector('.tree-controls').addEventListener('click', syncNotePosit
 const noteResize = new ResizeObserver(syncNotePosition);
 noteResize.observe(treeViewport);
 noteResize.observe(dialog);
+noteResize.observe(presenceBubble);
 reducedMotion.addEventListener('change', () => {
   for (const element of [mascot, dialog, bubbleLink, deliveryArt])
     element.getAnimations().forEach(animation => animation.cancel());
+  if (reducedMotion.matches && replyTimer !== null && roundCanSubmit()) finishAnswerReply();
   syncNotePosition();
 });
 window.addEventListener('beforeunload', event => {
@@ -1512,6 +1588,7 @@ async function refresh(force = false) {
     stopped = true;
     cancelAdvance();
     cancelRoundDelivery();
+    hidePresence();
     document
       .querySelectorAll(
         '#card input,#card button,#card textarea,#node-dialog input,#node-dialog button,#node-dialog textarea'
@@ -1576,13 +1653,12 @@ async function refresh(force = false) {
   documentState = doc;
   planRequested = Boolean(progress.plan_requested);
   guidance = advice.recommendations;
-  document.querySelector('#copy-reminder').disabled = false;
+  reminderButton.disabled = false;
   if (instance !== aiInstance) {
     aiInstance = instance;
     aiOpenedAt = performance.now();
   }
   aiActivity = progress.ai ?? null;
-  aiObservedAt = performance.now();
   if (isWaiting()) {
     if (waitingSince === null || planChanged)
       waitingSince =
@@ -1639,8 +1715,9 @@ async function poll() {
   }
   if (!stopped) setTimeout(poll, 1000);
 }
-document.querySelector('#copy-reminder').addEventListener('click', async () => {
+async function copyReminder() {
   if (!state) return;
+  const fromPresence = isSleeping() && !presencePanel.hidden && !dialog.open ? presence : null;
   const text =
     '请继续 grow-me。恢复后的第一步先运行一次 check.mjs，核对会话身份、实例和 revision，再做别的事；curl GET 不算轮询。服务若已停止，先按原启动回执重启原会话并立即运行 check.mjs。\n' +
     JSON.stringify({
@@ -1648,10 +1725,27 @@ document.querySelector('#copy-reminder').addEventListener('click', async () => {
       current_round: state.current_round,
       url: location.origin
     });
+  let copied = false;
   try {
     await navigator.clipboard.writeText(text);
-    message('提醒已复制，粘回原对话即可继续。');
-  } catch {
+    copied = true;
+  } catch {}
+  if (fromPresence) {
+    if (fromPresence !== presence || !isSleeping() || dialog.open) return;
+    presenceCopy.textContent = copied
+      ? '提醒已经复制好了。去跟 AI 的聊天窗口粘贴，喊它一声；它一回来，我就醒。'
+      : '没能复制。请手动复制下面的提醒，去跟 AI 的聊天窗口粘贴。';
+    presenceReminder.value = copied ? '' : text;
+    presenceReminder.hidden = copied;
+    presenceRetry.hidden = false;
+    if (!copied) {
+      presenceReminder.focus({ preventScroll: true });
+      presenceReminder.select();
+    }
+    syncNotePosition();
+  } else if (copied) {
+    message('提醒已复制，去跟 AI 的聊天窗口粘贴。');
+  } else {
     const body = document.querySelector('#node-body'),
       actions = document.querySelector('#node-actions'),
       heading = el('h2', '复制续接提醒');
@@ -1661,7 +1755,7 @@ document.querySelector('#copy-reminder').addEventListener('click', async () => {
     cancelRoundDelivery();
     noteId = null;
     noteMode = 'reminder';
-    returnFocus = document.querySelector('#copy-reminder');
+    returnFocus = reminderButton;
     body.replaceChildren(heading);
     actions.replaceChildren();
     const field = el('textarea', undefined, 'field');
@@ -1672,10 +1766,11 @@ document.querySelector('#copy-reminder').addEventListener('click', async () => {
     showNote();
     field.select();
   }
-});
+}
+reminderButton.addEventListener('click', copyReminder);
+presenceMascot.addEventListener('click', copyReminder);
+presenceRetry.addEventListener('click', copyReminder);
 setInterval(() => {
-  const notice = document.querySelector('#ai-wait-notice');
-  if (notice && assistantDisplay === 'paused') notice.textContent = pauseText();
   const late = document.querySelector('#long-wait');
   if (late) late.hidden = waitingSince === null || performance.now() - waitingSince <= 60000;
   const elapsed = document.querySelector('#wait-elapsed');

@@ -111,6 +111,7 @@ def run(work):
             expect(dialog).to_have_attribute('data-node-id', 'last')
             page.get_by_role('textbox').fill('齐了。')
             page.keyboard.press('Control+Enter')
+            expect_reply('last')
             expect(dialog).to_be_hidden()
             expect(page.get_by_role('button', name='等等，我再看看')).to_be_focused()
             page.keyboard.press('Enter')

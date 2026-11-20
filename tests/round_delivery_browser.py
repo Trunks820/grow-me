@@ -38,7 +38,10 @@ def pause_clock(page):
 
 
 def auto_submit(browser, work):
-    service = Service(work / 'runtime', seed([node('scope', '先做什么？'), node('end', '还有什么要求？')]))
+    last_reply = '好，我把最后这条也记下了。'
+    service = Service(work / 'runtime', seed([
+        node('scope', '先做什么？'), dict(node('end', '还有什么要求？'), reply=last_reply),
+    ]))
     page = browser.new_page(viewport={'width': 1440, 'height': 900})
     try:
         page.clock.install()
@@ -50,8 +53,24 @@ def auto_submit(browser, work):
 
         submissions = record_submissions(page)
         before = service.file.read_bytes()
-        fill(page, '  保留原话\n请记下这行。  ')
         delivery = page.locator('#round-delivery')
+        fill(page, '先记这句。')
+        expect(page.locator('#node-question')).to_have_text(last_reply)
+        expect(page.locator('.tree-node[data-node-id=end] .tree-symbol')).to_have_attribute('href', '#tree-flower')
+        expect(delivery).to_be_hidden()
+        page.clock.run_for(1000)
+        open_question(page, 'scope', edit=True)
+        page.clock.run_for(6500)
+        expect(delivery).to_be_hidden()
+        assert not submissions and service.file.read_bytes() == before
+
+        open_question(page, 'end', edit=True)
+        fill(page, '  保留原话\n请记下这行。  ')
+        page.clock.run_for(1499)
+        expect(page.locator('#node-question')).to_have_text(last_reply)
+        expect(delivery).to_be_hidden()
+        assert not submissions
+        page.clock.run_for(1)
         clock = delivery.get_by_role('timer')
         expect(delivery.get_by_role('heading')).to_have_text('这一轮 2 题都定了，我送去给 AI 啦～')
         expect(clock).to_have_text('5 秒后自动交')

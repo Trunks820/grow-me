@@ -1,12 +1,13 @@
 """AI presence across query silence using the real service and a controlled clock."""
-import argparse,json,subprocess,re,os,time
+import argparse,json,subprocess,os,time
 from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
 from browser_acceptance import Service, seed, node, request, no_overflow, ai_check, document_fixture
 from sim_user import WATCH_PAUSES
 
 BASE=Path(__file__).resolve().parents[1]
-PAUSED=re.compile(r'已 \d+ 秒没收到 AI 回应，回聊天窗口发"继续"')
+PAUSED = 'AI 那边好像停下了，我先眯一会儿。点我叫醒'
+COPIED = '提醒已经复制好了。去跟 AI 的聊天窗口粘贴，喊它一声；它一回来，我就醒。'
 WORK_LEASE_MS = 180_000
 STALE_CHECK_MS = 63_000
 CHAPTER_GAP_MS = 100_000
@@ -19,7 +20,7 @@ def ai_status(service):
 def refresh_progress(page, advance_ms=1100):
     with page.expect_response('**/progress') as response:
         page.clock.fast_forward(advance_ms)
-    response.value.finished()
+    response.value.json()
     page.wait_for_timeout(100)
 
 
@@ -62,13 +63,31 @@ def run(work):
                 page.goto(s.url);page.wait_for_load_state('networkidle')
                 expect(page.get_by_role('heading',name=title,exact=True)).to_be_visible()
                 expect(page.locator('#copy-reminder')).not_to_have_class('small-action needs-attention')
-                assert not PAUSED.search(page.locator('#card').inner_text())
+                expect(page.locator('#ai-presence')).to_be_hidden()
                 ai = ai_status(s)
                 assert ai['work_active'] and ai['last_check_at'] is None and ai['last_heartbeat_at'] is None
                 since.append(page.locator('#wait-elapsed').get_attribute('data-since'))
                 no_overflow(page)
             report['checks']['startup_keeps_first_submission_online_before_first_check']=True
             report['checks']['offer_keeps_queued_online_before_first_check']=True
+
+            def before_first_contact(route):
+                response = route.fetch()
+                progress = response.json()
+                progress['ai'] = None
+                route.fulfill(response=response, json=progress)
+
+            connecting = browser.new_page(viewport={'width': 320, 'height': 600}, reduced_motion='reduce')
+            connecting.route('**/progress', before_first_contact)
+            connecting.goto(thinking.url)
+            expect(connecting.locator('#ai-presence')).to_have_attribute('data-mode', 'connecting')
+            expect(connecting.locator('#presence-copy')).to_have_text('AI 还没连上，我先眯一会儿。点我复制提醒')
+            expect(connecting.locator('#presence-mascot img')).to_have_attribute('src', '/mascot-sleep.svg')
+            no_overflow(connecting)
+            connecting.screenshot(path=str(work / 'connecting-mobile.png'))
+            connecting.close()
+            report['checks']['connecting_shows_sleeping_mascot_with_copy_prompt']=True
+
             first = start_heartbeat(thinking)
             expect(pages[0].locator('#heartbeat-work')).to_be_visible()
             assert ai_status(thinking)['last_check_at'] is None
@@ -85,18 +104,18 @@ def run(work):
                 assert ai['heartbeat_active'] and ai['seconds_since_last_check'] > 60
                 assert ai['seconds_since_last_heartbeat'] < 12
                 expect(page.locator('#heartbeat-work')).to_be_visible()
-                expect(page.locator('#ai-wait-notice')).to_have_count(0)
+                expect(page.locator('#ai-presence')).to_be_hidden()
                 expect(page.locator('#copy-reminder')).not_to_have_class('small-action needs-attention')
             report['checks']['live_heartbeats_prevent_pause_in_thinking_and_queued']=True
             claimed = control('claim', job_id=job)
             expect(pages[1].locator('#heartbeat-work')).to_contain_text('AI 正在写文档')
-            expect(pages[1].locator('#ai-wait-notice')).to_have_count(0)
+            expect(pages[1].locator('#ai-presence')).to_be_hidden()
             report['checks']['live_heartbeat_keeps_claimed_writer_online']=True
             for service, page, heartbeat in zip([thinking, queued], pages, running):
                 stop_heartbeat(service, heartbeat)
                 expect(page.locator('#heartbeat-work')).to_be_hidden()
                 assert ai_status(service)['work_active']
-                expect(page.locator('#ai-wait-notice')).to_have_count(0)
+                expect(page.locator('#ai-presence')).to_be_hidden()
 
             writer = pages[1]
             last_check = ai_status(queued)['last_check_at']
@@ -107,7 +126,7 @@ def run(work):
             for index, chapter in enumerate(chapters, 1):
                 queued.set_clock_offset(STALE_CHECK_MS + CHAPTER_GAP_MS * index)
                 refresh_progress(writer)
-                expect(writer.locator('#ai-wait-notice')).to_have_count(0)
+                expect(writer.locator('#ai-presence')).to_be_hidden()
                 tag = f'<article id="{chapter["anchor"]}"'
                 preview_html = preview_html.replace(tag + '>', tag + ' data-chapter-ready="true">')
                 preview.write_text(preview_html, encoding='utf-8')
@@ -117,7 +136,7 @@ def run(work):
             refresh_progress(writer)
             ai = ai_status(queued)
             assert ai['work_active'] and not ai['heartbeat_active'] and ai['last_check_at'] == last_check
-            expect(writer.locator('#ai-wait-notice')).to_have_count(0)
+            expect(writer.locator('#ai-presence')).to_be_hidden()
             assert not writer.evaluate('window.simUserPauses')
             report['checks']['sequential_chapter_publication_keeps_writer_online']=True
 
@@ -130,35 +149,63 @@ def run(work):
                 age = ai['seconds_since_last_check']
                 assert age > 60
                 report['silence_seconds'][label] = age
-                expect(page.locator('#ai-wait-notice')).to_have_text(PAUSED,timeout=5000)
+                expect(page.locator('#ai-presence')).to_have_attribute('data-mode', 'paused')
+                expect(page.locator('#presence-copy')).to_have_text(PAUSED)
+                mascot = page.locator('#presence-mascot')
+                expect(mascot).to_be_visible()
+                expect(mascot).to_have_attribute('data-node-id', 'A' if label == 'thinking' else 'B')
+                expect(mascot.locator('img')).to_have_attribute('src', '/mascot-sleep.svg')
                 recovery=request(s.url,'/recovery')[1]['ai'];assert recovery['last_check_at']==ai['last_check_at'] and recovery['seconds_since_last_check']>60
-                visible_age=int(re.search(r'已 (\d+) 秒',page.locator('#ai-wait-notice').inner_text()).group(1));assert abs(visible_age-age)<3
                 expect(page.locator('#copy-reminder')).to_have_class('small-action needs-attention')
-                expect(page.locator('#copy-reminder')).to_have_attribute('aria-describedby','ai-wait-notice')
-                text=page.locator('#card').inner_text();assert '生长中' not in text and '还在想' not in text
+                text=page.locator('#card').inner_text();assert '生长中' not in text and '等待 AI 对话续接' not in text
                 no_overflow(page);page.screenshot(path=str(work/(label+'-paused.png')),full_page=True)
             report['checks']['work_lease_expiry_reveals_existing_query_silence']=True
-            pages[0].evaluate('navigator.clipboard.writeText=async text=>{window.copiedReminder=text}')
-            pages[0].get_by_role('button',name='复制提醒',exact=True).click()
-            copied=pages[0].evaluate('window.copiedReminder');identity=json.loads(copied.split('\n')[-1])
+            desktop, mobile = pages
+            desktop.evaluate('navigator.clipboard.writeText = async text => { window.copiedReminder = text }')
+            desktop.get_by_role('button', name='点我复制提醒').press('Enter')
+            expect(desktop.locator('#presence-copy')).to_have_text(COPIED)
+            expect(desktop.locator('#presence-mascot img')).to_have_attribute('src', '/mascot-sleep.svg')
+            copied=desktop.evaluate('window.copiedReminder');identity=json.loads(copied.split('\n')[-1])
             assert set(identity)=={'session_id','current_round','url'} and identity['session_id']==thinking.state()['session_id']
             assert thinking.state()['nodes'][0]['answer']['text'] not in copied
             assert '第一步先运行一次 check.mjs' in copied and 'curl GET 不算轮询' in copied
-            report['checks']['highlighted_copy_reminder_still_contains_only_locator_fields']=True
+            desktop.screenshot(path=str(work / 'thinking-copied.png'))
+            desktop.get_by_role('button', name='再复制一次').press('Enter')
+            expect(desktop.locator('#presence-copy')).to_have_text(COPIED)
+            mobile.evaluate('() => { navigator.clipboard.writeText = async () => { throw Error() } }')
+            mobile.locator('#presence-mascot').click()
+            field = mobile.get_by_role('textbox', name='续接提醒')
+            expect(field).to_be_focused()
+            assert json.loads(field.input_value().split('\n')[-1])['session_id'] == queued.state()['session_id']
+            no_overflow(mobile)
+            mobile.screenshot(path=str(work / 'queued-manual-copy.png'), mask=[field], mask_color='#f5f0e6')
+            mobile.evaluate('navigator.clipboard.writeText = async text => { window.copiedReminder = text }')
+            mobile.get_by_role('button', name='再复制一次').press('Enter')
+            expect(field).to_be_hidden()
+            expect(mobile.locator('#presence-copy')).to_have_text(COPIED)
+            mobile.locator('#copy-reminder').press('Enter')
+            assert mobile.evaluate('window.copiedReminder')
+            report['checks']['mascot_header_and_retry_share_reminder_with_manual_fallback']=True
             fresh=browser.new_page(reduced_motion='reduce');fresh.clock.install();fresh.goto(thinking.url);fresh.wait_for_load_state('networkidle')
             expect(fresh.get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible()
-            assert not PAUSED.search(fresh.locator('#card').inner_text())
-            fresh.clock.fast_forward(31000);expect(fresh.locator('#ai-wait-notice')).to_have_text(PAUSED);fresh.close()
+            expect(fresh.locator('#ai-presence')).to_be_hidden()
+            fresh.clock.fast_forward(31000);expect(fresh.locator('#presence-copy')).to_have_text(PAUSED);fresh.close()
             report['checks']['fresh_page_grace_prevents_immediate_stale_timestamp_alarm']=True
             for index,(s,page,title) in enumerate(zip([thinking,queued],pages,['正在想下一轮的问题…','正在生成任务文档…'])):
                 resumed_at=time.monotonic();ai_check(s)
                 expect(page.get_by_role('heading',name=title,exact=True)).to_be_visible()
-                expect(page.locator('#ai-wait-notice')).to_have_count(0)
+                expect(page.locator('#ai-presence')).to_have_attribute('data-mode', 'wake')
+                expect(page.locator('#presence-mascot img')).to_have_attribute('src', '/mascot-wake.svg')
+                expect(page.locator('#presence-mascot')).to_be_visible()
+                expect(page.locator('#presence-bubble')).to_be_hidden()
                 report.setdefault('resume_ms',{})[str(index)]=round((time.monotonic()-resumed_at)*1000)
                 assert report['resume_ms'][str(index)]<3000
                 expect(page.locator('#copy-reminder')).to_have_class('small-action')
                 assert page.locator('#wait-elapsed').get_attribute('data-since')==since[index]
                 assert s.file.read_bytes()==originals[index]
+                if index == 0:
+                    page.screenshot(path=str(work / 'thinking-wake.png'))
+                expect(page.locator('#ai-presence')).to_be_hidden(timeout=2500)
             report['checks']['resumed_check_clears_warning_without_resetting_wait_or_answers']=True
             for s in [thinking,queued]:
                 events=[json.loads(line)['event'] for line in Path(str(s.file)+'.runtime-timings.jsonl').read_text(encoding='utf-8').splitlines()]
@@ -179,14 +226,14 @@ def run(work):
             restarted = ai_status(thinking)
             assert restarted['last_check_at'] is None and restarted['work_active']
             assert restarted['work_until'] > old_deadline
-            assert not PAUSED.search(pages[0].locator('#card').inner_text())
+            expect(pages[0].locator('#ai-presence')).to_be_hidden()
             ai_check(thinking)
             assert thinking.file.read_bytes()==originals[0]
             report['checks']['same_url_restart_starts_fresh_work_lease_without_rewriting_tree']=True
             refresh_progress(pages[0], 31_000)
             pages[0].route('**/progress',stale_projection)
             code,_=request(thinking.url,'/round',{'expected_revision':thinking.state()['revision'],'round':2,'nodes':[node('B','用户待答的下一题',deps=['A'],round=2)]});assert code==200
-            expect(pages[0].locator('.tree-node[data-node-id=B]')).to_be_visible();pages[0].locator('.tree-node[data-node-id=B]').click();expect(pages[0].get_by_role('heading',name='用户待答的下一题',exact=True)).to_be_visible();expect(pages[0].locator('#ai-wait-notice')).to_have_count(0)
+            expect(pages[0].locator('.tree-node[data-node-id=B]')).to_be_visible();pages[0].locator('.tree-node[data-node-id=B]').click();expect(pages[0].get_by_role('heading',name='用户待答的下一题',exact=True)).to_be_visible();expect(pages[0].locator('#ai-presence')).to_be_hidden()
             report['checks']['pending_human_question_does_not_show_ai_pause']=True
             pages[0].unroute('**/progress', stale_projection)
             heartbeat = start_heartbeat(thinking);meta=request(thinking.url,'/recovery')[1]
@@ -212,7 +259,7 @@ def run(work):
             ai = ai_status(thinking)
             assert ai['seconds_since_last_check'] >= 90 and ai['work_active'] and not ai['heartbeat_active']
             expect(interview.get_by_role('heading', name='正在想下一轮的问题…', exact=True)).to_be_visible()
-            expect(interview.locator('#ai-wait-notice')).to_have_count(0)
+            expect(interview.locator('#ai-presence')).to_be_hidden()
             code, _ = request(thinking.url, '/round', {
                 'expected_revision': receipt['revision'], 'round': 3,
                 'nodes': [node('C', '已经发布的下一轮', deps=['B'], round=3)],

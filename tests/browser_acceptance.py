@@ -101,6 +101,7 @@ def run_suite(work,scenario='all',layout_fixture='v7'):
                 page.get_by_role('button',name='等等，我再看看',exact=True).click()
                 expect(page.get_by_role('button',name='交给 AI',exact=True)).to_be_visible();assert service.file.read_bytes()==before
                 page.locator('.summary-list button').first.click();page.get_by_role('button',name='改',exact=True).click();expect(page.get_by_label('按 v7 的纸底与墨枝',exact=True)).to_be_checked();page.get_by_label('按 v7 的纸底与墨枝',exact=True).click()
+                expect(page.locator('#round-delivery')).to_be_visible()
                 page.clock.fast_forward(5000);expect(page.get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible()
                 saved=service.state();assert saved['revision']==1;assert saved['nodes'][1]['answer']['text']==raw
                 page.clock.fast_forward(61000);expect(page.locator('#long-wait')).to_be_visible();capture(page,work,'wait-over-60-seconds')

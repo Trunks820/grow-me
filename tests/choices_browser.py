@@ -45,7 +45,9 @@ def run(work):
                 assert set(data)=={'session_id','current_round','url'} and data['session_id']==service.state()['session_id']
                 assert raw not in copied and notes not in copied and 'tree.json' not in copied and 'job_id' not in copied
                 page.evaluate("Object.defineProperty(navigator,'clipboard',{value:{writeText:async()=>{throw Error('clipboard denied')}},configurable:true})")
-                page.get_by_role('button',name='复制提醒',exact=True).click();expect(page.get_by_role('dialog')).to_be_visible();assert page.get_by_label('续接提醒',exact=True).input_value()==copied.replace('\r\n','\n')
+                page.get_by_role('button', name='复制提醒', exact=True).click()
+                reminder = page.get_by_role('dialog').get_by_role('textbox', name='续接提醒', exact=True)
+                expect(reminder).to_have_value(copied.replace('\r\n', '\n'))
                 expect(page.locator('#node-question')).to_have_count(1)
                 expect(page.locator('#node-dialog #node-question')).to_have_text('复制续接提醒')
                 page.get_by_role('button',name='关闭',exact=True).click();expect(page.get_by_role('button',name='复制提醒',exact=True)).to_be_focused()

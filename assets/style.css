@@ -605,6 +605,20 @@ main:has(#card[data-scene='questions']) {
   right: 28px;
   translate: none;
 }
+#node-dialog[data-mode='plan'][open] {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+  padding-right: 28px;
+}
+#node-dialog[data-mode='plan'] .actions {
+  justify-content: flex-start;
+}
+#plan-mascot {
+  width: clamp(46px, 9vw, 64px);
+  height: auto;
+}
 #node-dialog[data-mode='reply'] #node-question {
   margin-bottom: 0;
 }
@@ -1209,14 +1223,71 @@ body.note-open #card:not([data-scene='questions']) {
     transform: scale(1);
   }
 }
-.ai-wait-notice {
-  margin: 4px auto;
-  max-width: 60ch;
-  font-family: var(--sans);
-  font-size: 13px;
-  line-height: 1.8;
-  color: #695338;
+#ai-presence {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-bubble);
+  pointer-events: none;
+}
+body.note-open #ai-presence:not([data-mode='wake']) {
+  display: none;
+}
+#presence-mascot {
+  position: fixed;
+  display: grid;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  pointer-events: auto;
+}
+#presence-mascot:disabled {
+  opacity: 1;
+  pointer-events: none;
+}
+#presence-bubble {
+  position: fixed;
+  left: var(--presence-left);
+  top: var(--presence-top);
+  width: 248px;
+  padding: 12px 14px;
+  border: 1px solid var(--bubble-edge);
+  border-radius: 16px;
+  background: var(--bubble-fill);
+  box-shadow: 0 8px 24px rgba(40, 34, 20, 0.11);
+  pointer-events: auto;
   overflow-wrap: anywhere;
+}
+#presence-bubble::before {
+  content: '';
+  position: absolute;
+  top: var(--presence-tip);
+  left: -5px;
+  width: 8px;
+  height: 8px;
+  border-left: 1px solid var(--bubble-edge);
+  border-bottom: 1px solid var(--bubble-edge);
+  background: var(--bubble-fill);
+  transform: translateY(-50%) rotate(45deg);
+}
+#presence-bubble[data-side='left']::before {
+  left: auto;
+  right: -5px;
+  transform: translateY(-50%) rotate(225deg);
+}
+#presence-copy {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.65;
+}
+#presence-reminder {
+  min-height: 0;
+  height: 84px;
+  margin: 8px 0 0;
+  resize: none;
+}
+#presence-retry {
+  min-height: 34px;
+  padding-inline: 4px;
 }
 
 /* Document scene: chapters are fruits; one ink action, two quiet ones. */
@@ -1433,6 +1504,29 @@ body.note-open #card:not([data-scene='questions']) {
   main:has(#round-delivery:not([hidden])) {
     grid-template-rows: minmax(0, 1fr) auto var(--subtitle-height);
     gap: 0;
+  }
+  body:not(.note-open) main:has(#ai-presence:not([hidden], [data-mode='wake'])) {
+    grid-template-rows: minmax(0, 1fr) auto var(--subtitle-height);
+    gap: 4px;
+  }
+  body:not(.note-open) main:has(#ai-presence:not([hidden], [data-mode='wake'])):has(#card[data-scene='waiting']) {
+    --subtitle-height: 96px;
+  }
+  #ai-presence:not([data-mode='wake']) {
+    position: relative;
+    grid-row: 2;
+    min-width: 0;
+  }
+  #presence-bubble {
+    position: relative;
+    inset: auto;
+    width: min(360px, calc(100% - 24px));
+    max-height: 42vh;
+    margin-inline: auto;
+    overflow: auto;
+  }
+  #presence-bubble::before {
+    display: none;
   }
   #round-delivery {
     position: relative;

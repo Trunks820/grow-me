@@ -202,24 +202,21 @@ def ai_work_online(ai):
     return False
 
 
-# Observe pause transitions even between Playwright actions. Render may replace the
-# notice without clearing it, so track presence rather than counting inserted nodes.
+# Observe pause transitions even between Playwright actions.
 WATCH_PAUSES = """
 window.simUserPauses = [];
 document.addEventListener('DOMContentLoaded', () => {
-    const card = document.querySelector('#card');
-    if (!card) return;
+    const presence = document.querySelector('#ai-presence');
+    if (!presence) return;
     let shown = false;
     new MutationObserver(() => {
-        const notice = card.querySelector('#ai-wait-notice');
-        const visible = !!notice && notice.getClientRects().length > 0 &&
-            !!document.querySelector('#copy-reminder.needs-attention');
+        const visible = !presence.hidden && presence.dataset.mode === 'paused';
         if (visible && !shown) window.simUserPauses.push({
             revision: Number(document.querySelector('#meta').dataset.revision),
             observed_at: Date.now()
         });
         shown = visible;
-    }).observe(card, {subtree: true, childList: true});
+    }).observe(presence, {attributes: true, attributeFilter: ['hidden', 'data-mode']});
 }, {once: true});
 """
 
@@ -369,7 +366,7 @@ class SimUser:
             lambda response: urlsplit(response.url).path == path and response.request.method == 'POST'
         ) as response_info:
             if enough:
-                await self.page.get_by_role('dialog').get_by_role('button', name='先出方案', exact=True).click()
+                await self.page.get_by_role('dialog').get_by_role('button', name='就先出方案', exact=True).click()
             elif restored:
                 await self.button('交给 AI').click()
             else:

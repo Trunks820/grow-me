@@ -95,11 +95,15 @@ The workbench opens the first available question in a speech bubble beside round
 
 Store confirmed and deferred drafts in `localStorage`. While the page is open, a revision change clears drafts for submitted, reopened, and invalidated questions. Save retained drafts under the new revision. On page load, restore drafts only for the same `session_id` and `revision` in the same browser and origin. Guard storage access and keep drafts in memory when storage is unavailable. Unconfirmed form input stays in memory. Submitted answers recover through `/state`.
 
-本轮答齐且没有待复核的黄叶时，麻薯带着答案飞走，页面倒数 5 秒后自动 `POST /submit`。待定也算本轮已定的一题。若本轮已答齐，确认最后一片黄叶后开始倒数。页面切到后台时暂停倒数，切回来接着数。点「等等，我再看看」或按 Esc 可取消倒数并打开答案列表，点树上的题目也会取消倒数。改完并再次确认时，符合条件就重新倒数 5 秒。刷新的页面恢复草稿，可从底栏回看并点「交给 AI」。自动提交失败时显示原有错误，把仍然有效的草稿留在答案列表里供重试。
+本轮答齐且没有待复核的黄叶时，麻薯先在最后确认的题旁接一句，约 1.5 秒后带着答案飞走。开启减少动态效果时直接开始倒数。页面倒数 5 秒后自动 `POST /submit`。待定也算本轮已定的一题。如果最后确认的是黄叶，同样先接话再倒数。接话或倒数时点树上的题目会取消这次交卷。页面切到后台时暂停倒数，切回来接着数。点「等等，我再看看」或按 Esc 可在倒数时打开答案列表并取消交卷。改完并再次确认时，符合条件就从接话开始。刷新的页面恢复草稿，可从底栏回看并点「交给 AI」。自动提交失败时显示原有错误，把仍然有效的草稿留在答案列表里供重试。
 
-The bottom row shows the current round, remaining questions and progress dots. Choosing **够了，先出方案** cancels any active countdown and opens the confirmation even when the count of unanswered questions is zero. **我再答几题** closes the bubble and preserves drafts. The current conversation authors each next round, ordinarily 3–5 questions with a soft count. Published candidates keep the revision captured before generation.
+底栏显示轮次、剩余题数和进度小圆点。点「够了，先出方案」会取消交卷，麻薯在底部气泡里确认。气泡说明还有几题没答，没答的会记成「待定」，写进方案的「待确认」。即使本轮都答完也要确认。点「就先出方案」提交请求，点「再答几题」关闭气泡并保留草稿。
 
-Waiting loops a visual extension, without adding rounds/nodes or cumulative tree height. While waiting for the next round, the card shows “正在想下一轮的问题…”, then after 60 seconds “还在想，可以先回看本轮回答”. After the user requests a plan, it shows “正在准备保存…”. The card always displays “生长中” and elapsed seconds, including after the last yellow leaf is reviewed. Timers use a process-local server start timestamp and a browser monotonic clock, survive polling and reconnect, and reset for a genuinely new wait/job. Transport loss reconnects. The human can edit during waiting. All transitive dependencies participate in review. A changed upstream invalidates in-progress review input even when the affected node was already `needs_review`. Unrelated unconfirmed form input survives in the open page. Reduced motion keeps text and stops movement.
+The current conversation authors each next round, ordinarily 3–5 questions with a soft count. Published candidates keep the revision captured before generation.
+
+Waiting loops a visual extension, without adding rounds/nodes or cumulative tree height. While the AI is online and preparing the next round, the card shows “正在想下一轮的问题…”, then after 60 seconds “还在想，可以先回看本轮回答”. After the user requests a plan, it shows “正在准备保存…”. The card shows elapsed seconds, including after the last yellow leaf is reviewed. While the AI is online it also shows “生长中”. Timers use a process-local server start timestamp and a browser monotonic clock, survive polling and reconnect, and reset for a genuinely new wait/job. Transport loss reconnects. The human can edit during waiting. All transitive dependencies participate in review. A changed upstream invalidates in-progress review input even when the affected node was already `needs_review`. Unrelated unconfirmed form input survives in the open page. Reduced motion keeps text and stops movement.
+
+等待出题或写文档时，如果页面判定 AI 已暂停或还没连上，麻薯就在最近答过的花旁睡着，气泡提示可以点它复制提醒。页头也能复制。复制成功后，气泡请用户去跟 AI 的聊天窗口粘贴，也可以再复制一次。复制失败时提供原文供手动复制。页面收到 AI 恢复在线的状态时，麻薯睁眼约 1 秒，随后恢复平常的显示。
 
 ### Document and projection endpoints
 

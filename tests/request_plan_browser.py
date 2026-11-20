@@ -6,7 +6,7 @@ from pathlib import Path
 
 from playwright.sync_api import expect, sync_playwright
 
-from browser_acceptance import Service, ai_check, node, open_question, request, seed
+from browser_acceptance import Service, ai_check, no_overflow, node, open_question, request, seed
 
 
 def partial_round(browser, work):
@@ -35,10 +35,13 @@ def partial_round(browser, work):
 
         trigger = page.get_by_role('button', name='够了，先出方案', exact=True)
         dialog = page.get_by_role('dialog')
-        confirm = dialog.get_by_role('button', name='先出方案', exact=True)
-        cancel = dialog.get_by_role('button', name='我再答几题', exact=True)
+        confirm = dialog.get_by_role('button', name='就先出方案', exact=True)
+        cancel = dialog.get_by_role('button', name='再答几题', exact=True)
         trigger.click()
-        expect(dialog.get_by_role('heading')).to_have_text('这一轮还有 2 题没答，会记成待定，直接出方案吗？')
+        expect(dialog.get_by_role('heading')).to_have_text('这一轮还有 2 题没答。没答的会记成「待定」，写进方案的「待确认」。现在就出方案吗？')
+        expect(dialog.locator('#plan-mascot')).to_be_visible()
+        expect(dialog).to_have_attribute('data-placement', 'panel')
+        page.screenshot(path=str(work / 'desktop-plan.png'))
         expect(confirm).to_be_enabled()
         assert service.file.read_bytes() == before
 
@@ -95,11 +98,18 @@ def answered_round(browser, work):
     try:
         before = service.file.read_bytes()
         page.goto(service.url)
-        page.get_by_role('button', name='够了，先出方案', exact=True).click()
+        page.get_by_role('button', name='够了，先出方案', exact=True).press('Enter')
         dialog = page.get_by_role('dialog')
-        expect(dialog.get_by_role('heading')).to_have_text('这一轮已答完，直接出方案吗？')
-        expect(dialog.get_by_role('button', name='先出方案', exact=True)).to_be_enabled()
-        dialog.get_by_role('button', name='我再答几题', exact=True).click()
+        expect(dialog.get_by_role('heading')).to_have_text('这一轮都答完了。现在就出方案吗？')
+        expect(dialog.locator('#plan-mascot')).to_be_visible()
+        expect(dialog).to_have_attribute('data-placement', 'sheet')
+        no_overflow(page)
+        page.screenshot(path=str(work / 'mobile-plan.png'))
+        page.keyboard.press('Tab')
+        expect(dialog.get_by_role('button', name='就先出方案', exact=True)).to_be_focused()
+        page.keyboard.press('Tab')
+        expect(dialog.get_by_role('button', name='再答几题', exact=True)).to_be_focused()
+        page.keyboard.press('Enter')
         expect(dialog).to_be_hidden()
         assert service.file.read_bytes() == before
     finally:
