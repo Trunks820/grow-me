@@ -357,20 +357,23 @@ class SimUser:
         result['restored'] = set(ids) == set(drafts)
         require(result['restored'], '刷新后草稿缺失或增加。')
 
-    async def submit(self, tree, nodes, drafts, enough):
+    async def submit(self, tree, nodes, drafts, enough, *, restored):
         number, revision = tree['current_round'], tree['revision'] + 1
         self.step = f'第 {number} 轮提交'
         path = '/request-plan' if enough else '/submit'
         if enough:
             await self.button('够了，先出方案').click()
-            submit = self.page.get_by_role('dialog').get_by_role('button', name='先出方案', exact=True)
-        else:
-            await self.button('回看汇总，提交本轮').click()
-            submit = self.button('提交本轮答案')
+        elif restored:
+            await self.button('回看本轮答案').click()
         async with self.page.expect_response(
             lambda response: urlsplit(response.url).path == path and response.request.method == 'POST'
         ) as response_info:
-            await submit.click()
+            if enough:
+                await self.page.get_by_role('dialog').get_by_role('button', name='先出方案', exact=True).click()
+            elif restored:
+                await self.button('交给 AI').click()
+            else:
+                await self.button('等等，我再看看').wait_for()
         response = await response_info.value
         require(response.ok and (await response.json()).get('revision') == revision,
                 f'第 {number} 轮提交未成功。')
@@ -411,7 +414,7 @@ class SimUser:
             drafts[node['id']] = answer
             if index == plan.get('reload_after'):
                 await self.reload(number, tree['revision'], drafts)
-        await self.submit(tree, nodes, drafts, enough)
+        await self.submit(tree, nodes, drafts, enough, restored=plan.get('reload_after') == count)
 
     async def wait_in_browser(self):
         page = self.page

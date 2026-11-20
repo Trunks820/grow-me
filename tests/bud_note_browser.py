@@ -321,12 +321,12 @@ def run(out):
             page.get_by_label('按候补顺序自动递补',exact=True).click()
             assert service.file.read_bytes()==source
             assert geometry==page.locator('.tree-branch').evaluate_all('a=>a.map(n=>n.getAttribute("d"))')
+            page.get_by_role('button',name='等等，我再看看',exact=True).click()
             report['checks'].append('Five consecutive answers; readonly readback; explicit draft edit; another two answers; note switching retains unconfirmed input; original bloom animation and branch geometry retained.')
             spoken_bud_layout(browser,out,report)
             long_content_layout(browser,out,report)
-            page.get_by_role('button',name='回看汇总，提交本轮',exact=True).click()
             expect(page.locator('.summary-list li')).to_have_count(5)
-            page.get_by_role('button',name='提交本轮答案',exact=True).click()
+            page.get_by_role('button',name='交给 AI',exact=True).click()
             expect(page.locator('#node-dialog')).not_to_be_visible()
             expect(page.locator('#meta')).to_have_attribute('data-revision','2')
             assert service.state()['nodes'][-1]['answer']['text']=='  显示报名成功\n保留原话 <不改写>  '

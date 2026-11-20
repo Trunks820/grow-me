@@ -2,7 +2,7 @@
 import argparse,json,subprocess,re,os,time
 from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
-from browser_acceptance import Service, seed, node, request, no_overflow, ai_check, document_fixture, open_summary
+from browser_acceptance import Service, seed, node, request, no_overflow, ai_check, document_fixture
 from sim_user import WATCH_PAUSES
 
 BASE=Path(__file__).resolve().parents[1]
@@ -201,10 +201,9 @@ def run(work):
             assert not ai_check(thinking)['changed'] and not ai_status(thinking)['work_active']
             interview.evaluate('window.simUserPauses.length = 0')
             interview.get_by_role('textbox').fill('用户提交后由 AI 准备下一轮。')
-            interview.get_by_role('button', name='好了', exact=True).click()
-            open_summary(interview)
             with interview.expect_response('**/submit') as submitted:
-                interview.get_by_role('button', name='提交本轮答案', exact=True).click()
+                interview.get_by_role('button', name='好了', exact=True).click()
+                interview.clock.fast_forward(5000)
             assert submitted.value.ok
             receipt = ai_check(thinking)
             assert receipt['changed'] and [event['kind'] for event in receipt['events']] == ['submit']

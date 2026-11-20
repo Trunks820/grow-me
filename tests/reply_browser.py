@@ -28,6 +28,7 @@ def run(work):
             {'id': 'first', 'label': '邮件通知'}, choices[1],
         ]), input='multi_choice'),
         *(node(f'fallback-{i}', f'还要补充什么？（{i}）') for i in range(1, 5)),
+        node('last', '还有要补充的吗？'),
     ]
     service = Service(work / 'runtime', seed(questions))
     try:
@@ -107,8 +108,13 @@ def run(work):
                 expect_reply(f'fallback-{i}')
                 copies.append(heading.inner_text())
             assert len(set(copies[:4])) == 4 and copies[0] == copies[4], copies
+            expect(dialog).to_have_attribute('data-node-id', 'last')
+            page.get_by_role('textbox').fill('齐了。')
+            page.keyboard.press('Control+Enter')
             expect(dialog).to_be_hidden()
-            expect(page.locator('#round-summary')).to_be_focused()
+            expect(page.get_by_role('button', name='等等，我再看看')).to_be_focused()
+            page.keyboard.press('Enter')
+            expect(dialog).to_have_attribute('data-mode', 'summary')
             assert service.file.read_bytes() == before
 
             mobile = browser.new_page(viewport={'width': 320, 'height': 600}, reduced_motion='reduce')

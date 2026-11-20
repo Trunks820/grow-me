@@ -49,7 +49,7 @@ def run(work):
                 expect(page.locator('#node-question')).to_have_count(1)
                 expect(page.locator('#node-dialog #node-question')).to_have_text('复制续接提醒')
                 page.get_by_role('button',name='关闭',exact=True).click();expect(page.get_by_role('button',name='复制提醒',exact=True)).to_be_focused()
-                open_summary(page);page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.locator('#card')).to_contain_text('正在想下一轮的问题')
+                open_summary(page);page.get_by_role('button',name='交给 AI',exact=True).click();expect(page.locator('#card')).to_contain_text('正在想下一轮的问题')
                 current=service.state();assert current['nodes'][0]['answer']=={'option_ids':['mail','inbox'],'text':notes}
                 follow=node('follow','如何验收这两种通知？',deps=['channels'],round=2,options=[{'id':'both','label':'逐项验收'},{'id':'other','label':'其他方式'}])
                 follow.update(rationale='决定通知渠道的验收范围，避免只测其中一个。',recommendation={'option_ids':['both'],'reason':'依据你已选的渠道逐项核验。','source_ids':['channels']})

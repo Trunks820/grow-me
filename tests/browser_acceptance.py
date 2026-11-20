@@ -70,7 +70,7 @@ def open_question(page,id,edit=False):
         expect(page.locator('#node-dialog')).to_have_attribute('data-mode','edit')
 
 def open_summary(page):
-    page.get_by_role('button',name='回看汇总，提交本轮',exact=True).click()
+    page.locator('#round-summary').click()
 
 def document_fixture(status):
     import html
@@ -96,19 +96,20 @@ def run_suite(work,scenario='all',layout_fixture='v7'):
                 page.wait_for_timeout(550);capture(page,work,'local-bloom')
                 expect(page.locator('#node-dialog')).to_have_attribute('data-node-id','text')
                 open_question(page,'text');area=page.get_by_role('textbox',name='本轮答案什么时候保存？',exact=True);area.fill('  ');expect(page.get_by_role('button',name='好了',exact=True)).to_be_disabled()
-                area.fill('先汇总，再手动提交整轮。\n 保留这行空格 ');page.keyboard.press('Control+Enter')
-                open_question(page,'extra');page.get_by_role('textbox',name='补充一个交互要求？',exact=True).fill('等待中可以修改。');page.get_by_role('button',name='好了',exact=True).click();open_summary(page)
-                expect(page.get_by_role('button',name='提交本轮答案',exact=True)).to_be_visible();assert service.file.read_bytes()==before
-                page.locator('.summary-list button').first.click();page.get_by_role('button',name='改',exact=True).click();expect(page.get_by_label('按 v7 的纸底与墨枝',exact=True)).to_be_checked();page.get_by_label('按 v7 的纸底与墨枝',exact=True).click();open_summary(page)
-                page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible()
-                saved=service.state();assert saved['revision']==1;assert saved['nodes'][1]['answer']['text']=='先汇总，再手动提交整轮。\n 保留这行空格 '
+                raw='答完后可以回看。\n 保留这行空格 ';area.fill(raw);page.keyboard.press('Control+Enter')
+                open_question(page,'extra');page.get_by_role('textbox',name='补充一个交互要求？',exact=True).fill('等待中可以修改。');page.get_by_role('button',name='好了',exact=True).click()
+                page.get_by_role('button',name='等等，我再看看',exact=True).click()
+                expect(page.get_by_role('button',name='交给 AI',exact=True)).to_be_visible();assert service.file.read_bytes()==before
+                page.locator('.summary-list button').first.click();page.get_by_role('button',name='改',exact=True).click();expect(page.get_by_label('按 v7 的纸底与墨枝',exact=True)).to_be_checked();page.get_by_label('按 v7 的纸底与墨枝',exact=True).click()
+                page.clock.fast_forward(5000);expect(page.get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible()
+                saved=service.state();assert saved['revision']==1;assert saved['nodes'][1]['answer']['text']==raw
                 page.clock.fast_forward(61000);expect(page.locator('#long-wait')).to_be_visible();capture(page,work,'wait-over-60-seconds')
                 frozen=service.file.read_bytes();page.route('**/state',lambda route:route.abort());expect(page.locator('#connection')).to_contain_text('断开',timeout=8000)
                 page.unroute('**/state');expect(page.locator('#connection')).to_contain_text('已连接',timeout=8000);assert service.file.read_bytes()==frozen
                 page.emulate_media(reduced_motion='reduce');page.wait_for_timeout(100);assert not page.locator('#tree-canvas').evaluate('n=>n.classList.contains("is-waiting")')
                 for width,height,label in [(1000,900,'desktop-1000'),(390,844,'mobile')]:
                     page.set_viewport_size({'width':width,'height':height});no_overflow(page);capture(page,work,label)
-                report['checks']['local_confirmation_summary_manual_submit_raw_text']=True
+                report['checks']['local_confirmation_undo_edit_and_auto_submit_raw_text']=True
                 report['checks']['wait_60_seconds_virtual_clock_no_auto_failure']=True
                 report['checks']['disconnect_reconnect_preserves_saved_answers']=True
                 report['checks']['keyboard_and_reduced_motion']=True
@@ -133,7 +134,7 @@ def run_suite(work,scenario='all',layout_fixture='v7'):
                 expect(page.get_by_role('textbox',name='B 的问题',exact=True)).to_have_value('B 原答案')
                 page.get_by_role('button',name='仍然有效',exact=True).click();expect(page.locator('.tree-node[data-node-id=C]')).to_have_attribute('data-status','needs_review')
                 open_question(page,'C');page.get_by_role('button',name='仍然有效',exact=True).click();open_question(page,'F');page.get_by_role('button',name='仍然有效',exact=True).click();open_question(page,'X');expect(page.get_by_role('textbox',name='无关的新题',exact=True)).to_have_value('这份无关草稿应该保留')
-                page.get_by_role('button',name='好了',exact=True).click();open_summary(page);page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible()
+                page.get_by_role('button',name='好了',exact=True).click();expect(page.get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible(timeout=8000)
                 revision=service.state()['revision'];page.locator('.tree-node[data-node-id=A]').click();page.get_by_role('button',name='改',exact=True).click();expect(page.locator('.tree-node[data-status=needs_review]')).to_have_count(4)
                 before=service.file.read_bytes();code,_=request(service.url,'/round',{'round':3,'expected_revision':revision,'nodes':[node('late',deps=['A'],round=3)]});assert code==409 and service.file.read_bytes()==before
                 assert page.get_by_role('button',name='保存并生成任务文档',exact=True).count()==0

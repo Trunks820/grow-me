@@ -7,12 +7,20 @@ const card = document.querySelector('#card'),
   dialog = document.querySelector('#node-dialog'),
   mascot = document.querySelector('#mascot'),
   bubbleLink = document.querySelector('#bubble-link'),
+  deliveryPanel = document.querySelector('#round-delivery'),
+  deliveryArt = document.querySelector('.delivery-art'),
+  deliveryCopy = document.querySelector('#round-delivery-copy'),
+  deliveryClock = document.querySelector('#round-delivery-clock'),
+  deliveryRing = document.querySelector('.delivery-ring'),
+  deliveryUndo = document.querySelector('#round-delivery-undo'),
   treeViewport = document.querySelector('.tree-viewport'),
   treeCanvas = document.querySelector('#tree-canvas'),
   sheetLayout = matchMedia('(max-width: 720px)'),
   reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const drafts = new Map(),
   working = new Map();
+const deliveryDelay = 5000;
+let delivery = null;
 const bloomReplies = [
   '记下啦，这里又开了一朵花。',
   '收到，树又长了一点。',
@@ -150,6 +158,13 @@ function restoreDrafts() {
 }
 
 const reviews = () => state.nodes.filter(n => n.status === 'needs_review');
+const roundCanSubmit = (pending = openQuestions()) =>
+  state.schema_version === 2 &&
+  state.status === 'active' &&
+  !planRequested &&
+  pending.length > 0 &&
+  !reviews().length &&
+  pending.every(n => valid(n, drafts.get(n.id)));
 const isWaiting = () =>
   state?.schema_version === 2 &&
   state.status === 'active' &&
@@ -513,21 +528,102 @@ function inputs(n, host) {
   });
   function saveAnswer(answer) {
     if (busy || stopped || !valid(n, answer)) return;
-    if (n.status === 'needs_review')
-      act(async () => {
-        await post('/decision', { id: n.id, expected_revision: state.revision, answer });
-        handleAnswer(n, answer);
-      });
+    if (n.status === 'needs_review') saveReviewAnswer(n, answer);
     else {
       drafts.set(n.id, structuredClone(answer));
       saveDrafts();
       working.delete(n.id);
-      handleAnswer(n, answer);
+      if (!startRoundDelivery(n.id)) handleAnswer(n, answer);
       message('');
       render();
     }
   }
   host.append(form);
+}
+async function saveReviewAnswer(node, answer) {
+  const ok = await act(async () => {
+    await post('/decision', { id: node.id, expected_revision: state.revision, answer });
+    handleAnswer(node, answer);
+  });
+  if (ok) startRoundDelivery(node.id);
+}
+function startRoundDelivery(id) {
+  if (busy || stopped || !roundCanSubmit()) return false;
+  const bud = visibleBud(id),
+    count = state.nodes.filter(n => n.round === state.current_round).length;
+  closeNote();
+  delivery = { revision: state.revision, remaining: deliveryDelay, deadline: null, timer: null };
+  deliveryCopy.textContent = `这一轮 ${count} 题都定了，我送去给 AI 啦～`;
+  deliveryPanel.hidden = false;
+  if (!reducedMotion.matches && !document.hidden) {
+    const end = deliveryArt.getBoundingClientRect(),
+      x = bud ? bud.left + bud.width / 2 - (end.left + end.width / 2) : -56,
+      y = bud ? bud.top - end.height / 2 - end.top : 24;
+    deliveryArt.animate(
+      [
+        { transform: `translate(${x}px, ${y}px)` },
+        { transform: `translate(${x * 0.45}px, ${y * 0.45 - 24}px) rotate(-5deg)`, offset: 0.55 },
+        { transform: 'none' }
+      ],
+      { duration: 700, easing: 'ease-in-out' }
+    );
+  }
+  syncDeliveryClock();
+  deliveryUndo.focus({ preventScroll: true });
+  return true;
+}
+function cancelRoundDelivery() {
+  if (!delivery) return;
+  clearTimeout(delivery.timer);
+  delivery = null;
+  deliveryArt.getAnimations().forEach(animation => animation.cancel());
+  deliveryPanel.hidden = true;
+}
+function syncDeliveryClock() {
+  if (!delivery) return;
+  clearTimeout(delivery.timer);
+  const now = performance.now();
+  if (document.hidden) {
+    if (delivery.deadline !== null) delivery.remaining = Math.max(0, delivery.deadline - now);
+    delivery.deadline = null;
+  } else {
+    delivery.deadline ??= now + delivery.remaining;
+    delivery.remaining = Math.max(0, delivery.deadline - now);
+    if (!delivery.remaining) {
+      submitRound();
+      return;
+    }
+    delivery.timer = setTimeout(syncDeliveryClock, Math.min(100, delivery.remaining));
+  }
+  const seconds = Math.ceil(delivery.remaining / 1000);
+  const text = document.hidden ? `还剩 ${seconds} 秒，倒数已暂停` : `${seconds} 秒后自动交`;
+  if (deliveryClock.textContent !== text) deliveryClock.textContent = text;
+  deliveryRing.textContent = seconds;
+  deliveryRing.style.setProperty('--remaining', `${delivery.remaining / deliveryDelay}turn`);
+}
+async function submitRound() {
+  const focusWaiting = document.activeElement === deliveryUndo || dialog.contains(document.activeElement);
+  const deliveryRevision = delivery?.revision;
+  cancelRoundDelivery();
+  const pending = openQuestions();
+  if (
+    busy || stopped || !roundCanSubmit(pending) ||
+    (deliveryRevision !== undefined && deliveryRevision !== state.revision)
+  ) return;
+  const answers = pending.map(n => ({ id: n.id, answer: drafts.get(n.id) }));
+  const ok = await act(async () => {
+    await post('/submit', { round: state.current_round, expected_revision: state.revision, answers });
+    waitingSince = performance.now();
+    closeNote();
+  });
+  if (!ok && drafts.size) openSummary();
+  if (ok && focusWaiting && document.activeElement === document.body) {
+    const heading = card.querySelector('h2');
+    if (heading) {
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+    }
+  }
 }
 function renderSummary(host) {
   const list = el('ul', undefined, 'summary-list');
@@ -551,33 +647,8 @@ function renderSummary(host) {
     ? '本轮未提交 · 草稿已存于此浏览器。'
     : '本轮未提交 · 刷新或关闭可能丢失草稿。';
   host.append(title, list, el('p', draftHint, 'draft-hint'));
-  const submit = button(
-    '提交本轮答案',
-    () =>
-      act(async () => {
-        const round = state.current_round,
-          revision = state.revision,
-          answers = openQuestions().map(n => ({ id: n.id, answer: drafts.get(n.id) }));
-        if (
-          !answers.every(a =>
-            valid(
-              state.nodes.find(n => n.id === a.id),
-              a.answer
-            )
-          )
-        )
-          throw Error('请完整回答本轮问题');
-        await post('/submit', { round, expected_revision: revision, answers });
-        waitingSince = performance.now();
-        closeNote();
-      }),
-    true
-  );
-  submit.className = 'primary seal-btn';
-  submit.setAttribute('aria-label', '提交本轮答案');
-  submit.innerHTML =
-    '<span class="seal-mark">盖章</span><span class="seal-text">提交 · 接着长 ↗</span>';
-  submit.disabled = busy || reviews().length > 0 || openQuestions().some(n => !drafts.has(n.id));
+  const submit = button('交给 AI', submitRound, true);
+  submit.disabled = busy || !roundCanSubmit();
   host.append(submit);
 }
 function planConfirmation(unanswered, confirm, cancel) {
@@ -595,6 +666,7 @@ function planConfirmation(unanswered, confirm, cancel) {
 }
 function openPlanConfirmation(event) {
   if (busy || stopped || noteMode === 'plan') return;
+  cancelRoundDelivery();
   const pending = openQuestions();
   const answers = pending
     .filter(n => drafts.has(n.id))
@@ -754,7 +826,8 @@ function renderDocument() {
 function renderRoundProgress(pending, review) {
   const round = state.nodes.filter(n => n.round === state.current_round),
     remaining = pending.filter(n => !drafts.has(n.id)).length,
-    canSubmit = remaining === 0 && review.length === 0,
+    canSubmit = roundCanSubmit(pending),
+    remainingText = canSubmit ? `${round.length} 题都定了` : `还剩 ${remaining} 题`,
     progress = el('div', undefined, 'round-progress'),
     dots = el('span', undefined, 'round-dots');
   dots.setAttribute('aria-hidden', 'true');
@@ -765,12 +838,12 @@ function renderRoundProgress(pending, review) {
   }
   const count = el(
     'span',
-    `第 ${state.current_round} 轮 · 还剩 ${remaining} 题${review.length ? ` · ${review.length} 题待复核` : ''}`,
+    `第 ${state.current_round} 轮 · ${remainingText}${review.length ? ` · ${review.length} 题待复核` : ''}`,
     'scene-count'
   );
   count.id = 'round-count';
   if (drafts.size) {
-    const label = canSubmit ? '回看汇总，提交本轮' : '查看本轮草稿',
+    const label = canSubmit ? '回看本轮答案' : '查看本轮草稿',
       summary = button('', openSummary);
     summary.id = 'round-summary';
     summary.title = label;
@@ -779,7 +852,6 @@ function renderRoundProgress(pending, review) {
     summary.dataset.ready = String(canSubmit);
     summary.disabled = busy;
     summary.append(count, dots);
-    if (canSubmit) summary.append(el('span', '提交本轮'));
     progress.append(summary);
   } else progress.append(count, dots);
   card.append(progress);
@@ -789,6 +861,7 @@ function render() {
   rendering = true;
   renderFailed = false;
   try {
+    if (delivery && (delivery.revision !== state.revision || !roundCanSubmit())) cancelRoundDelivery();
     assistantDisplay = assistantStatus();
     const reminder = document.querySelector('#copy-reminder'),
       header = reminder.closest('header');
@@ -966,6 +1039,7 @@ function openNode(id, trigger, mode) {
   if (busy || stopped) return;
   const n = state?.nodes.find(n => n.id === id);
   if (!n) return;
+  cancelRoundDelivery();
   cancelAdvance();
   noteId = id;
   returnFocus = nodeTarget(id) ?? trigger;
@@ -1064,12 +1138,7 @@ function renderNote() {
     n.status === 'needs_review' &&
     n.answer !== null
   ) {
-    const keep = button(isDeferred(n.answer) ? '仍待定' : '仍然有效', () =>
-      act(async () => {
-        await post('/decision', { id: n.id, expected_revision: state.revision, answer: n.answer });
-        handleAnswer(n, n.answer);
-      })
-    );
+    const keep = button(isDeferred(n.answer) ? '仍待定' : '仍然有效', () => saveReviewAnswer(n, n.answer));
     keep.disabled = busy || !ready(n);
     actions.append(keep);
   }
@@ -1095,10 +1164,11 @@ function renderSummaryNote() {
 }
 function openSummary(event) {
   if (busy || stopped) return;
+  cancelRoundDelivery();
   cancelAdvance();
   noteId = null;
   noteMode = 'summary';
-  returnFocus = event?.currentTarget;
+  returnFocus = event?.currentTarget ?? card.querySelector('#round-summary');
   renderSummaryNote();
   showNote();
 }
@@ -1332,6 +1402,8 @@ function openFruit(fruit) {
   );
 }
 document.querySelector('#close-node').addEventListener('click', closeNote);
+deliveryUndo.addEventListener('click', () => openSummary());
+document.addEventListener('visibilitychange', syncDeliveryClock);
 dialog.addEventListener('cancel', event => {
   event.preventDefault();
   if (!busy) closeNote();
@@ -1344,7 +1416,7 @@ const noteResize = new ResizeObserver(syncNotePosition);
 noteResize.observe(treeViewport);
 noteResize.observe(dialog);
 reducedMotion.addEventListener('change', () => {
-  for (const element of [mascot, dialog, bubbleLink])
+  for (const element of [mascot, dialog, bubbleLink, deliveryArt])
     element.getAnimations().forEach(animation => animation.cancel());
   syncNotePosition();
 });
@@ -1357,7 +1429,10 @@ window.addEventListener('beforeunload', event => {
 document.addEventListener('keydown', event => {
   if (!state || busy || stopped || event.defaultPrevented || event.isComposing) return;
   if (event.key === 'Escape') {
-    if (dialog.open) {
+    if (delivery) {
+      event.preventDefault();
+      openSummary();
+    } else if (dialog.open) {
       event.preventDefault();
       closeNote();
     }
@@ -1378,7 +1453,7 @@ document.addEventListener('keydown', event => {
   if (!dialog.open || !dialog.contains(event.target)) return;
   if (noteMode === 'summary') {
     if (event.key === 'Enter' || event.code === 'Space') {
-      const submit = dialog.querySelector('.seal-btn,.primary');
+      const submit = dialog.querySelector('.primary');
       if (submit && !submit.disabled && event.target.id === 'node-question') {
         event.preventDefault();
         submit.click();
@@ -1436,6 +1511,7 @@ async function refresh(force = false) {
   if (state && next.session_id !== state.session_id) {
     stopped = true;
     cancelAdvance();
+    cancelRoundDelivery();
     document
       .querySelectorAll(
         '#card input,#card button,#card textarea,#node-dialog input,#node-dialog button,#node-dialog textarea'
@@ -1582,6 +1658,7 @@ document.querySelector('#copy-reminder').addEventListener('click', async () => {
     heading.id = 'node-question';
     heading.tabIndex = -1;
     cancelAdvance();
+    cancelRoundDelivery();
     noteId = null;
     noteMode = 'reminder';
     returnFocus = document.querySelector('#copy-reminder');

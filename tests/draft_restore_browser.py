@@ -40,7 +40,7 @@ def reload_and_publish(browser, work):
         open_summary(page)
         answers = page.locator('.summary-list .answer')
         expect(answers).to_have_text(['邮件', text])
-        expect(page.get_by_role('button', name='提交本轮答案', exact=True)).to_be_enabled()
+        expect(page.get_by_role('button', name='交给 AI', exact=True)).to_be_enabled()
         assert service.file.read_bytes() == before
         assert all('确认后只留在浏览器' not in body for body in posts)
         assert not errors, errors
@@ -75,9 +75,8 @@ def reload_and_publish(browser, work):
         open_question(page, 'prior')
         page.get_by_role('button', name='仍然有效', exact=True).click()
         expect(page.locator('#meta')).to_have_attribute('data-revision', '3')
-        open_summary(page)
-        page.get_by_role('button', name='提交本轮答案', exact=True).click()
-        expect(page.locator('#meta')).to_have_attribute('data-revision', '4')
+        expect(page.locator('#round-delivery')).to_be_visible()
+        expect(page.locator('#meta')).to_have_attribute('data-revision', '4', timeout=8000)
         assert service.state()['nodes'][-1]['answer']['text'] == text
         assert request(service.url, '/round', {
             'round': 3, 'expected_revision': 4, 'nodes': [node('next', '下一轮确认什么？', round=3)],
@@ -107,10 +106,10 @@ def storage_unavailable(browser, work):
         open_question(page, 'scope')
         page.get_by_role('textbox').fill(text)
         page.get_by_role('button', name='好了', exact=True).click()
-        open_summary(page)
+        page.get_by_role('button', name='等等，我再看看', exact=True).click()
         expect(page.locator('.summary-list .answer')).to_have_text(text)
         assert service.file.read_bytes() == before
-        page.get_by_role('button', name='提交本轮答案', exact=True).click()
+        page.get_by_role('button', name='交给 AI', exact=True).click()
         expect(page.locator('#meta')).to_have_attribute('data-revision', '1')
         assert service.state()['nodes'][0]['answer']['text'] == text
     finally:

@@ -954,10 +954,6 @@ main:has(#card[data-scene='questions']) {
   color: #872c1f;
   border-bottom-color: #872c1f;
 }
-#node-dialog[data-mode='summary'] .seal-btn {
-  width: 100%;
-  margin-top: 12px;
-}
 #node-body > .draft-hint + .primary {
   margin-top: 10px;
   width: 100%;
@@ -969,39 +965,91 @@ main:has(#card[data-scene='questions']) {
   color: var(--text-3);
 }
 
-.seal-btn {
-  display: inline-flex;
+/* Mochi carries the round's answers past the tree. */
+#round-delivery {
+  position: absolute;
+  top: clamp(28px, 9vh, 105px);
+  right: 0;
+  z-index: var(--z-bubble);
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  background: #a84232 !important;
-  color: #fffaf0 !important;
-  border: 1px solid #943425 !important;
-  padding: 0 16px !important;
-  min-height: 36px !important;
-  border-radius: 999px !important;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(168, 66, 50, 0.22);
-  transition: all 0.15s ease;
+  gap: 10px;
+  width: min(374px, 100%);
+  pointer-events: none;
 }
-.seal-btn:hover {
-  background: #ba4a39 !important;
-  box-shadow: 0 6px 16px rgba(168, 66, 50, 0.32);
-  transform: translateY(-1px);
+.delivery-art {
+  position: relative;
+  flex: none;
+  width: 82px;
+  height: 103px;
 }
-.seal-mark {
-  background: #872c1f;
-  color: #f7e8e5;
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  font-weight: 600;
+.delivery-basket {
+  position: absolute;
+  left: 14px;
+  bottom: 0;
+  width: 54px;
 }
-.seal-text {
-  font-size: 13px;
-  letter-spacing: 0.08em;
-  font-family: var(--serif);
+.delivery-bubble {
+  position: relative;
+  min-width: 0;
+  padding: 14px 17px;
+  border: 1px solid var(--bubble-edge);
+  border-radius: 18px;
+  background: var(--bubble-fill);
+  box-shadow: 0 8px 24px rgba(40, 34, 20, 0.11);
+}
+.delivery-art + .delivery-bubble::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: -6px;
+  width: 10px;
+  height: 10px;
+  border-left: 1px solid var(--bubble-edge);
+  border-bottom: 1px solid var(--bubble-edge);
+  background: var(--bubble-fill);
+  transform: translateY(-50%) rotate(45deg);
+}
+#round-delivery-copy {
+  margin: 0 0 10px;
+  font-size: 18px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.delivery-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.delivery-ring {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--bubble-fill) 58%, transparent 60%),
+    conic-gradient(#617944 var(--remaining, 1turn), var(--line) 0);
+  font: 600 14px var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+#round-delivery-undo {
+  min-height: 40px;
+  padding: 5px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink);
+  pointer-events: auto;
+}
+#round-delivery-undo:hover {
+  background: var(--wash);
+  border-color: var(--ink);
+}
+#round-delivery-clock {
+  margin: 5px 0 0;
+  font: 12px/1.5 var(--sans);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- subtitle card ---------- */
@@ -1382,6 +1430,36 @@ body.note-open #card:not([data-scene='questions']) {
   main:has(#node-dialog[open]):not(:has(#card[data-scene='questions'])) {
     --subtitle-height: 0px;
   }
+  main:has(#round-delivery:not([hidden])) {
+    grid-template-rows: minmax(0, 1fr) auto var(--subtitle-height);
+    gap: 0;
+  }
+  #round-delivery {
+    position: relative;
+    grid-row: 2;
+    inset: auto;
+    justify-self: center;
+    width: min(374px, calc(100% - 24px));
+    gap: 7px;
+  }
+  .delivery-art {
+    width: 60px;
+    height: 76px;
+  }
+  .delivery-art img {
+    width: 60px;
+    height: 60px;
+  }
+  .delivery-basket {
+    left: 10px;
+    width: 40px;
+  }
+  .delivery-bubble {
+    padding: 10px 12px;
+  }
+  #round-delivery-copy {
+    font-size: 16px;
+  }
   .tree-controls {
     right: 12px;
     top: 4px;
@@ -1445,5 +1523,10 @@ body.note-open #card:not([data-scene='questions']) {
   .tree-node.is-next .tree-symbol,
   .tree-node.is-next .tree-hit {
     animation: none !important;
+  }
+  .delivery-art,
+  .delivery-ring,
+  .delivery-art + .delivery-bubble::before {
+    display: none;
   }
 }

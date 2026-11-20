@@ -6,7 +6,7 @@ from pathlib import Path
 
 from playwright.sync_api import expect, sync_playwright
 
-from browser_acceptance import Service, node, open_question, open_summary, seed
+from browser_acceptance import Service, node, open_question, seed
 
 
 def run(work):
@@ -42,11 +42,11 @@ def run(work):
             page.get_by_role('button', name='好了', exact=True).click()
             expect(page.locator('.tree-node[data-node-id="signup"] use')).to_have_attribute('href', '#tree-flower')
 
-            open_summary(page)
+            page.get_by_role('button', name='等等，我再看看', exact=True).click()
             expect(page.locator('.summary-list li').filter(has_text='要用哪种通知方式？')).to_contain_text('待定')
             expect(page.locator('.summary-list li').filter(has_text='什么时候开始通知？')).to_contain_text('先核对活动时间')
             assert service.file.read_bytes() == before
-            submit = page.get_by_role('button', name='提交本轮答案', exact=True)
+            submit = page.get_by_role('button', name='交给 AI', exact=True)
             expect(submit).to_be_enabled()
             submit.click()
             expect(page.locator('#meta')).to_have_attribute('data-revision', '1')
