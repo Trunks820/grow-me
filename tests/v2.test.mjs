@@ -204,7 +204,7 @@ test('one-shot request has a bounded timeout and rejects nonlocal origins',async
   const start=performance.now();await assert.rejects(checkOnce({url:'http://127.0.0.1:'+hung.address().port,sessionId:'id',timeoutMs:80}),/不可达/);assert.ok(performance.now()-start<700,'a nonresponsive server cannot leave a long command hanging');
 });
 
-test('only an identity-checked AI query renews liveness; GET polling and rejected receipts do not; restart clears it',async t=>{
+test('only valid AI queries update the check clock, which resets on restart', async t => {
  const s=await service(t),bytes=readFileSync(s.file),progress=async url=>(await(await fetch(url+'/progress')).json()).ai;
  for(const path of ['/state','/progress','/recovery','/document/status'])assert.equal((await fetch(s.url+path)).status,200);
  assert.equal((await progress(s.url)).last_check_at,null);
@@ -259,5 +259,8 @@ test('v1 remains byte-identical and read-only, including source-bound existing H
 test('an active v1 history preview can close without finishing or modifying the old interview',async t=>{
   const legacy=tree([node('old',{input:'text',options:[]})]);legacy.schema_version=1;delete legacy.nodes[0].rationale;
   const s=await service(t,legacy),bytes=readFileSync(s.file),exit=once(s.child,'exit');
+  const { ai } = await (await fetch(s.url + '/progress')).json();
+  assert.equal(ai.work_active, false);
+  assert.equal(ai.work_until, null);
   assert.equal((await s.post('/document/control',{action:'close',expected_revision:0})).status,200);await exit;assert.deepEqual(readFileSync(s.file),bytes);
 });

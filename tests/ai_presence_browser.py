@@ -27,7 +27,7 @@ def run(work):
     work.mkdir(parents=True,exist_ok=True)
     report={'kind':'controlled UI/API; heartbeat, work leases and pause recovery','checks':{},'errors':[]}
     heartbeats=[]
-    thinking = Service(work / 'thinking', seed([node('A', '已确认的需求', answered=True)]), clock=True)
+    thinking = Service(work / 'thinking', seed([node('A', '待确认的需求')]), clock=True)
     queued = Service(work / 'queued', seed([
         node('A', '等待写入文档的需求', answered=True), node('B', '另一个文档章节', answered=True),
     ]), clock=True)
@@ -41,12 +41,20 @@ def run(work):
     def control(action,**extra):
         code,result=request(queued.url,'/document/control',{'action':action,'expected_revision':queued.state()['revision'],**extra});assert code==200,(code,result);return result
     try:
+        startup_ai = ai_status(thinking)
+        assert startup_ai['work_active'] and startup_ai['last_check_at'] is None
+        code, result = request(thinking.url, '/submit', {
+            'round': 1, 'expected_revision': 0,
+            'answers': [{'id': 'A', 'answer': {'option_ids': [], 'text': 'A 原答案'}}],
+        })
+        assert code == 200, (code, result)
+        assert ai_status(thinking)['work_until'] == startup_ai['work_until']
         control('offer');job=control('save')['job_id']
         originals=[s.file.read_bytes() for s in [thinking,queued]]
         with sync_playwright() as p:
             browser=p.chromium.launch(headless=True)
             pages=[];since=[]
-            for s,width,title in [(thinking,1440,'等待 AI 对话连接'),(queued,390,'正在生成任务文档…')]:
+            for s,width,title in [(thinking,1440,'正在想下一轮的问题…'),(queued,390,'正在生成任务文档…')]:
                 page=browser.new_page(viewport={'width':width,'height':900},reduced_motion='reduce');pages.append(page)
                 page.on('pageerror',lambda error:report['errors'].append(str(error)))
                 page.add_init_script(WATCH_PAUSES)
@@ -55,9 +63,11 @@ def run(work):
                 expect(page.get_by_role('heading',name=title,exact=True)).to_be_visible()
                 expect(page.locator('#copy-reminder')).not_to_have_class('small-action needs-attention')
                 assert not PAUSED.search(page.locator('#card').inner_text())
-                assert ai_status(s)['last_check_at'] is None
+                ai = ai_status(s)
+                assert ai['work_active'] and ai['last_check_at'] is None and ai['last_heartbeat_at'] is None
                 since.append(page.locator('#wait-elapsed').get_attribute('data-since'))
                 no_overflow(page)
+            report['checks']['startup_keeps_first_submission_online_before_first_check']=True
             report['checks']['offer_keeps_queued_online_before_first_check']=True
             first = start_heartbeat(thinking)
             expect(pages[0].locator('#heartbeat-work')).to_be_visible()
@@ -159,16 +169,20 @@ def run(work):
                 route.fulfill(response=response,json=data)
             # Restart the same state file on the same URL; do not recreate or write the tree.
             old_instance, origin, port = thinking.startup['instance_id'], thinking.url, thinking.startup['port']
+            old_deadline = ai_status(thinking)['work_until']
             thinking.close()
             thinking.start(port)
             assert thinking.startup['instance_id'] != old_instance
             assert thinking.url == origin and thinking.file.read_bytes() == originals[0]
-            expect(pages[0].get_by_role('heading',name='等待 AI 对话连接',exact=True)).to_be_visible()
-            assert ai_status(thinking)['last_check_at'] is None and ai_status(thinking)['work_until'] is None
+            refresh_progress(pages[0])
+            expect(pages[0].get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible()
+            restarted = ai_status(thinking)
+            assert restarted['last_check_at'] is None and restarted['work_active']
+            assert restarted['work_until'] > old_deadline
             assert not PAUSED.search(pages[0].locator('#card').inner_text())
-            ai_check(thinking);expect(pages[0].get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible()
+            ai_check(thinking)
             assert thinking.file.read_bytes()==originals[0]
-            report['checks']['same_url_restart_clears_receipt_then_reconnects_without_rewriting_tree']=True
+            report['checks']['same_url_restart_starts_fresh_work_lease_without_rewriting_tree']=True
             refresh_progress(pages[0], 31_000)
             pages[0].route('**/progress',stale_projection)
             code,_=request(thinking.url,'/round',{'expected_revision':thinking.state()['revision'],'round':2,'nodes':[node('B','用户待答的下一题',deps=['A'],round=2)]});assert code==200

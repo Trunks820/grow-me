@@ -58,6 +58,9 @@ test('freeze once; failed generation retries same data; stale jobs rejected; val
  const exited=once(s.child,'exit');await control({action:'close',expected_revision:1});assert.equal((await exited)[0],0);
  const listener=createServer();await new Promise((resolve,reject)=>listener.once('error',reject).listen(s.port,'127.0.0.1',resolve));await new Promise(resolve=>listener.close(resolve));
  const restored=await start(t,null,s.root,s.port);assert.equal((await(await fetch(restored.url+'/document/status')).json()).phase,'ready');
+ const { ai } = await (await fetch(restored.url + '/progress')).json();
+ assert.equal(ai.work_active, false);
+ assert.equal(ai.work_until, null);
 });
 
 test('preview records increasing first publication times, preserves them on repeat, and does not time offline assembly',async t=>{

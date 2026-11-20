@@ -580,6 +580,7 @@ async function serve(arg, output) {
     return;
   }
   server.on('error', reportError);
+  if (!sessionFinished()) progress.renewWorkLease();
   output.log(
     JSON.stringify({
       url: `http://127.0.0.1:${boundPort}`,

@@ -21,7 +21,7 @@ import { basename, dirname, join } from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {validateTree,publishRound} from '../scripts/model.mjs';
 import {checkOnce} from '../scripts/check.mjs';
-import { startService } from '../scripts/start.mjs';
+import { startService, startWithWmi } from '../scripts/start.mjs';
 import {assistantConnection} from '../assets/presentation.mjs';
 import {fingerprint} from '../scripts/document.mjs';
 import {chapters} from '../assets/topics.mjs';
@@ -174,6 +174,11 @@ test(
     if (process.platform !== 'win32') {
       t.diagnostic('Windows Job Objects are available only on Windows.');
       t.skip();
+      return;
+    }
+    if ((await startWithWmi(['-e', 'process.exit(0)'])) === null) {
+      t.diagnostic('WMI could not create a Node process in this environment.');
+      t.skip('WMI process creation unavailable');
       return;
     }
 
@@ -442,6 +447,7 @@ test('offer before discovery reports waiting_for_save without ever recording dis
 
 test('wait CLI stays silent across idle deadlines, reports activity and returns user events with the short-check cursor', {timeout:15000}, async context => {
   const running = await service(context, tree(), { waitMs: 100 });
+  const startupDeadline = (await getAi(running)).work_until;
   const waiting = waitCommand(context, running);
   await until(async () => (await getAi(running)).last_check_at !== null);
   const first = (await getAi(running)).last_check_at;
@@ -449,7 +455,7 @@ test('wait CLI stays silent across idle deadlines, reports activity and returns 
   assert.equal(waiting.child.exitCode, null);
   assert.equal(waiting.stdout, '');
   const idle = await getAi(running);
-  assert.equal(idle.work_until, null);
+  assert.equal(idle.work_until, startupDeadline);
   assert.equal(assistantConnection(idle, 90_000), 'connected');
 
   await submit(running);
@@ -522,21 +528,28 @@ test('wait CLI distinguishes a closed service, a finished session and the wrong 
   assert.equal(JSON.parse(finished.stdout).status, 'session_finished');
 });
 
-test('user event receipts and round publication lease work across query silence and restart', async t => {
+test('work leases cover startup and AI events and reset on restart', async t => {
+  const startedAfter = Date.now();
   const running = await service(t, tree(), { clock: true });
-  assert.equal((await checkOnce(opts(running))).changed, false);
   const initial = await getAi(running);
-  assert.equal(initial.work_until, null);
+  assert.equal(initial.last_check_at, null);
+  assert.equal(initial.last_heartbeat_at, null);
+  assert.equal(initial.work_active, true);
+  assert.ok(initial.work_until >= startedAfter + WORK_LEASE_MS);
+  assert.ok(initial.work_until <= Date.now() + WORK_LEASE_MS);
+  assert.equal((await checkOnce(opts(running))).changed, false);
+  const lastCheck = (await getAi(running)).last_check_at;
 
   const cursor = { expected_revision: 0, expected_instance_id: running.instance_id };
   running.setClockOffset(1000);
   const waiting = running.post('/ai/wait', cursor);
-  await until(async () => (await getAi(running)).last_check_at > initial.last_check_at);
-  assert.equal((await getAi(running)).work_until, null);
+  await until(async () => (await getAi(running)).last_check_at > lastCheck);
+  assert.equal((await getAi(running)).work_until, initial.work_until);
   await submit(running);
   assert.deepEqual(await (await waiting).json(), { status: 'event' });
   const woken = await getAi(running);
   assert.ok(woken.work_active);
+  assert.ok(woken.work_until > initial.work_until);
 
   running.setClockOffset(2000);
   assert.equal((await checkOnce(opts(running))).changed, true);
@@ -576,7 +589,8 @@ test('user event receipts and round publication lease work across query silence 
     nodes: [node('follow', { round: 2, depends_on: ['delivery'] })]
   });
   assert.equal(published.status, 200);
-  running.setClockOffset(200_000);
+  const restartOffset = 200_000;
+  running.setClockOffset(restartOffset);
   const nextRound = await getAi(running);
   assert.ok(nextRound.work_until > discovered.work_until && nextRound.work_active);
 
@@ -584,11 +598,17 @@ test('user event receipts and round publication lease work across query silence 
   const exited = once(running.child, 'exit');
   running.child.kill();
   await exited;
+  const restartedAfter = Date.now() + restartOffset;
   const restored = await running.start();
   const restarted = await getAi(restored);
-  assert.equal(restarted.work_until, null);
-  assert.equal(restarted.work_active, false);
-  assert.equal(assistantConnection(restarted, 90_000), 'connecting');
+  assert.notEqual(restored.instance_id, running.instance_id);
+  assert.equal(restarted.last_check_at, null);
+  assert.equal(restarted.last_heartbeat_at, null);
+  assert.equal(restarted.work_active, true);
+  assert.ok(restarted.work_until > nextRound.work_until);
+  assert.ok(restarted.work_until >= restartedAfter + WORK_LEASE_MS);
+  assert.ok(restarted.work_until <= Date.now() + restartOffset + WORK_LEASE_MS);
+  assert.equal(assistantConnection(restarted, 90_000), 'connected');
   assert.deepEqual(readFileSync(running.file), bytes);
 });
 
@@ -717,6 +737,7 @@ test('detached heartbeat renews activity every 10s without reading or consuming 
 
 test('heartbeat validates session/revision/instance and exits when service instance disappears', async t => {
   const s = await service(t);
+  const startupDeadline = (await getAi(s)).work_until;
   for (const override of [
     { expected_session_id: 'wrong' },
     { expected_revision: 99 },
@@ -732,7 +753,7 @@ test('heartbeat validates session/revision/instance and exits when service insta
   }
   const rejected = await getAi(s);
   assert.equal(rejected.last_activity_at, null);
-  assert.equal(rejected.work_until, null);
+  assert.equal(rejected.work_until, startupDeadline);
   const hb = await startHeartbeat({ ...opts(s), ownerPid: process.pid });
   s.track(hb.pid);
   s.child.kill();

@@ -24,7 +24,7 @@
 
 ## 工作租约与心跳
 
-短查或等待返回 `changed: true`、发布下一轮、文档控制（如 offer、claim、progress、章节预览、ready）成功或启动心跳时，服务自动续 3 分钟工作租约。出题期间靠查到的提交维持在线。写作期间每完成一章就联机发布。空等、未发现事件的短查和失败请求都不续工作租约。
+服务成功启动并打印回执时，为可继续的 v2 会话开 3 分钟工作租约。已结束（complete 且文档 ready 或 closed）和只读 v1 会话不开启动租约。短查或等待返回 `changed: true`、发布下一轮、文档控制（如 offer、claim、progress、章节预览、ready）成功或启动心跳时续租。写作期间每完成一章就联机发布。空等、未发现事件的短查和失败请求都不续租。
 
 预计连续超过 3 分钟没有续租动作时，运行 `check.mjs --url <origin> --session <UUID> --heartbeat`。启动前沿父进程链找最近的 Claude Code、Codex、Cursor 或 Antigravity，把 PID 传给后台心跳。找不到就传 `--owner-pid <AI 工具 PID>`。Windows 心跳同样优先用 WMI，失败回退 spawn。回执包含 `heartbeat_id`、`owner_pid` 和 `launch`。工作结束用 `--heartbeat-stop <heartbeat_id>` 停止，再短查处理期间的用户事件。`work.mjs` 已为查代码管理心跳。
 
@@ -44,7 +44,7 @@ node <skill>/scripts/work.mjs --url <origin> --session <UUID> --final-round -- <
 
 ## AI 查询中断提示
 
-`/progress.ai` 和 `/recovery.ai` 分开记录短查／等待报到（`last_check_at`）、心跳（`last_heartbeat_at`）和工作租约（`work_active`、`work_until`）。这些状态只在内存中，结束预览或重启服务会清空租约。普通 GET 只读。
+`/progress.ai` 和 `/recovery.ai` 分开记录短查／等待报到（`last_check_at`）、心跳（`last_heartbeat_at`）和工作租约（`work_active`、`work_until`）。这些状态只存于实例内存。结束预览清空租约，重启从新实例启动时重新计时。普通 GET 只读。
 
 等待 AI 出题或生成文档时，心跳和工作租约任一有效，页面就显示在线。两者都已失效且超过 60 秒没有短查或等待报到时，页面提示暂停。没有短查时间时按最后一次心跳计时，其次用最近工作动作的时间。没有任何活动记录时显示“等待 AI 对话连接”。新打开或刚切换服务实例的页面保留 30 秒宽限。用户答题和确认保存时不提示暂停。
 
