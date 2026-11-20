@@ -11,6 +11,7 @@ const requireValue = (ok, message, code = 400) => {
   if (!ok) throw new InputError(message, code);
 };
 const nonempty = value => typeof value === 'string' && value.trim().length > 0;
+const validReply = value => value === undefined || (nonempty(value) && [...value].length <= 40);
 const unique = list => new Set(list).size === list.length;
 const keys = (value, allowed) =>
   value &&
@@ -87,7 +88,7 @@ export function validateTree(tree) {
         'depends_on',
         'status',
         'round',
-        ...(modern ? ['rationale', 'recommendation', 'chapter_id'] : [])
+        ...(modern ? ['rationale', 'recommendation', 'chapter_id', 'reply'] : [])
       ]),
       'unknown node field'
     );
@@ -98,6 +99,11 @@ export function validateTree(tree) {
           n.input
         ),
       'invalid node'
+    );
+    requireValue(validReply(n.reply), 'node reply must be a nonblank string of 1–40 characters');
+    requireValue(
+      n.reply === undefined || n.input !== 'single_choice',
+      'single_choice uses option replies'
     );
     if (modern)
       requireValue(
@@ -112,12 +118,16 @@ export function validateTree(tree) {
       Array.isArray(n.options) &&
         n.options.every(
           o =>
-            keys(o, ['id', 'label', ...(modern ? ['exclusive'] : [])]) &&
+            keys(o, ['id', 'label', ...(modern ? ['exclusive', 'reply'] : [])]) &&
             nonempty(o.id) &&
             nonempty(o.label)
         ) &&
         unique(n.options.map(o => o.id)),
       'invalid options'
+    );
+    requireValue(
+      n.options.every(o => validReply(o.reply)),
+      'option reply must be a nonblank string of 1–40 characters'
     );
     requireValue(
       n.options.every(o => o.exclusive === undefined || typeof o.exclusive === 'boolean') &&

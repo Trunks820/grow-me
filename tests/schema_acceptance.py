@@ -50,4 +50,24 @@ for input_type in ['text', 'single_choice', 'multi_choice']:
         assert list(validator.iter_errors(candidate)), (input_type, value)
         count += 1
 
+for input_type in ['text', 'single_choice', 'multi_choice']:
+    candidate = copy.deepcopy(sample)
+    node = candidate['nodes'][0]
+    node.update(input=input_type, status='pending', answer=None)
+    if input_type == 'text':
+        node['options'] = []
+    target = node['options'][0] if input_type == 'single_choice' else node
+    target['reply'] = '🌱' * 40
+    validator.validate(candidate)
+    count += 1
+    for value in ['', '  ', '🌱' * 41, 42, None]:
+        target['reply'] = value
+        assert list(validator.iter_errors(candidate)), (input_type, value)
+        count += 1
+    if input_type == 'single_choice':
+        del target['reply']
+        node['reply'] = '只写在选项里。'
+        assert list(validator.iter_errors(candidate))
+        count += 1
+
 print(json.dumps({'status':'passed','schema_cases':count,'note':'Runtime/API tests additionally enforce ID relationships, dependency cycles, source binding and exclusive selections.'}))

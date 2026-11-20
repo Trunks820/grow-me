@@ -13,12 +13,27 @@ const card = document.querySelector('#card'),
   reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const drafts = new Map(),
   working = new Map();
+const bloomReplies = [
+  '记下啦，这里又开了一朵花。',
+  '收到，树又长了一点。',
+  '这一题有答案了，花也开了。',
+  '好呀，这朵花开得正好。'
+];
+const deferredReplies = [
+  '记下了，先放一放。',
+  '这题留着，想好了再回来。',
+  '好，这里先按个暂停。',
+  '先留个记号，回头再聊。'
+];
 let noteId = null,
   noteMode = 'read',
   noteRevision = null,
   noteBusy = false,
   noteFrame = 0,
   askNext = false,
+  replyTimer = null,
+  bloomReplyIndex = 0,
+  deferredReplyIndex = 0,
   advanceId = null,
   lastAnsweredId = null;
 let guidance = {};
@@ -175,10 +190,33 @@ function updateNavigation() {
   if (plan) plan.disabled = busy || noteMode === 'plan';
   syncNotePosition();
 }
-function handleAnswer(id) {
-  lastAnsweredId = id;
-  if (advanceId === id) advanceId = null;
+function cancelAdvance() {
+  clearTimeout(replyTimer);
+  replyTimer = null;
+  askNext = false;
+}
+function answerReply(node, answer) {
+  if (isDeferred(answer)) return deferredReplies[deferredReplyIndex++ % deferredReplies.length];
+  const option = node.options.find(option => option.id === answer.option_ids[0]);
+  return node.reply ?? option?.reply ?? bloomReplies[bloomReplyIndex++ % bloomReplies.length];
+}
+function handleAnswer(node, answer) {
+  cancelAdvance();
+  lastAnsweredId = node.id;
+  if (advanceId === node.id) advanceId = null;
+  noteMode = 'reply';
+  dialog.dataset.mode = noteMode;
+  const heading = el('h2', answerReply(node, answer));
+  heading.id = 'node-question';
+  heading.tabIndex = -1;
+  document.querySelector('#node-body').replaceChildren(heading);
+  document.querySelector('#node-actions').replaceChildren();
   askNext = true;
+  replyTimer = setTimeout(() => {
+    replyTimer = null;
+    syncNotePosition();
+  }, 1500);
+  showNote();
 }
 function assistantStatus() {
   const writing =
@@ -478,13 +516,13 @@ function inputs(n, host) {
     if (n.status === 'needs_review')
       act(async () => {
         await post('/decision', { id: n.id, expected_revision: state.revision, answer });
-        handleAnswer(n.id);
+        handleAnswer(n, answer);
       });
     else {
       drafts.set(n.id, structuredClone(answer));
       saveDrafts();
       working.delete(n.id);
-      handleAnswer(n.id);
+      handleAnswer(n, answer);
       message('');
       render();
     }
@@ -568,7 +606,7 @@ function openPlanConfirmation(event) {
       closeNote();
     });
   noteId = null;
-  askNext = false;
+  cancelAdvance();
   noteMode = 'plan';
   noteRevision = state.revision;
   returnFocus = event.currentTarget;
@@ -835,6 +873,8 @@ function render() {
       if (noteMode === 'plan') {
         if (noteRevision !== state.revision) closeNote();
         else dialog.querySelectorAll('button').forEach(b => (b.disabled = busy));
+      } else if (noteMode === 'reply') {
+        document.querySelector('#close-node').disabled = busy;
       } else if (!askNext && (noteRevision !== state.revision || noteBusy !== busy)) {
         if (noteId) renderNote();
         else if (noteMode === 'summary') renderSummaryNote();
@@ -863,7 +903,7 @@ function closeNote() {
   if (dialog.open) dialog.close();
   noteId = null;
   noteMode = 'read';
-  askNext = false;
+  cancelAdvance();
   returnFocus = null;
   mascot.getAnimations().forEach(animation => animation.cancel());
   mascot.setAttribute('hidden', '');
@@ -879,6 +919,8 @@ function showNote() {
     moved = !mascot.hasAttribute('hidden') && mascot.dataset.nodeId !== noteId,
     from = moved ? mascot.getBoundingClientRect() : null,
     heading = dialog.querySelector('#node-question');
+  const image = noteMode === 'reply' ? '/mascot-bloom.svg' : '/mascot-ask.svg';
+  if (mascot.getAttribute('src') !== image) mascot.src = image;
   dialog.dataset.placement = sheetLayout.matches ? 'sheet' : 'panel';
   if (!wasOpen) {
     heading.setAttribute('autofocus', '');
@@ -924,7 +966,7 @@ function openNode(id, trigger, mode) {
   if (busy || stopped) return;
   const n = state?.nodes.find(n => n.id === id);
   if (!n) return;
-  askNext = false;
+  cancelAdvance();
   noteId = id;
   returnFocus = nodeTarget(id) ?? trigger;
   noteMode =
@@ -1025,7 +1067,7 @@ function renderNote() {
     const keep = button(isDeferred(n.answer) ? '仍待定' : '仍然有效', () =>
       act(async () => {
         await post('/decision', { id: n.id, expected_revision: state.revision, answer: n.answer });
-        handleAnswer(n.id);
+        handleAnswer(n, n.answer);
       })
     );
     keep.disabled = busy || !ready(n);
@@ -1053,7 +1095,7 @@ function renderSummaryNote() {
 }
 function openSummary(event) {
   if (busy || stopped) return;
-  askNext = false;
+  cancelAdvance();
   noteId = null;
   noteMode = 'summary';
   returnFocus = event?.currentTarget;
@@ -1170,7 +1212,7 @@ function positionNote() {
   if (!bud) return;
 
   const frame = treeViewport.getBoundingClientRect(),
-    size = mascot.width.baseVal.value,
+    size = mascot.width,
     mochi = mascotPlace(bud, frame, size);
   mascot.dataset.nodeId = noteId;
   mascot.style.left = mochi.x + 'px';
@@ -1250,7 +1292,8 @@ function syncNotePosition() {
   if (noteFrame) return;
   noteFrame = requestAnimationFrame(() => {
     noteFrame = 0;
-    if (askNext && !busy && !stopped) {
+    const advancing = askNext && replyTimer === null && !busy && !stopped;
+    if (advancing) {
       const next = navigationTarget(),
         target = nodeTarget(next?.id);
       if (!next) {
@@ -1266,7 +1309,7 @@ function syncNotePosition() {
       }
     }
     positionNote();
-    if (!stopped && ((askNext && !busy) || (dialog.open && treeCanvas.dataset.growing === 'true')))
+    if (!stopped && ((advancing && askNext) || (dialog.open && treeCanvas.dataset.growing === 'true')))
       syncNotePosition();
   });
 }
@@ -1392,6 +1435,7 @@ async function refresh(force = false) {
   if (stopped) return;
   if (state && next.session_id !== state.session_id) {
     stopped = true;
+    cancelAdvance();
     document
       .querySelectorAll(
         '#card input,#card button,#card textarea,#node-dialog input,#node-dialog button,#node-dialog textarea'
@@ -1537,7 +1581,7 @@ document.querySelector('#copy-reminder').addEventListener('click', async () => {
       heading = el('h2', '复制续接提醒');
     heading.id = 'node-question';
     heading.tabIndex = -1;
-    askNext = false;
+    cancelAdvance();
     noteId = null;
     noteMode = 'reminder';
     returnFocus = document.querySelector('#copy-reminder');

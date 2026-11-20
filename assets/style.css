@@ -605,6 +605,9 @@ main:has(#card[data-scene='questions']) {
   right: 28px;
   translate: none;
 }
+#node-dialog[data-mode='reply'] #node-question {
+  margin-bottom: 0;
+}
 #node-body,
 #node-actions {
   position: relative;

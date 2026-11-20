@@ -92,8 +92,9 @@ def run_suite(work,scenario='all',layout_fixture='v7'):
                 assert page.evaluate('getComputedStyle(document.body).backgroundColor')=='rgb(242, 238, 229)'
                 assert page.locator('#tree-canvas text').count()==0
                 capture(page,work,'opening');before=service.file.read_bytes()
-                page.keyboard.press('1');expect(page.locator('#node-dialog')).to_have_attribute('data-node-id','text');expect(page.locator('.tree-node[data-local=true]')).to_have_count(1);assert service.file.read_bytes()==before
+                page.keyboard.press('1');expect(page.locator('#node-dialog')).to_have_attribute('data-mode','reply');expect(page.locator('.tree-node[data-local=true]')).to_have_count(1);assert service.file.read_bytes()==before
                 page.wait_for_timeout(550);capture(page,work,'local-bloom')
+                expect(page.locator('#node-dialog')).to_have_attribute('data-node-id','text')
                 open_question(page,'text');area=page.get_by_role('textbox',name='本轮答案什么时候保存？',exact=True);area.fill('  ');expect(page.get_by_role('button',name='好了',exact=True)).to_be_disabled()
                 area.fill('先汇总，再手动提交整轮。\n 保留这行空格 ');page.keyboard.press('Control+Enter')
                 open_question(page,'extra');page.get_by_role('textbox',name='补充一个交互要求？',exact=True).fill('等待中可以修改。');page.get_by_role('button',name='好了',exact=True).click();open_summary(page)

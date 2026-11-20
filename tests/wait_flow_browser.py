@@ -45,7 +45,16 @@ def run(work):
             page.get_by_role('textbox').fill('实际点击、截图，并保留计时证据');page.get_by_role('button',name='好了',exact=True).click();open_summary(page);page.get_by_role('button',name='提交本轮答案',exact=True).click();expect(page.locator('#card')).to_contain_text('生长中')
             page.locator('.tree-node[data-node-id="A"]').click();page.get_by_role('button',name='改',exact=True).click();expect(page.locator('#card')).to_contain_text('2 题待复核')
             page.get_by_role('textbox').fill('黄叶复核之后也要持续显示等待');page.get_by_role('button',name='好了',exact=True).click();open_question(page,'C');expect(page.get_by_role('heading',name='追问这项约束如何验证？',exact=True)).to_be_visible();page.get_by_role('button',name='仍然有效',exact=True).click()
-            expect(page.get_by_role('heading',name='正在想下一轮的问题…',exact=True)).to_be_visible();page.clock.fast_forward(168000);expect(page.locator('#wait-elapsed')).to_contain_text('168 秒');expect(page.locator('#card')).to_contain_text('生长中');expect(page.locator('#long-wait')).to_be_visible();snap(page,'review-exit-168s')
+            expect(page.get_by_role('heading', name='正在想下一轮的问题…', exact=True)).to_be_visible()
+            elapsed = page.locator('#wait-elapsed')
+            since = elapsed.get_attribute('data-since')
+            page.clock.fast_forward(168000)
+            expect(page.locator('#node-dialog')).to_be_hidden()
+            expect(elapsed).to_have_text(re.compile(r'^已等待 (?:16[89]|17[0-2]) 秒$'))
+            assert elapsed.get_attribute('data-since') == since
+            expect(page.locator('#card')).to_contain_text('生长中')
+            expect(page.locator('#long-wait')).to_be_visible()
+            snap(page, 'review-exit-168s')
             report['checks']['last_yellow_leaf_enters_visible_wait_168s']=True
             before=service.file.read_bytes();code,_=request(service.url,'/round',{'round':3,'expected_revision':service.state()['revision'],'nodes':[]});assert code==400 and before==service.file.read_bytes()
             control('offer');page.clock.fast_forward(1500);expect(page.get_by_role('button',name='保存并生成任务文档',exact=True)).to_be_visible();assert service.state()['current_round']==2

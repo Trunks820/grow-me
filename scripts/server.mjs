@@ -101,6 +101,12 @@ async function serve(arg, output) {
       readFileSync(new URL('../assets/' + name, import.meta.url))
     ])
   );
+  const mascotImages = new Map(
+    ['ask', 'bloom', 'sleep', 'wake', 'favicon'].map(expression => {
+      const name = `mascot-${expression}.svg`;
+      return ['/' + name, readFileSync(new URL('../assets/' + name, import.meta.url))];
+    })
+  );
   const documentFile = resolve(
     arg('--document', resolve(dirname(stateFile), 'outputs', 'task.html'))
   );
@@ -281,6 +287,13 @@ async function serve(arg, output) {
           'cache-control': 'no-store'
         });
         return res.end(modules.get(url.pathname));
+      }
+      if (req.method === 'GET' && mascotImages.has(url.pathname)) {
+        res.writeHead(200, {
+          'content-type': 'image/svg+xml',
+          'cache-control': 'no-cache'
+        });
+        return res.end(mascotImages.get(url.pathname));
       }
       if (req.method === 'GET' && url.pathname === '/document/status')
         return json(res, 200, documents.status());

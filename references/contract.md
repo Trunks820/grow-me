@@ -9,8 +9,8 @@ The machine-readable format is [tree.schema.json](tree.schema.json). The runtime
 | Level | Fields |
 |---|---|
 | Root | `schema_version: 2`, `session_id`, `topic`, `revision`, `current_round`, `status`, `nodes` |
-| Node | `id`, `question`, required `rationale`, optional `recommendation` / `chapter_id`, `input`, `options`, `answer`, `depends_on`, `status`, `round` |
-| Option | Stable `id`, visible `label`; multi_choice may have one `exclusive: true` option |
+| Node | `id`, `question`, required `rationale`, optional `recommendation` / `chapter_id`, `input`, `options`, `answer`, `depends_on`, `status`, `round`; `text` and `multi_choice` may include `reply` |
+| Option | Stable `id`, visible `label`, optional `reply`; multi_choice may have one `exclusive: true` option |
 | Answer | Required `option_ids` and `text`, optional boolean `deferred`. Preserve free-text whitespace, newlines and Unicode. |
 
 Root status is `active` or `complete`. Node status is `pending` (待答), `answered` (已提交), or `needs_review` (待复核). A `pending` node has `answer: null`. Review retains the previous answer, including null. For confirmed answers, `single_choice` selects one known option, `multi_choice` selects at least one, and `text` requires nonblank text with no option IDs. An exclusive “都不需要” must be selected alone.
@@ -22,6 +22,8 @@ Root status is `active` or `complete`. Node status is `pending` (待答), `answe
 ## New questions and recommendations
 
 Every v2 initial/follow-up question has a nonblank `rationale` explaining the decision it controls. No generated default reason is inserted by the service. Recommendations are optional `recommendation: {option_ids, reason, source_ids, source_digest?}`. IDs must belong to this question; source_ids must name earlier submitted answers. Sources need not become depends_on links or change tree shape.
+
+出题时给每个选项配一句用户选中后麻薯说的话，写在选项的 `reply`。文本题和多选题可以在题目上写一句通用的 `reply`。像朋友接话，25 字左右（1–40 字），别复述选项，别写成用户已经作出的承诺。字段可省略，已有文件可以直接用。`reply` 不计入 `source_digest`。
 
 `/round` computes `source_digest`. The UTF-8 JSON encodes `{id, answer: {option_ids, text}}` in source ID order, including `deferred: true` after `text` for deferred sources. `assets/answers.mjs` defines the encoding. Required digests are 64 lowercase SHA-256 hex characters. New source-less AI suggestions can omit the digest.
 
@@ -89,7 +91,9 @@ The approved visual basis is v7.html / VISUAL-SPEC.md: paper #efe9dc, tapered in
 
 The workbench opens the first available question in a speech bubble beside round mochi (圆麻薯). Activating any node brings its question or saved answer into the same bubble. The bubble contains the question, rationale, answer controls, and deferral. Choice questions show an optional expanding note field and mark valid AI suggestions without selecting them. Activating one option confirms a single-choice answer and advances to the next available question. Multi-choice and text answers confirm with **好了**. At widths of 720 pixels or less, the bubble becomes a bottom sheet with internal scrolling and the mascot stays by the bud. Focus moves into the bubble when it opens. Reduced motion shows the final positions immediately.
 
-A confirmed draft blooms and a deferred draft shows a pause symbol. Store both in `localStorage`. While the page is open, a revision change clears drafts for submitted, reopened, and invalidated questions. Save retained drafts under the new revision. On page load, restore drafts only for the same `session_id` and `revision` in the same browser and origin. Guard storage access and keep drafts in memory when storage is unavailable. Unconfirmed form input stays in memory. The bottom row shows the current round, remaining questions and progress dots. Open the draft summary from that row to submit the round, or choose **够了，先出方案**. Ask for confirmation even when the count of unanswered questions is zero. **我再答几题** closes the bubble and preserves drafts. Submitted answers recover through `/state`. The current conversation authors each next round, ordinarily 3–5 questions with a soft count. Published candidates keep the revision captured before generation.
+确认草稿后，芽开成花。选待定时显示暂停符号。麻薯换成开花表情，在气泡里接一句。单选用所选项的 `reply`，多选优先用题目的 `reply`，再看第一个所选项。文本题用题目的 `reply`。没有台词时轮换模板，待定题用待定模板。约 1.5 秒后转到下一题。减少动态效果时直接换位置。
+
+Store confirmed and deferred drafts in `localStorage`. While the page is open, a revision change clears drafts for submitted, reopened, and invalidated questions. Save retained drafts under the new revision. On page load, restore drafts only for the same `session_id` and `revision` in the same browser and origin. Guard storage access and keep drafts in memory when storage is unavailable. Unconfirmed form input stays in memory. The bottom row shows the current round, remaining questions and progress dots. Open the draft summary from that row to submit the round, or choose **够了，先出方案**. Ask for confirmation even when the count of unanswered questions is zero. **我再答几题** closes the bubble and preserves drafts. Submitted answers recover through `/state`. The current conversation authors each next round, ordinarily 3–5 questions with a soft count. Published candidates keep the revision captured before generation.
 
 Waiting loops a visual extension, without adding rounds/nodes or cumulative tree height. While waiting for the next round, the card shows “正在想下一轮的问题…”, then after 60 seconds “还在想，可以先回看本轮回答”. After the user requests a plan, it shows “正在准备保存…”. The card always displays “生长中” and elapsed seconds, including after the last yellow leaf is reviewed. Timers use a process-local server start timestamp and a browser monotonic clock, survive polling and reconnect, and reset for a genuinely new wait/job. Transport loss reconnects. The human can edit during waiting. All transitive dependencies participate in review. A changed upstream invalidates in-progress review input even when the affected node was already `needs_review`. Unrelated unconfirmed form input survives in the open page. Reduced motion keeps text and stops movement.
 

@@ -38,6 +38,34 @@ function legacyV2() {
   return JSON.parse(readFileSync(new URL('fixtures/legacy-v2.tree.json', import.meta.url), 'utf8'));
 }
 
+test('v2 validates optional mascot replies without changing the answer source digest', () => {
+  const seed = tree([
+    node('single', { input: 'single_choice', options: [{ id: 'a', label: '邮件通知' }],
+      answer: { option_ids: ['a'], text: '' }, status: 'answered' }),
+    node('multi', { answer: { option_ids: ['a', 'b'], text: '' }, status: 'answered' }),
+    node('text', { input: 'text', options: [], answer: { option_ids: [], text: '七天' }, status: 'answered' })
+  ]);
+  validateTree(seed);
+  const sources = seed.nodes.map(node => node.id), digest = recommendationDigest(seed, sources);
+  seed.nodes[0].options[0].reply = '好';
+  seed.nodes[1].options[0].reply = '收到';
+  seed.nodes[1].reply = '这几项都记下啦。';
+  seed.nodes[2].reply = '🌱'.repeat(40);
+  validateTree(seed);
+  assert.equal(recommendationDigest(seed, sources), digest);
+
+  for (const target of [seed.nodes[0].options[0], seed.nodes[1], seed.nodes[2]]) {
+    const original = target.reply;
+    for (const invalid of ['', '  ', '🌱'.repeat(41), 42, null]) {
+      target.reply = invalid;
+      assert.throws(() => validateTree(seed), /reply must be a nonblank string of 1–40 characters/);
+    }
+    target.reply = original;
+  }
+  seed.nodes[0].reply = '这句应写在选项里。';
+  assert.throws(() => validateTree(seed), /single_choice uses option replies/);
+});
+
 async function generateTask(s, revision) {
   const control = body => s.post('/document/control', body);
   assert.equal((await control({ action: 'offer', expected_revision: revision })).status, 200);
