@@ -12,7 +12,7 @@
 
 ## 怎么用
 
-需要 Node.js 22+，以及能读取 `SKILL.md`、运行终端和短查询的 AI 编码助手。**保存定稿必须安装 Python 3.10+**，开访谈前用 Windows 的 `python --version` 或 macOS/Linux 的 `python3 --version` 确认能运行。下载 ZIP 后解压出 `grow-me` 目录即可；通过克隆安装时另需 Git。当前工作流在 Codex 中实测；其他助手需要具备相同能力，兼容性待验证。
+运行 grow-me 只需 Node.js 22+，以及能读取 `SKILL.md`、运行终端和短查询的 AI 编码助手。下载 ZIP 后解压出 `grow-me` 目录即可；通过克隆安装时另需 Git。当前工作流在 Codex 中实测；其他助手需要具备相同能力，兼容性待验证。
 
 ### 跟 AI 一起梳理一个真实需求
 
@@ -108,6 +108,8 @@ npm run demo
 
 ## 开发与验证
 
+Python 只用于开发测试，包括浏览器测试和模拟用户。
+
 ```sh
 npm test
 python -m pip install -r requirements-dev.txt
@@ -127,6 +129,8 @@ PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright python -m
 ```
 
 Node 测试覆盖 v2 校验、v1 只读兼容、依赖复核、文档任务、确定性树形与 200 个布局种子；Chromium 测试覆盖答题、断线、长等待、章节跳转和 28 题布局。受控时钟与合成数据不算真实模型的性能测试。
+
+任务格式检查器移植自 ai-dev-workflow。维护时定期对照，并同步那边的格式规则变更。
 
 接口见 [数据与 HTTP 合约](references/contract.md)，文档分片见 [progressive writer](references/progressive-writer.md)。
 

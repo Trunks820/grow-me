@@ -21,7 +21,7 @@ description: 用本机网页逐轮澄清需求，将用户提交回传当前对�
 
 ## 默认做法
 
-1. 开访谈前先用 `python --version`（Windows）或 `python3 --version`（macOS/Linux）确认能运行 Python 3.10+，保存定稿需要它。命令无法运行或版本过低时，在用户答题前告知。先摸一遍项目现状，读 [数据与 HTTP 合约](references/contract.md)，按真实需求创建首轮（通常 3–5 题）；新题标 `chapter_id`（所属根节点 ID）。新访谈生成一次 UUID，恢复时保留。运行数据和输出放用户工作目录。
+1. 先摸一遍项目现状，读 [数据与 HTTP 合约](references/contract.md)，按真实需求创建首轮（通常 3–5 题）；新题标 `chapter_id`（所属根节点 ID）。新访谈生成一次 UUID，恢复时保留。运行数据和输出放用户工作目录。
 2. 读 [启动、短查询与恢复](references/runtime.md)，按 [Windows 命令](references/commands-windows.md) 或 [macOS/Linux 命令](references/commands-posix.md) 启动服务并保留回执与原文件路径。启动命令结束后立即短查，成功才把 URL 给用户。Windows 若返回 `service_closed`，按命令页改用宿主后台任务运行服务，再短查。
 3. 发布一轮或 offer 后，按宿主能力等待，游标自动保存。预计末轮先趁用户作答做第 4 步的代码核对，再取回执：
    - **A. 后台命令结束能唤回 AI**（如 Claude Code）：用宿主后台启动 `check.mjs --wait`，然后结束本条回复；按事件回执继续。

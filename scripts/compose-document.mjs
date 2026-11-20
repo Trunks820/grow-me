@@ -1,11 +1,11 @@
 import { isMain } from './entry.mjs';
-import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, readdirSync, renameSync, mkdirSync, rmSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { isDeferred } from '../assets/answers.mjs';
 import { chapterAnchor } from '../assets/topics.mjs';
 import { validateDocument } from './document.mjs';
+import { readTaskHtml } from './read-task.mjs';
+import { validateTask } from './validate-task.mjs';
 
 const escape = value =>
   String(value ?? '')
@@ -160,44 +160,14 @@ export function composeDocument(status, parts, { preview = false, tree = null, f
   return { html, ready_chapters: [...chapterParts.keys()], views: [...views.keys()] };
 }
 
-export function readHandoffReport({ error, status, signal, stdout, stderr }) {
-  const exit = status === null ? (signal ? `信号 ${signal}` : '无退出码') : `退出码 ${status}`;
-  let reason;
-  if (error) reason = `无法启动全文校验：${error.message}`;
-  else if (status === 9009)
-    reason = `Python 命令不可用，可能指向 Windows 应用商店占位符（${exit}）`;
-  else if (![0, 1].includes(status)) reason = `全文校验异常退出（${exit}）`;
-  else if (!stdout?.trim()) reason = `全文校验没有输出（${exit}）`;
-  if (reason) {
-    const firstLine = stderr?.trim().split(/\r?\n/, 1)[0];
-    throw Error(`保存定稿需要 Python 3.10+。${reason}${firstLine ? `：${firstLine}` : ''}`);
-  }
-  const report = JSON.parse(stdout);
-  if (status !== 0 || !report.valid) throw Error(report.errors.join('；'));
-  return report;
-}
-
 function validateHandoff(file, tree, jobId) {
   validateDocument(file, tree, jobId);
-  const questions = [...frozenQuestions(tree)].map(([id, question]) => [questionId(id), question]);
-  const validation = spawnSync(
-    process.platform === 'win32' ? 'python' : 'python3',
-    [
-      '-B',
-      '-X',
-      'utf8',
-      fileURLToPath(new URL('./validate_task.py', import.meta.url)),
-      file,
-      '--handoff'
-    ],
-    {
-      input: JSON.stringify(questions),
-      encoding: 'utf8',
-      maxBuffer: 16 * 1024 * 1024,
-      windowsHide: true
-    }
-  );
-  const report = readHandoffReport(validation);
+  const expectedQuestions = [...frozenQuestions(tree)].map(([id, question]) => [
+    questionId(id),
+    question
+  ]);
+  const report = validateTask(readTaskHtml(file), { handoff: true, expectedQuestions });
+  if (!report.valid) throw Error(report.errors.join('；'));
   return {
     project: tree.topic,
     upstream_source: `grow-me session ${tree.session_id} / revision ${tree.revision}`,

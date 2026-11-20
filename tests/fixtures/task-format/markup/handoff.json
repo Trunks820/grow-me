@@ -1,0 +1,26 @@
+{
+  "valid": true,
+  "errors": [],
+  "requirements": 0,
+  "criteria": 0,
+  "work_entries": 1,
+  "revision": "中文 ©",
+  "limits": "Structural links only; not business completeness or executed acceptance.",
+  "packs": [
+    {
+      "id": "W1",
+      "title": "读取 待定问题",
+      "goal": "读取 待定问题",
+      "depends_on": [],
+      "acceptance_criteria": [],
+      "open_questions": [
+        "甲 乙 丙﻿丁",
+        "问题二",
+        "问题一"
+      ],
+      "external_effects": [],
+      "scope_files": [],
+      "tags": []
+    }
+  ]
+}

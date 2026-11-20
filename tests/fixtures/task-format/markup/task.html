@@ -1,0 +1,20 @@
+﻿<HTML><HEAD><TITLE>跳过</TITLE></HEAD><BODY>
+<MAIN DATA-TASK-RECORD DATA-REVISION="discard" DATA-Revision="中文 &copy;">
+<section ID="wrong" id="chosen">
+  <script>const fake = '<div data-kind="requirement" id="script-fake">' + '<a href="#script-missing">';</script>
+  <style>.x::after { content: '<div id="style-fake" data-kind="work">'; }</STYLE>
+  <template ID="hidden"><div data-kind="work" id="藏 &amp; 字">不可见</div></template>
+  <!-- <p data-kind="work" id="comment-fake">注释</p> -->
+  <![CDATA[<p data-kind="work" id="cdata-fake">忽略</p>]]>
+  <p id="wrong" ID="a%ZZ�#">A &amp; B &NotEqualTilde; &notit; &#x80; &#xD800; &#1; &#x10ffff;</p>
+  <p>&#x85;第一行&#13;第二行&#x2028;第三行&#xFEFF;保留</p>
+  <a HREF="#%E8%97%8F%20&amp;%20%E5%AD%97">藏字</a>
+  <a href="#a%ZZ%FF%23">非法百分号和 UTF-8</a>
+  <BR /><img ID="void"><div id="self" /><p><i>向上闭合</p></i>之后
+  <table><tr><th>甲</th><td>乙</td></tr></table>
+  <p data-kind="question" id="0">甲乙&#x2007;丙&#xFEFF;丁</p>
+  <p data-kind="question" id="2">问题二</p>
+  <p data-kind="question" id="1">问题一</p>
+  <p data-kind="work" id="W1" data-questions="0">读取&nbsp;待定问题</p>
+</section>
+</MAIN></BODY></HTML>

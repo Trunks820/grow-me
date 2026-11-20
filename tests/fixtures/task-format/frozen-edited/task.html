@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN"><head><title>不读的标题</title></head><body>
+<main data-task-record data-revision="source-7">
+  <section id="design-view">
+    <h2>设计方案</h2>
+    <p id="R1" data-kind="requirement">报名后发送通知。</p>
+    <li id="Q2" data-kind="question">谁确认交付日期？</li>
+    <li id="Q1" data-kind="question">邮件 &amp; 短信用哪个？</li>
+    <p id="C1" data-kind="constraint">只发一次。</p>
+  </section>
+  <section id="plan-view">
+    <h2>开发清单</h2>
+    <article id="W2" data-kind="work" data-depends="W1" data-requirements="R1"
+      data-criteria="AC2" data-constraints="C1" data-questions="Q1 Q1">
+      <h3>发送通知</h3><p data-field="goal">报名后发送<strong>一条</strong>通知。</p>
+      <span data-field="status">planned</span>
+    </article>
+    <article id="W1" data-kind="phase" data-requirements="R1" data-criteria="AC1">
+      <h3>记录报名</h3><p data-field="goal">保存回执。</p>
+    </article>
+  </section>
+  <section id="acceptance-view">
+    <h2>验收标准</h2>
+    <article id="AC1" data-kind="criterion" data-requirements="R1">
+      <p>报名成功后收到 <strong>回执</strong>。</p><span data-field="status">unverified</span>
+    </article>
+    <article id="AC2" data-kind="criterion" data-requirements="R1">
+      <p>确认 A &amp; B。</p><p>只发送一次。</p><span data-field="status">unverified</span>
+    </article>
+    <p><a href="#Q1">待确认</a></p>
+  </section>
+</main>
+</body></html>

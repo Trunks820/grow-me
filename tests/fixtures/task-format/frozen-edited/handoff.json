@@ -1,0 +1,12 @@
+{
+  "valid": false,
+  "errors": [
+    "Q1: missing or changed frozen question",
+    "Q3: missing or changed frozen question"
+  ],
+  "requirements": 1,
+  "criteria": 2,
+  "work_entries": 2,
+  "revision": "source-7",
+  "limits": "Structural links only; not business completeness or executed acceptance."
+}

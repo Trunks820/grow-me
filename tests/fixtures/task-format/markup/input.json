@@ -1,0 +1,15 @@
+{
+  "section": "chosen",
+  "questions": [
+    [
+      "0",
+      "甲\u001c乙　丙﻿丁"
+    ]
+  ],
+  "codes": {
+    "validate.json": 0,
+    "handoff.json": 0,
+    "read.txt": 0,
+    "section.txt": 0
+  }
+}

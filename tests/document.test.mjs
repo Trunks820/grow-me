@@ -1,9 +1,14 @@
 import{test}from'node:test';import assert from'node:assert/strict';
-import{spawn,execFile}from'node:child_process';import{once}from'node:events';import{promisify}from'node:util';
+import { execFile, spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import { promisify } from 'node:util';
 import{mkdtempSync,writeFileSync,readFileSync,mkdirSync,rmSync,realpathSync,existsSync,readdirSync}from'node:fs';
-import{tmpdir}from'node:os';import{join,dirname,basename}from'node:path';import{fileURLToPath}from'node:url';
+import { EOL, tmpdir } from 'node:os';
+import { join, dirname, basename } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import{createServer}from'node:net';import{fingerprint}from'../scripts/document.mjs';import{chapters}from'../assets/topics.mjs';
-import { readHandoffReport } from '../scripts/compose-document.mjs';
+import { readTaskText } from '../scripts/read-task.mjs';
+import { validateTask } from '../scripts/validate-task.mjs';
 const server=fileURLToPath(new URL('../scripts/server.mjs',import.meta.url));
 const run=promisify(execFile),composer=fileURLToPath(new URL('../scripts/compose-document.mjs',import.meta.url));
 const answer=(id,deps=[])=>({id,question:id+' 的真实问题',rationale:'受控测试：核对文档来源和复核边界。',input:'text',options:[],answer:{option_ids:[],text:'原答案'},depends_on:deps,status:'answered',round:1});
@@ -146,6 +151,10 @@ function handoffFixture(t) {
   const chapterList = chapters(frozen).map(({ id, anchor, title, nodes }) => ({ id, anchor, title, node_ids: nodes.map(node => node.id) }));
   const status = { phase: 'generating', job_id: source.job_id, source: { ...source, chapters: chapterList, document_file: file } };
   const context = join(root, 'status.json'), state = join(root, 'tree.json'), parts = join(root, 'parts');
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PATH')
+  );
+  env.PATH = '';
   mkdirSync(parts);
   writeFileSync(context, JSON.stringify(status));
   writeFileSync(state, JSON.stringify(frozen));
@@ -169,12 +178,16 @@ function handoffFixture(t) {
     file, manifest: join(dirname(file), 'task.manifest.json'), frozen, plan, acceptance, put,
     assemble(...flags) {
       const input = flags.includes('--existing') ? [] : ['--parts', parts];
-      return run(process.execPath, [composer, '--context', context, '--tree', state, ...input, ...flags], { timeout: 15000, windowsHide: true });
+      return run(process.execPath, [composer, '--context', context, '--tree', state, ...input, ...flags], {
+        env,
+        timeout: 15000,
+        windowsHide: true
+      });
     }
   };
 }
 
-test('AC7 final assembly exports ordered packs, explicit questions and the first root fallback', async t => {
+test('AC7 final assembly exports ordered packs and question assignments with an empty PATH', async t => {
   const s = handoffFixture(t);
   await s.assemble('--preview');
   assert.equal(existsSync(s.manifest), false);
@@ -219,26 +232,38 @@ test('AC7 invalid question references and acceptance status prevent final public
   assert.deepEqual(readdirSync(dirname(s.file)).sort(), [basename(s.file), basename(s.manifest)].sort());
 });
 
-test('final validation explains Python startup, launcher and output failures', () => {
-  for (const [result, reason] of [
-    [{ error: Error('spawnSync python ENOENT'), status: null }, /ENOENT/],
-    [{ status: 9009, stdout: '' }, /Windows 应用商店占位符.*退出码 9009/],
-    [
-      { status: 2, stderr: 'validator could not read the file\r\nextra detail' },
-      /退出码 2.*validator could not read the file/
-    ],
-    [{ status: null, signal: 'SIGTERM' }, /信号 SIGTERM/],
-    [{ status: 0, stdout: ' \r\n' }, /没有输出.*退出码 0/],
-    [{ status: 1, stdout: '' }, /没有输出.*退出码 1/]
-  ]) {
-    assert.throws(
-      () => readHandoffReport(result),
-      error => {
-        assert.match(error.message, /保存定稿需要 Python 3\.10\+/);
-        assert.match(error.message, reason);
-        assert.doesNotMatch(error.message, /extra detail/);
-        return true;
-      }
-    );
-  }
-});
+// Expected bytes were captured from the original CLIs, with LF in the fixtures.
+const taskFormatFixtures = fileURLToPath(new URL('./fixtures/task-format/', import.meta.url));
+for (const name of readdirSync(taskFormatFixtures).sort()) {
+  test(`task format matches the original output for ${name}`, () => {
+    const directory = join(taskFormatFixtures, name);
+    const page = join(directory, 'task.html');
+    const html = readFileSync(page, 'utf8');
+    const { section, questions, codes } = JSON.parse(readFileSync(join(directory, 'input.json')));
+    for (const [file, script, args, call, input] of [
+      ['validate.json', 'validate-task', [], () => JSON.stringify(validateTask(html), null, 2)],
+      [
+        'handoff.json',
+        'validate-task',
+        ['--handoff'],
+        () =>
+          JSON.stringify(validateTask(html, { handoff: true, expectedQuestions: questions }), null, 2),
+        JSON.stringify(questions)
+      ],
+      ['read.txt', 'read-task', [], () => readTaskText(html)],
+      ['section.txt', 'read-task', ['--section', section], () => readTaskText(html, { section })]
+    ]) {
+      const expected = readFileSync(join(directory, file), 'utf8').replaceAll('\r\n', '\n');
+      const code = codes[file];
+      if (code === 2) assert.throws(call, { message: expected.slice(0, -1) });
+      else assert.equal(call() + '\n', expected, file);
+      const cli = fileURLToPath(new URL(`../scripts/${script}.mjs`, import.meta.url));
+      const actual = spawnSync(process.execPath, [cli, page, ...args], { input, windowsHide: true });
+      assert.ifError(actual.error);
+      assert.equal(actual.status, code, file);
+      const bytes = Buffer.from(expected.replaceAll('\n', EOL));
+      assert.deepEqual(actual.stdout, code === 2 ? Buffer.alloc(0) : bytes, file);
+      assert.deepEqual(actual.stderr, code === 2 ? bytes : Buffer.alloc(0), file);
+    }
+  });
+}

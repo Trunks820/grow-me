@@ -1,0 +1,20 @@
+{
+  "valid": false,
+  "errors": [
+    "Duplicate ID: R1",
+    "Q1: data-questions requires a work item or phase",
+    "Definition missing ID: requirement",
+    "W1: wrong reference type Q1",
+    "W1: missing reference missing",
+    "AC1: missing/invalid criterion status",
+    "AC1: missing readable criterion text",
+    "Missing anchor: missing",
+    "None: missing acceptance coverage",
+    "None: missing plan coverage"
+  ],
+  "requirements": 3,
+  "criteria": 1,
+  "work_entries": 1,
+  "revision": "source-8",
+  "limits": "Structural links only; not business completeness or executed acceptance."
+}

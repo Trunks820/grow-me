@@ -27,9 +27,9 @@ Follow [progressive-writer.md](progressive-writer.md). Write UTF-8 JSON parts bo
 Final assembly requires every chapter and all three view parts. Run the final command in the progressive guide, then check readable static content before posting `ready`.
 
 ```text
-python <skill>/scripts/read_task.py <task.html>
+node "<skill>/scripts/read-task.mjs" "<task.html>"
 ```
 
-Final assembly runs `validate_task.py` to check unique IDs, local links, requirement → criterion → work associations, question references and status values. The extractor confirms collapsed/static body text is present. When a browser is available, check narrow layout, tab switching, deep chapter anchors and offline reading. Preserve genuine pending decisions and report any unperformed display checks.
+Final assembly calls `validate-task.mjs` in process to check unique IDs, local links, requirement → criterion → work associations, question references and status values. Use the extractor to confirm collapsed and static body text is present. When a browser is available, check narrow layout, tab switching, deep chapter anchors and offline reading. Preserve genuine pending decisions and report any unperformed display checks.
 
 Only after these checks succeed, post `ready` with the current expected_session_id, expected_revision and job_id. On failure, post a short actionable error and retain frozen answers for retry. An existing task page must be updated in place with its IDs and history preserved; do not replace it with a fresh template just to simplify assembly.

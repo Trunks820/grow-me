@@ -8,8 +8,8 @@ node "<skill>/scripts/check.mjs" --url "http://127.0.0.1:<port>" --session "<UUI
 curl.exe --silent --show-error --fail-with-body --max-time 3 "http://127.0.0.1:<port>/state"
 curl.exe --silent --show-error --fail-with-body --max-time 3 "http://127.0.0.1:<port>/context"
 curl.exe --silent --show-error --fail-with-body --max-time 3 -H "Content-Type: application/json" --data-binary "@<workspace>/request.json" "http://127.0.0.1:<port>/round"
-python "<skill>/scripts/validate_task.py" "<workspace>/task.html"
-python "<skill>/scripts/read_task.py" "<workspace>/task.html"
+node "<skill>/scripts/validate-task.mjs" "<workspace>/task.html"
+node "<skill>/scripts/read-task.mjs" "<workspace>/task.html"
 ```
 
 `request.json` 带已核对的 `expected_session_id` 和候选读取时的 `expected_revision`。用 `curl.exe`，不使用 PowerShell 的 curl 别名。

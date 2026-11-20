@@ -1,0 +1,43 @@
+{
+  "valid": true,
+  "errors": [],
+  "requirements": 1,
+  "criteria": 2,
+  "work_entries": 2,
+  "revision": "source-7",
+  "limits": "Structural links only; not business completeness or executed acceptance.",
+  "packs": [
+    {
+      "id": "W2",
+      "title": "发送通知",
+      "goal": "报名后发送一条通知。",
+      "depends_on": [
+        "W1"
+      ],
+      "acceptance_criteria": [
+        "AC2 · 确认 A & B。 只发送一次。"
+      ],
+      "open_questions": [
+        "邮件 & 短信用哪种？"
+      ],
+      "external_effects": [],
+      "scope_files": [],
+      "tags": []
+    },
+    {
+      "id": "W1",
+      "title": "记录报名",
+      "goal": "保存回执。",
+      "depends_on": [],
+      "acceptance_criteria": [
+        "AC1 · 报名成功后收到 回执。"
+      ],
+      "open_questions": [
+        "谁确认交付日期？"
+      ],
+      "external_effects": [],
+      "scope_files": [],
+      "tags": []
+    }
+  ]
+}

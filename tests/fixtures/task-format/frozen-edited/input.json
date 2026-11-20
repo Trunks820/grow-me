@@ -1,0 +1,19 @@
+{
+  "section": "Q1",
+  "questions": [
+    [
+      "Q1",
+      "邮件 & 短信用哪种？"
+    ],
+    [
+      "Q3",
+      "未写入的问题"
+    ]
+  ],
+  "codes": {
+    "validate.json": 0,
+    "handoff.json": 1,
+    "read.txt": 0,
+    "section.txt": 0
+  }
+}

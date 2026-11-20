@@ -122,6 +122,6 @@ cat outputs/task.html.chapter-timings.jsonl
 - `submission_discovered`：首次发现用户提交的 discovery_delay_ms；重复检查、AI 发布、waiting_for_save 不累加。与提交到新题的总等待分别报告，避免把轮询发现延迟算成模型生成耗时。
 - `chapter_first_published`：每章首次发布，含 job_id、chapter_id、first_published_at、elapsed_ms。既有 `<document>.chapter-timings.jsonl` 与 `/document/status.chapters[].first_published_at` 保留；重新发布不重置。
 
-Windows 查看：`Get-Content -LiteralPath '<tree.json>.runtime-timings.jsonl' | ConvertFrom-Json | Format-Table at_iso,event,sequence,chapter_id,elapsed_ms`。macOS/Linux 可逐行 `cat` 该文件，或用 Python 读取筛选 event。计时文件不能当成用户答案数据源。
+Windows 查看：`Get-Content -LiteralPath '<tree.json>.runtime-timings.jsonl' | ConvertFrom-Json | Format-Table at_iso,event,sequence,chapter_id,elapsed_ms`。macOS/Linux 可用 `cat` 查看该文件。计时文件不能当成用户答案数据源。
 
 回归覆盖 symlink/junction CLI 输出、游标与实例恢复、仅用户事件、waiting_for_save、在线及暂停判定、冻结树原话转义／多选与章节归属、代码读取起止。真实跨助手用时按实际访谈记录。

@@ -1,0 +1,10 @@
+{
+  "section": "acceptance-view",
+  "questions": [],
+  "codes": {
+    "validate.json": 0,
+    "handoff.json": 1,
+    "read.txt": 0,
+    "section.txt": 0
+  }
+}

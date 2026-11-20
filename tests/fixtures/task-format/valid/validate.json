@@ -1,0 +1,9 @@
+{
+  "valid": true,
+  "errors": [],
+  "requirements": 1,
+  "criteria": 2,
+  "work_entries": 2,
+  "revision": "source-7",
+  "limits": "Structural links only; not business completeness or executed acceptance."
+}
