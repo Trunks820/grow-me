@@ -13,7 +13,7 @@ const escape = value =>
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-export function renderChapter(status, tree, chapterId, explanation) {
+export function renderChapter(status, tree, chapterId, explanation, { title } = {}) {
   validateTree(tree);
   if (
     tree.status !== 'complete' ||
@@ -42,30 +42,23 @@ export function renderChapter(status, tree, chapterId, explanation) {
     /^\s*(?:event:|data:|\{)/.test(explanation)
   )
     throw Error('需要已写好的说明性 HTML');
-  const confirmed = [],
-    deferred = [],
-    deferredQuestions = [];
-  for (const n of chapter.nodes) {
-    const pending = isDeferred(n.answer),
-      selected = n.answer.option_ids.map(id => n.options.find(o => o.id === id)),
+  if (title !== undefined && (typeof title !== 'string' || !title.trim()))
+    throw Error('章节标题需要一句可读的主题名');
+  const deferredQuestions = [];
+  const answers = chapter.nodes.map(node => {
+    const pending = isDeferred(node.answer),
+      selected = node.answer.option_ids.map(id => node.options.find(option => option.id === id)),
       options = selected.length
-        ? `<p>${pending ? '暂选' : '用户选择'}</p><ul>${selected.map(o => `<li>${escape(o.label)}</li>`).join('')}</ul>`
+        ? `<p><strong>${pending ? '你暂选' : '你选'}</strong></p><ul>${selected.map(option => `<li>${escape(option.label)}</li>`).join('')}</ul>`
         : '',
-      note = n.answer.text
-        ? `<p>${pending ? '补充说明' : '用户原话'}</p><pre class="frozen-answer" style="white-space:pre-wrap;overflow-wrap:anywhere;font:inherit">${escape(n.answer.text)}</pre>`
+      note = node.answer.text
+        ? `<p><strong>你的原话</strong></p><div class="frozen-answer">${escape(node.answer.text).replaceAll('\r', '&#13;')}</div>`
         : '',
-      section = `<section data-source-node="${escape(n.id)}"><h4>${escape(n.question)}</h4>${options}${note}</section>`;
-    if (pending) {
-      deferred.push(section);
-      deferredQuestions.push(n.question);
-    } else confirmed.push(section);
-  }
-  const answers = confirmed.length
-      ? `<section class="frozen-answers"><h3>已提交的决定</h3>${confirmed.join('\n')}</section>`
-      : '',
-    pending = deferred.length
-      ? `<section class="deferred-answers"><h3>待确认</h3>${deferred.join('\n')}</section>`
-      : '';
+      state = pending ? ' data-pending-answer="true"' : '',
+      label = pending ? ' <span class="question-origin">待定</span>' : '';
+    if (pending) deferredQuestions.push(node.question);
+    return `<section data-source-node="${escape(node.id)}"${state}><p><strong>问</strong> ${escape(node.question)}${label}</p>${options}${note}</section>`;
+  });
   return {
     source: {
       session_id: tree.session_id,
@@ -75,9 +68,11 @@ export function renderChapter(status, tree, chapterId, explanation) {
     },
     view: 'chapter',
     chapter_id: chapterId,
-    title: binding.title,
+    title: title?.trim() ?? binding.title,
     ...(deferredQuestions.length ? { deferred_questions: deferredQuestions } : {}),
-    html: `${answers}${pending}<section class="writer-explanation"><h3>方案说明（AI）</h3>${explanation}</section>`
+    html: `<div class="writer-explanation">${explanation}</div>
+<details class="interview"><summary>访谈原话（${answers.length} 问）</summary>
+<div class="interview-answers">${answers.join('\n')}</div></details>`
   };
 }
 if (isMain(import.meta.url)) {
@@ -85,7 +80,7 @@ if (isMain(import.meta.url)) {
     value = name => args[args.indexOf(name) + 1];
   if (args.includes('--help'))
     console.log(
-      'node scripts/render-chapter.mjs --context <status.json> --tree <tree.json> --chapter <root-id> --explanation <prose.html> --out <parts/chapter.json>\nOriginal answers are escaped and rendered directly from the frozen tree. AI supplies explanatory HTML only.'
+      'node scripts/render-chapter.mjs --context <status.json> --tree <tree.json> --chapter <root-id> [--title <topic-name>] --explanation <prose.html> --out <parts/chapter.json>\nOriginal answers are escaped and rendered directly from the frozen tree. AI supplies explanatory HTML only.'
     );
   else
     try {
@@ -95,7 +90,8 @@ if (isMain(import.meta.url)) {
         JSON.parse(readFileSync(value('--context'), 'utf8')),
         JSON.parse(readFileSync(value('--tree'), 'utf8')),
         value('--chapter'),
-        readFileSync(value('--explanation'), 'utf8')
+        readFileSync(value('--explanation'), 'utf8'),
+        { title: args.includes('--title') ? value('--title') : undefined }
       );
       const file = value('--out'),
         temp = file + '.' + process.pid + '.tmp';

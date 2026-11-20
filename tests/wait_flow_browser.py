@@ -81,11 +81,41 @@ def run(work):
             page.get_by_role('button',name='重试生成文档',exact=True).click();status=request(service.url,'/document/status')[1];control('claim',job_id=status['job_id']);context.write_text(json.dumps(status,ensure_ascii=False),encoding='utf-8')
             (parts/'chapter-a.json').unlink() # The retry uses only the new job's independent pieces.
             for c in status['source']['chapters']:(parts/('root-'+c['id']+'.json')).write_text(json.dumps(part('chapter','<p>正式章节内容</p>',chapter_id=c['id']),ensure_ascii=False),encoding='utf-8')
-            for name,html in [('design','<article id="R1" data-kind="requirement"><h3>需求</h3><p>持续等待</p></article>'),('plan','<article id="W1" data-kind="work" data-requirements="R1" data-criteria="AC1"><h3>开发项</h3><span data-field="status">planned</span><a href="#AC1">验收</a></article>'),('acceptance','<article id="AC1" data-kind="criterion" data-requirements="R1"><h3>验收</h3><span data-field="status">unverified</span><a href="#R1">需求</a></article>')]:
+            for name,html in [
+                ('design', '<article id="R1" data-kind="requirement"><h3>持续等待</h3></article>'),
+                ('plan', '''
+                    <article id="W1" class="work-item" data-number="1" data-kind="work" data-requirements="R1" data-criteria="AC1">
+                      <div class="work-heading"><h3>延长等待</h3><span data-field="status" data-status="planned">还没开始</span></div>
+                      <p data-field="goal">出题时保持连接。</p><ul data-field="effects"><li>无</li></ul>
+                      <details class="work-details"><summary>关联需求和验收</summary><a href="#AC1">出题期间持续等待</a></details>
+                    </article>'''),
+                ('acceptance', '''
+                    <tr id="AC1" data-kind="criterion" data-requirements="R1">
+                      <th scope="row">出题期间持续等待</th><td>等待下一轮出题。</td><td>保持连接。</td>
+                      <td><span data-field="status" data-status="unverified">还没验</span></td>
+                    </tr>''')
+            ]:
                 (parts/(name+'.json')).write_text(json.dumps(part(name,html),ensure_ascii=False),encoding='utf-8')
             report['final_assembly']=assemble(False);control('ready',job_id=status['job_id']);page.clock.fast_forward(1500);expect(page.get_by_role('link',name='打开完整方案',exact=True)).to_be_visible();expect(page.locator('#meta')).to_contain_text('共完成 2 轮');assert '第 3 轮' not in page.locator('#meta').inner_text();assert all(n['status']=='answered' for n in service.state()['nodes'])
             with page.expect_popup() as popup:page.locator('.tree-fruit[data-fruit-id="B"]').click()
-            final=popup.value;final.wait_for_load_state('networkidle');expect(final.get_by_role('tab')).to_have_count(3);final.get_by_role('tab',name='开发清单',exact=True).click();expect(final.locator('#W1')).to_be_visible();final.close()
+            final=popup.value
+            final.wait_for_load_state('networkidle')
+            expect(final.get_by_role('tab')).to_have_count(3)
+            final.get_by_role('tab', name='开发清单', exact=True).click()
+            expect(final.locator('#W1 [data-field="status"]')).to_have_text('还没开始')
+            detail=final.locator('#W1 .work-details')
+            expect(detail).to_have_js_property('open', False)
+            detail.locator('summary').click()
+            detail.get_by_role('button', name='复制给 AI 的任务包').click()
+            expect(final.locator('#package-text')).to_have_value(re.compile(r'AC1[\s\S]*出题期间持续等待[\s\S]*unverified'))
+            detail.get_by_role('link', name='出题期间持续等待').click()
+            expect(final.locator('#AC1')).to_be_visible()
+            expect(final.locator('#AC1 [data-field="status"]')).to_have_text('还没验')
+            final.set_viewport_size({'width': 390, 'height': 844})
+            expect(final.locator('#page-directory')).to_have_js_property('open', False)
+            assert final.locator('.table-wrap').evaluate('el => el.scrollWidth > el.clientWidth')
+            no_overflow(final)
+            final.close()
             snap(page,'completed');report['checks']['retry_final_assembly_three_tabs_and_real_round_number']=True
             report['checks']['all_original_answers_unchanged_on_document_retry']=service.state()['nodes'][0]['answer']['text']=='黄叶复核之后也要持续显示等待'
             report['checks']['bad_stream_at_initial_load_keeps_card_and_recovers']=True

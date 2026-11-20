@@ -815,7 +815,11 @@ test('frozen chapter renderer preserves exact escaped text and selected options,
  assert.throws(()=>renderChapter(status,old,'a','<p>x</p>'),/来源/);
  assert.throws(()=>renderChapter(status,{...frozen,status:'active'},'a','<p>x</p>'),/冻结/);
  const prose=join(s.root,'prose.html'),out=join(s.root,'parts','a.json'),context=join(s.root,'status.json');writeFileSync(prose,'<p>CLI 说明</p>');writeFileSync(context,JSON.stringify(status));
- const cli=await run(process.execPath,[fileURLToPath(new URL('../scripts/render-chapter.mjs',import.meta.url)),'--context',context,'--tree',s.file,'--chapter','a','--explanation',prose,'--out',out]);assert.equal(JSON.parse(cli.stdout).chapter_id,'a');assert.match(JSON.parse(readFileSync(out,'utf8')).html,/用户原话/);
+ const cli=await run(process.execPath,[fileURLToPath(new URL('../scripts/render-chapter.mjs',import.meta.url)),'--context',context,'--tree',s.file,'--chapter','a','--title','通知方式','--explanation',prose,'--out',out]);assert.equal(JSON.parse(cli.stdout).chapter_id,'a');
+ const chapterPart = JSON.parse(readFileSync(out, 'utf8'));
+ assert.equal(chapterPart.title, '通知方式');
+ assert.match(chapterPart.html, /<details class="interview"><summary>访谈原话（2 问）/);
+ assert.match(chapterPart.html, /你的原话/);
  const assembled=composeDocument(status,[a,b],{preview:true});writeFileSync(s.document+'.preview.html',assembled.html);validateDocument(s.document+'.preview.html',frozen,status.job_id,{partial:true,chapterId:'a'});
  await control(s,'chapter',{job_id:status.job_id,chapter_id:'a'});await delay(5);await control(s,'chapter',{job_id:status.job_id,chapter_id:'b'});await control(s,'chapter',{job_id:status.job_id,chapter_id:'a'});
  const published=logs(s).filter(e=>e.event==='chapter_first_published');assert.equal(published.length,2);assert.ok(published[1].first_published_at>published[0].first_published_at);

@@ -5,7 +5,7 @@ import { isDeferred } from '../assets/answers.mjs';
 import { chapterAnchor } from '../assets/topics.mjs';
 import { validateDocument } from './document.mjs';
 import { readTaskHtml } from './read-task.mjs';
-import { validateTask } from './validate-task.mjs';
+import { taskDefinitions, validateTask } from './validate-task.mjs';
 
 const escape = value =>
   String(value ?? '')
@@ -22,17 +22,17 @@ const frozenQuestions = tree =>
   );
 const questionId = id =>
   /^[a-z\d_-]+$/i.test(id) ? 'deferred-' + id : 'deferred~' + chapterAnchor(id);
+const questionOrigins = { user: '你提的', suggestion: 'AI 的建议', deferred: '待定的题' };
 
-function deferredLists(status, chapterParts, tree) {
+function pendingQuestions(status, chapterParts, tree, design) {
   const frozen = frozenQuestions(tree);
-  const items = status.source.chapters.flatMap(chapter => {
+  const chapterQuestions = status.source.chapters.flatMap(chapter => {
     const part = chapterParts.get(chapter.id);
-    if (!part) return [];
     const known = (chapter.node_ids ?? []).filter(id => frozen.has(id));
     const texts = new Set(known.map(id => frozen.get(id)));
     return [
       ...known.map(id => ({ id: questionId(id), text: frozen.get(id), anchor: chapter.anchor })),
-      ...(part.deferred_questions ?? [])
+      ...(part?.deferred_questions ?? [])
         .filter(question => !texts.has(question))
         .map((text, index) => ({
           id: `pending-${chapter.anchor}-${index + 1}`,
@@ -41,21 +41,45 @@ function deferredLists(status, chapterParts, tree) {
         }))
     ];
   });
-  const list = entries =>
-    entries.length
-      ? `<section class="deferred-questions"><h3>待确认</h3><ul>${entries.join('')}</ul></section>`
-      : '';
-  return {
-    definitions: list(
-      items.map(
-        ({ id, text, anchor }) =>
-          `<li id="${escape(id)}" data-kind="question"><a href="#${escape(anchor)}">${escape(text)}</a></li>`
-      )
-    ),
-    links: list(
-      items.map(({ text, anchor }) => `<li><a href="#${escape(anchor)}">${escape(text)}</a></li>`)
-    )
-  };
+  return [...chapterQuestions, ...(design?.open_questions ?? [])];
+}
+
+function pendingList(questions) {
+  if (!questions.length) return '';
+  const items = questions.map(({ id, text, anchor, origin = 'deferred' }) => {
+    const label = `<span class="question-origin" data-field="origin">${questionOrigins[origin]}</span>`;
+    const body = anchor ? `<a href="#${escape(anchor)}">${escape(text)}</a>` : escape(text);
+    return `<li id="${escape(id)}" data-kind="question" data-question-origin="${origin}">${label} ${body}</li>`;
+  });
+  return `<ul class="pending-list">${items.join('\n')}</ul>`;
+}
+
+function checkDesign(part, status, file) {
+  for (const key of ['position', 'next']) {
+    if (part[key] !== undefined && (typeof part[key] !== 'string' || !part[key].trim()))
+      throw partError(file, `${key} 需要一句话`);
+  }
+  if (part.open_questions === undefined) return part;
+  if (!Array.isArray(part.open_questions)) throw partError(file, 'open_questions 需要待定事项列表');
+  const open_questions = part.open_questions.map(question => {
+    if (
+      typeof question?.id !== 'string' || !/^\S+$/.test(question.id) ||
+      typeof question.text !== 'string' || !question.text.trim() ||
+      typeof question.origin !== 'string' || !Object.hasOwn(questionOrigins, question.origin)
+    ) throw partError(file, 'open_questions 每项需要 id、text 和有效的 origin');
+    const chapter = status.source.chapters.find(c => c.id === question.chapter_id);
+    if (question.chapter_id !== undefined && !chapter)
+      throw partError(file, 'open_questions 关联了不存在的章节');
+    return { id: question.id, text: question.text, origin: question.origin, anchor: chapter?.anchor };
+  });
+  return { ...part, open_questions };
+}
+
+function acceptanceTable(html) {
+  if (!/^\s*<tr[\s>]/i.test(html)) return html;
+  return `<div class="table-wrap" role="region" aria-labelledby="verification-title" tabindex="0">
+<table class="acceptance-table"><thead><tr><th scope="col">验什么</th><th scope="col">怎么做</th><th scope="col">应该看到</th><th scope="col">结论</th></tr></thead>
+<tbody>${html}</tbody></table></div>`;
 }
 
 export function composeDocument(status, parts, { preview = false, tree = null, files = [] } = {}) {
@@ -96,38 +120,54 @@ export function composeDocument(status, parts, { preview = false, tree = null, f
     } else {
       if (!['design', 'plan', 'acceptance'].includes(part.view) || views.has(part.view))
         throw partError(file, 'view 对应的视图不存在或重复');
-      views.set(part.view, part);
+      views.set(part.view, part.view === 'design' ? checkDesign(part, status, file) : part);
     }
   }
   if (!preview && (views.size !== 3 || chapterParts.size !== status.source.chapters.length))
     throw Error('最终文档需要三个视图和全部章节');
   const design = views.get('design'),
     pending = '<p class="small">本部分仍在生成；完成的主题章节已可阅读。</p>';
-  const deferred = deferredLists(status, chapterParts, tree);
-  const chapters = status.source.chapters
-    .map(c => {
-      const part = chapterParts.get(c.id);
-      return `<article id="${c.anchor}"${part ? ' data-chapter-ready="true"' : ''}><h2>${escape(part?.title ?? c.title)}</h2>${part?.html ?? pending}</article>`;
-    })
+  const chapters = status.source.chapters.map(chapter => ({
+    anchor: escape(chapter.anchor),
+    title: escape(chapterParts.get(chapter.id)?.title ?? chapter.title),
+    part: chapterParts.get(chapter.id)
+  }));
+  const chapterHtml = chapters.map(({ anchor, title, part }) =>
+    `<article id="${anchor}" class="chapter"${part ? ' data-chapter-ready="true"' : ''}><h3>${title}</h3>${part?.html ?? pending}</article>`
+  ).join('\n');
+  const decisions = pendingList(pendingQuestions(status, chapterParts, tree, design)) + (design?.decisions ?? '');
+  const designHtml = chapterHtml + (design?.html ?? pending);
+  const plan = views.get('plan')?.html ?? pending;
+  const acceptance = acceptanceTable(views.get('acceptance')?.html ?? pending);
+  const definitions = taskDefinitions(decisions + designHtml + plan + acceptance);
+  const pendingCount = definitions.filter(entry => entry.kind === 'question').length;
+  const pendingTitle = `还没定的（${pendingCount} 件）`;
+  const numberIndex = definitions.filter(entry => entry.id && /^(?:R|AC|W)\d+$/.test(entry.id))
+    .map(({ id, name }) => `<li><code>${escape(id)}</code> <a href="#${escape(id)}">${escape(name || '查看定义')}</a></li>`)
     .join('\n');
+  const generatedAt = new Date(status.started_at ?? Date.now()).toISOString();
   const values = {
-    TITLE: escape(design?.title ?? '需求梳理记录'),
+    TITLE: escape(design?.title ?? tree?.topic ?? '需求梳理记录'),
     REVISION: 'source-' + status.source.revision,
-    UPDATED: escape(design?.updated ?? ''),
+    UPDATED: escape(design?.updated ?? generatedAt.slice(0, 10)),
     SUMMARY: escape(
       design?.summary ??
         (preview ? '正在生成；已完成章节可以先阅读。' : '本次访谈的回答与方案记录。')
     ),
-    POSITION: preview ? '文档生成中，尚未完成最终校验。' : '全文已组装，验收状态以正文为准。',
-    NEXT: preview ? '可从树上的成熟果子打开已完成主题。' : '阅读方案、开发清单与验收标准。',
-    CONTEXT: escape('访谈 ' + status.source.session_id + ' / revision ' + status.source.revision),
-    DECISIONS: deferred.definitions + (design?.decisions ?? ''),
-    DESIGN: chapters + (design?.html ?? pending),
-    REQUIREMENTS: '',
-    CONSTRAINTS: '',
-    PLAN: deferred.links + (views.get('plan')?.html ?? pending),
-    HANDOFF: '',
-    ACCEPTANCE: deferred.links + (views.get('acceptance')?.html ?? pending)
+    POSITION: escape(design?.position ?? (preview ? '文档生成中，尚未完成最终校验。' : '全文已组装，验收状态以正文为准。')),
+    NEXT: escape(design?.next ?? (preview ? '可从树上的成熟果子打开已完成主题。' : '阅读方案、开发清单与验收标准。')),
+    PENDINGTITLE: pendingTitle,
+    PENDINGSUMMARY: pendingCount ? '<a href="#decisions">查看待定事项</a>' : '目前没有列出的待定事项。',
+    PREVIEWNOTE: preview ? '<p class="small">章节预览。全文校验通过后可以生成任务包。</p>' : '',
+    DECISIONS: decisions || '<p>目前没有列出的待定事项。</p>',
+    DIRECTORY: chapters.map(({ anchor, title }) => `<a class="toc-section" href="#${anchor}">${title}</a>`).join('\n'),
+    DESIGN: designHtml,
+    PLAN: plan,
+    ACCEPTANCE: acceptance,
+    SESSION: escape(status.source.session_id),
+    VERSION: escape(status.source.revision),
+    GENERATED: generatedAt,
+    NUMBERS: numberIndex ? `<ul class="number-index">${numberIndex}</ul>` : '<p>目前没有编号。</p>'
   };
   let html = readFileSync(new URL('../assets/writer-shell.html', import.meta.url), 'utf8').replace(
     /\{\{([A-Z]+)\}\}/g,
@@ -135,8 +175,6 @@ export function composeDocument(status, parts, { preview = false, tree = null, f
   );
   const attrs = ` data-source-session="${escape(status.source.session_id)}" data-source-revision="${status.source.revision}" data-source-digest="${escape(status.source.digest)}" data-source-job="${escape(status.job_id)}"${preview ? ' data-generating="true"' : ''}`;
   html = html.replace('<main data-task-record', '<main' + attrs + ' data-task-record');
-  for (const id of ['requirements', 'constraints', 'handoff'])
-    html = html.replace(new RegExp('<section id="' + id + '"[\\s\\S]*?<\\/section>'), '');
   if (preview) {
     // Pending references are visibly pending anchors, never pretend requirement/acceptance entries.
     const ids = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map(x => x[1]));
@@ -147,14 +185,6 @@ export function composeDocument(status, parts, { preview = false, tree = null, f
       '<section id="plan-view"',
       missing.map(id => `<p id="${escape(id)}" class="small">相关内容仍在生成。</p>`).join('') +
         '<section id="plan-view"'
-    );
-    html = html.replace(
-      'function refreshSummaries(){',
-      'function refreshSummaries(){\n if(record.hasAttribute("data-generating")){document.getElementById("record-check").textContent="章节预览 · 全文仍在生成，任务包在完成校验后开放。";return;}'
-    );
-    html = html.replace(
-      'for(const item of nodes().filter(',
-      'for(const item of (record.hasAttribute("data-generating")?[]:nodes()).filter('
     );
   }
   return { html, ready_chapters: [...chapterParts.keys()], views: [...views.keys()] };

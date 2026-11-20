@@ -22,6 +22,10 @@ const spaceRun = new RegExp(`[${whitespace}]+`);
 const lineBreak = /\r\n|[\n\r\v\f\u001c-\u001e\u0085\u2028\u2029]/;
 export const splitTaskSpace = value => value.split(spaceRun).filter(Boolean);
 export const normalizeTaskSpace = value => splitTaskSpace(value).join(' ');
+export const taskStatusAttribute = attrs =>
+  attrs['data-field'] === 'status' && Object.hasOwn(attrs, 'data-status')
+    ? normalizeTaskSpace(attrs['data-status'] ?? '')
+    : undefined;
 
 const charRef = /&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)/gu;
 const windows1252 = '€\x81‚ƒ„…†‡ˆ‰Š‹Œ\x8dŽ\x8f\x90‘’“”•–—˜™š›œ\x9džŸ';
@@ -161,25 +165,33 @@ export function readTaskText(html, { section } = {}) {
   const visible = () =>
     !stack.some(frame => hiddenTags.has(frame.tag)) &&
     stack.some(frame => (section ? frame.selected : frame.tag === 'body'));
+  const withinStatusLabel = () => stack.at(-1)?.withinStatusLabel;
 
   parseTaskHtml(html, {
     start(tag, attrs) {
       const selected = Boolean(section && attrs.id === section);
+      const nestedInStatus = withinStatusLabel();
+      const statusAttribute = taskStatusAttribute(attrs);
       if (selected) matches++;
-      if (!VOID_TAGS.has(tag)) stack.push({ tag, selected, href: attrs.href });
-      if (!visible()) return;
+      if (!VOID_TAGS.has(tag)) {
+        stack.push({ tag, selected, href: attrs.href, withinStatusLabel: nestedInStatus || statusAttribute !== undefined });
+      }
+      if (!visible() || nestedInStatus) return;
       if (TEXT_BLOCKS.has(tag) || tag === 'br' || tag === 'hr') lines.push('\n');
       else if (tag === 'td' || tag === 'th') lines.push(' | ');
+      if (statusAttribute !== undefined) lines.push(statusAttribute);
     },
     end(tag) {
-      if (visible() && TEXT_BLOCKS.has(tag)) lines.push('\n');
       const index = stack.findLastIndex(frame => frame.tag === tag);
+      const shown = visible() &&
+        !(index < 0 ? withinStatusLabel() : stack[index - 1]?.withinStatusLabel);
+      if (shown && TEXT_BLOCKS.has(tag)) lines.push('\n');
       if (index < 0) return;
-      if (tag === 'a' && visible() && stack[index].href) lines.push(` [${stack[index].href}]`);
+      if (tag === 'a' && shown && stack[index].href) lines.push(` [${stack[index].href}]`);
       stack.length = index;
     },
     data(value) {
-      if (visible()) lines.push(value);
+      if (visible() && !withinStatusLabel()) lines.push(value);
     }
   });
 

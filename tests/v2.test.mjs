@@ -117,7 +117,7 @@ async function generateTask(s, revision) {
   return { frozen, chapter, html: await output.text() };
 }
 
-test('AC3 a deferred round submits and renders unresolved questions in all three document views', async t => {
+test('AC3 a deferred round submits and lists unresolved questions before the design chapters', async t => {
   const seed = legacyV2(),
     note = '  还要核对 <发送时间>\n保留原话  ',
     deferred = { option_ids: [], text: '', deferred: true };
@@ -144,18 +144,18 @@ test('AC3 a deferred round submits and renders unresolved questions in all three
 
   const { frozen, chapter, html } = await generateTask(s, seed.revision + 1);
   assert.equal(frozen.schema_version, 2);
-  const [confirmedBody, deferredBody] = chapter.html.split('<section class="deferred-answers">');
-  assert.match(confirmedBody, /data-source-node="signup"/);
-  assert.doesNotMatch(confirmedBody, /data-source-node="(?:confirmation|timing|delivery)"/);
-  assert.match(deferredBody, /^<h3>待确认<\/h3>/);
-  assert.match(deferredBody, /暂选<\/p><ul><li>邮件通知<\/li>/);
-  assert.match(deferredBody, /  还要核对 &lt;发送时间&gt;\n保留原话  /);
-  const [, ...views] = html.split(/<section id="(?:design|plan|acceptance)-view"/);
-  assert.equal(views.length, 3);
-  for (const view of views) {
-    const list = view.match(/<section class="deferred-questions">[\s\S]*?<\/section>/)?.[0];
-    assert.match(list, /class="deferred-questions"><h3>待确认<\/h3>/);
-    for (const n of seed.nodes.slice(1)) assert.ok(list.includes(`>${n.question}</a>`), n.question);
+  const [prose, transcript] = chapter.html.split('<details class="interview">');
+  assert.doesNotMatch(prose, /data-source-node/);
+  assert.match(transcript, /^<summary>访谈原话（4 问）<\/summary>/);
+  assert.match(transcript, /data-source-node="signup"><p><strong>问<\/strong>/);
+  assert.match(transcript, /你暂选<\/strong><\/p><ul><li>邮件通知<\/li>/);
+  assert.match(transcript, /  还要核对 &lt;发送时间&gt;\n保留原话  /);
+  const list = html.match(/<section id="decisions"[\s\S]*?<\/section>/)?.[0];
+  assert.match(list, /<h2>还没定的（3 件）<\/h2>/);
+  assert.equal(html.match(/data-kind="question"/g).length, 3);
+  for (const node of seed.nodes.slice(1)) {
+    assert.equal(transcript.split(node.question).length - 1, 1);
+    assert.ok(list.includes(`>${node.question}</a>`), node.question);
   }
 });
 
@@ -206,17 +206,13 @@ test('round accepts a link to an unclear question and replaces it only after the
   assert.deepEqual(frozen.nodes.find(n => n.id === 'confirmation').answer, unclear);
   assert.deepEqual(frozen.nodes.find(n => n.id === timing.id).answer, note);
   assert.doesNotMatch(chapter.html, /data-source-node="confirmation"/);
-  const [confirmed, unresolved] = chapter.html.split('<section class="deferred-answers">');
-  assert.match(confirmed, /data-source-node="confirmation-again"/);
-  assert.doesNotMatch(confirmed, /data-source-node="timing"/);
-  assert.match(unresolved, /<h3>待确认<\/h3>/);
-  assert.match(unresolved, /  开放是指 &lt;给谁看&gt;？\n我想看个例子  /);
-  const [, ...views] = html.split(/<section id="(?:design|plan|acceptance)-view"/);
-  assert.equal(views.length, 3);
-  for (const view of views) {
-    const list = view.match(/<section class="deferred-questions">[\s\S]*?<\/section>/)?.[0];
-    assert.ok(list?.includes(`>${timing.question}</a>`));
-  }
+  const transcript = chapter.html.split('<details class="interview">')[1];
+  assert.match(transcript, /data-source-node="confirmation-again"><p>/);
+  assert.match(transcript, /data-source-node="timing" data-pending-answer="true"/);
+  assert.match(transcript, /  开放是指 &lt;给谁看&gt;？\n我想看个例子  /);
+  const list = html.match(/<section id="decisions"[\s\S]*?<\/section>/)?.[0];
+  assert.ok(list?.includes(`>${timing.question}</a>`));
+  assert.equal(html.match(/data-kind="question"/g).length, 1);
 
   const deferredOld = structuredClone(frozen);
   deferredOld.nodes.find(n => n.id === 'confirmation').answer = { option_ids: [], text: '', deferred: true };

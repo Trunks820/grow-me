@@ -244,6 +244,48 @@ test('AC7 invalid question references and acceptance status prevent final public
   assert.deepEqual(readdirSync(dirname(s.file)).sort(), [basename(s.file), basename(s.manifest)].sort());
 });
 
+test('localized status, question labels and criterion rows preserve the manifest', async t => {
+  const s = handoffFixture(t);
+  const requirement = '<article id="R1" data-kind="requirement"><h3>报名回执</h3></article>';
+  const work = 'id="W1" data-kind="work" data-requirements="R1" data-criteria="AC1" data-questions="deferred-b Q1"';
+  const goal = '<p data-field="goal">保存报名回执。</p>';
+  const effects = '<ul data-field="effects"><li>写线上数据库：保存报名回执</li></ul>';
+  const criterion = 'id="AC1" data-kind="criterion" data-requirements="R1"';
+  const scope = '报名人收到回执', action = '提交有效报名。', result = '能找到报名回执。';
+  s.put('design', 'design', requirement + '<p id="Q1" data-kind="question">谁维护模板？</p>');
+  s.put('plan', 'plan', `<article ${work}><h3>记录报名</h3>${goal}${effects}<span data-field="status">planned</span></article>`);
+  s.put('acceptance', 'acceptance', `<article ${criterion}><h3>${scope}</h3><p>${action}</p><p>${result}</p><span data-field="status">unverified</span></article>`);
+  await s.assemble();
+  const manifest = readFileSync(s.manifest);
+
+  s.put('design', 'design', requirement, {
+    position: '方案定好了，开发还没开始。',
+    next: '先保存报名回执。',
+    open_questions: [{ id: 'Q1', text: '谁维护模板？', origin: 'user' }]
+  });
+  s.put('plan', 'plan', `<article ${work} class="work-item" data-number="1">
+    <div class="work-heading"><h3>记录报名</h3><span data-field="status" data-status="planned">还没开始</span></div>
+    ${goal}<p class="work-meta">做完能看到报名回执。</p>${effects}
+    <details class="work-details"><summary>关联需求和验收</summary><a href="#AC1">${scope}</a></details>
+    </article>`);
+  const row = `<tr ${criterion}><th scope="row">${scope}</th><td>${action}</td><td>${result}</td>
+    <td><span data-field="status" data-status="unverified"><strong>还没验</strong></span></td></tr>`;
+  s.put('acceptance', 'acceptance', row);
+  await s.assemble();
+  assert.deepEqual(readFileSync(s.manifest), manifest);
+  const page = readFileSync(s.file, 'utf8');
+  assert.match(page, /现在到哪了<\/span><p>方案定好了，开发还没开始。/);
+  assert.match(page, /下一步<\/span><p>先保存报名回执。/);
+  assert.match(page, /还没定的（3 件）/);
+  assert.match(page, /data-question-origin="user"><span [^>]*>你提的<\/span> 谁维护模板？/);
+  assert.match(page, /<tbody><tr id="AC1"/);
+  assert.match(page, /<details id="record-info" class="record-info">/);
+  assert.match(page, /<code>AC1<\/code> <a href="#AC1">报名人收到回执<\/a>/);
+  assert.equal(readTaskText(page, { section: 'AC1' }), `${scope} | ${action} | ${result}\nunverified`);
+  const invalidStatus = page.replace('data-status="unverified"><strong>还没验</strong>', 'data-status="">unverified');
+  assert.deepEqual(validateTask(invalidStatus).errors, ['AC1: missing/invalid criterion status']);
+});
+
 // Expected bytes were captured from the original CLIs, with LF in the fixtures.
 const taskFormatFixtures = fileURLToPath(new URL('./fixtures/task-format/', import.meta.url));
 for (const name of readdirSync(taskFormatFixtures).sort()) {

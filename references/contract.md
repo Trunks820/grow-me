@@ -124,7 +124,9 @@ Offer is valid only while the current tree revision is fully answered and review
 
 Configure an existing task file with --document; otherwise the default is outputs/task.html beside tree.json. This conversation applies project-requirement-writer and preserves its canonical three tabs. The main data-task-record includes data-source-session, data-source-revision, data-source-digest and data-source-job from the current document context. Consume the supplied digest directly; a different JSON serializer must not redefine it. Before posting ready, run `compose-document.mjs` to check the source and call `validate-task.mjs` in process with the frozen questions. Successful validation exports the sibling `task.manifest.json`. A missing or mismatched file is never a generated document.
 
-换问的新题一旦提交，就替代旧题。原问法和补充仍可在树上回看。写方案时从“已确认”中去掉被替代的题，按新题的回答写。保存时仍没有换问答案的题连同用户的补充写进章节的“待确认”，并在三个视图里链接到该章节。换问后仍没看懂或选择待定时，把新题列入“待确认”。冻结章节会跳过被替代的题，并把剩下的没看懂题交给现有的“待确认”渲染。维护已有方案时也按这个规则更新。
+换问的新题一旦提交，就替代旧题。原问法和补充仍可在树上回看。冻结章节按新题的回答写方案。保存时仍没有换问答案的题，以及换问后仍没看懂或选择待定的新题，列入设计方案开头的「还没定的」。每项链接到所属章节，补充文字保留在该章的「访谈原话」。相关开发项用 `data-questions` 关联待定事项。
+
+新方案的正文状态用中文，`data-field="status"` 里的 `data-status` 保留机器值。校验和文本读取都优先读取该属性，已有方案继续支持只写机器值文本的状态字段。页末「记录信息」展示来源和编号对照。分片与交接见[分章交付](progressive-writer.md)。
 
 Each root question defines one chapter and one fruit. The primary parent is the dependency with the latest round, tie-breaking by later original nodes order. Other dependencies remain available for review and cross-topic references. The same root IDs supply chapter anchors to renderer and server; anchors use an injective UTF-16 encoding of the root ID. Explicit chapter_id (or the legacy primary root when absent) places each source answer in one chapter and links related work and criteria. A task saved from an interview is not approval to implement it.
 

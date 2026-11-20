@@ -10,6 +10,7 @@ import {
   readTaskHtml,
   splitTaskSpace,
   taskCliArgs,
+  taskStatusAttribute,
   writeTaskLine
 } from './read-task.mjs';
 
@@ -46,7 +47,11 @@ function readRecord(html) {
   function addText({ owner, field, visible, effectText }, value) {
     if (!visible || !owner) return;
     if (field === 'effects') effectText?.push(value);
-    else owner._text[field].push(value);
+    else if (field === 'origin') return;
+    else if (field === 'name') {
+      owner._text.title.push(value);
+      owner._text.body.push(value);
+    } else owner._text[field].push(value);
   }
 
   parseTaskHtml(html, {
@@ -70,10 +75,16 @@ function readRecord(html) {
             effectText = [];
             owner._text.effects.push(effectText);
           }
-        } else if (attrs['data-field'] === 'status') field = 'status';
-        else if (workKinds.has(kind(owner))) {
+        } else if (attrs['data-field'] === 'status') {
+          field = 'status';
+          if (visible) owner._statusAttribute ??= taskStatusAttribute(attrs);
+        } else if (kind(owner) === 'question' && attrs['data-field'] === 'origin') {
+          field = 'origin';
+        } else if (workKinds.has(kind(owner))) {
           if (attrs['data-field'] === 'goal') field = 'goal';
           else if (field === 'body' && headings.has(tag) && !text(owner, 'title')) field = 'title';
+        } else if (field === 'body' && !text(owner, 'title') && (headings.has(tag) || tag === 'th')) {
+          field = 'name';
         }
       }
       if (tag === 'a' && attrs.href?.startsWith('#')) anchors.push(unquote(attrs.href.slice(1)));
@@ -92,6 +103,14 @@ function readRecord(html) {
     }
   });
   return { entries, ids, anchors, revisions };
+}
+
+export function taskDefinitions(html) {
+  return readRecord(html).entries.map(entry => ({
+    id: entry.id,
+    kind: kind(entry),
+    name: text(entry, 'title') || text(entry, 'body') || text(entry, 'goal')
+  }));
 }
 
 function manifestPacks(work, questions, index, errors) {
@@ -155,7 +174,7 @@ export function validateTask(html, { handoff = false, expectedQuestions = [] } =
     }
     if (kind(entry) === 'criterion') {
       if (!refs(entry, 'requirements').length) errors.push(`${name}: missing requirement source`);
-      if (!statuses.has(text(entry, 'status')))
+      if (!statuses.has(entry._statusAttribute ?? text(entry, 'status')))
         errors.push(`${name}: missing/invalid criterion status`);
       if (handoff && !text(entry, 'body')) errors.push(`${name}: missing readable criterion text`);
     }
