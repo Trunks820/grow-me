@@ -1,7 +1,19 @@
-import {test} from 'node:test';import assert from 'node:assert/strict';
-import {AI_CHECK_TIMEOUT_MS,SHORT_QUERY_TIMEOUT_MS} from '../scripts/progress.mjs';import {assistantConnection} from '../assets/presentation.mjs';
-import {mkdtempSync,writeFileSync,readFileSync,mkdirSync,rmSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';
-import {DocumentBridge,validateDocument} from '../scripts/document.mjs';import {composeDocument} from '../scripts/compose-document.mjs';import {InterviewProgress} from '../scripts/progress.mjs';import {interviewContext} from '../scripts/context.mjs';import {publicError} from '../assets/presentation.mjs';import {publishRound,reopenDecision,editDecision} from '../scripts/model.mjs';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { assistantConnection, publicError } from '../assets/presentation.mjs';
+import { DocumentBridge, validateDocument } from '../scripts/document.mjs';
+import { composeDocument } from '../scripts/compose-document.mjs';
+import { interviewContext } from '../scripts/context.mjs';
+import { publishRound, reopenDecision, editDecision } from '../scripts/model.mjs';
+import {
+  InterviewProgress,
+  AI_CHECK_TIMEOUT_MS,
+  SHORT_QUERY_TIMEOUT_MS,
+  WORK_LEASE_MS
+} from '../scripts/progress.mjs';
 const node=(id,deps=[],round=1)=>({id,question:id+' 的问题',rationale:'受控测试：验证章节与等待边界。',input:'text',options:[],answer:{option_ids:[],text:'原文\n <>& event: message data: {}'},depends_on:deps,status:'answered',round});
 const seed=()=>({schema_version:2,session_id:'wait-flow-fixture',topic:'等待与章节',revision:0,current_round:2,status:'active',nodes:[node('a'),node('b'),node('c',['a'],2)]});
 function setup(t,initial=seed()){const root=mkdtempSync(join(tmpdir(),'grow-wait-'));t.after(()=>rmSync(root,{recursive:true,force:true}));let tree=initial;const bridge=new DocumentBridge({getTree:()=>tree,save:next=>{tree=next;bridge.onMutation();},file:join(root,'task.html'),stop:()=>{}});const control=body=>bridge.control({expected_revision:tree.revision,job_id:bridge.jobId,...body});control({action:'offer'});control({action:'save'});control({action:'claim'});return{bridge,control,tree:()=>tree,root};}
@@ -12,22 +24,70 @@ test('operational protocol output is suppressed without changing interview answe
  assert.equal(publicError('文档暂时生成失败，请重试。'),'文档暂时生成失败，请重试。');const tree=seed(),bytes=JSON.stringify(tree);interviewContext(tree);assert.equal(JSON.stringify(tree),bytes);
 });
 
-test('AI check age is memory-only, distinguishes never connected, and honors threshold and page-open grace',t=>{
- const tree=seed(),before=JSON.stringify(tree);let now=100000;t.mock.method(Date,'now',()=>now);const progress=new InterviewProgress(()=>tree);
- assert.equal(AI_CHECK_TIMEOUT_MS,30000);now+=120000;assert.deepEqual(progress.status().ai,{last_check_at:null,last_heartbeat_at:null,last_activity_at:null,source:null,seconds_since_last_check:null,seconds_since_last_heartbeat:null,heartbeat_active:false,heartbeat_activity:null,timeout_ms:30000,short_query_timeout_ms:60000});assert.equal(assistantConnection(progress.status().ai,120000),'connecting');
- const checked=progress.checkIn().ai.last_check_at;assert.equal(SHORT_QUERY_TIMEOUT_MS,60000);now+=SHORT_QUERY_TIMEOUT_MS;assert.equal(progress.status().ai.last_check_at,checked);assert.equal(progress.status().ai.seconds_since_last_check,60);assert.equal(assistantConnection(progress.status().ai,120000),'connected');
- now++;assert.equal(assistantConnection(progress.status().ai,120000),'paused');assert.equal(assistantConnection(progress.status().ai,0),'connected','a freshly opened page gets a grace period');
- progress.heartbeat('alive','pulse',{ownerPid:7});assert.equal(assistantConnection(progress.status().ai,120000),'connected');
- now+=AI_CHECK_TIMEOUT_MS+1;assert.equal(progress.status().ai.heartbeat_active,false);assert.equal(assistantConnection(progress.status().ai,120000),'paused');
- progress.checkIn();assert.equal(assistantConnection(progress.status().ai,120000),'connected');assert.equal(JSON.stringify(tree),before);
- assert.equal(assistantConnection(new InterviewProgress(()=>tree).status().ai,120000),'connecting','restart loses liveness, not saved answers');
+test('AI check age distinguishes never connected and honors threshold and page-open grace', t => {
+  let now = 100_000;
+  t.mock.method(Date, 'now', () => now);
+  const progress = new InterviewProgress(seed);
+  assert.equal(AI_CHECK_TIMEOUT_MS, 30_000);
+  assert.equal(SHORT_QUERY_TIMEOUT_MS, 60_000);
+  assert.equal(assistantConnection(progress.status().ai, 120_000), 'connecting');
+
+  const checked = progress.checkIn().ai.last_check_at;
+  now += SHORT_QUERY_TIMEOUT_MS;
+  assert.equal(progress.status().ai.last_check_at, checked);
+  assert.equal(progress.status().ai.seconds_since_last_check, 60);
+  assert.equal(assistantConnection(progress.status().ai, 120_000), 'connected');
+  now++;
+  assert.equal(assistantConnection(progress.status().ai, AI_CHECK_TIMEOUT_MS), 'connected');
+  assert.equal(assistantConnection(progress.status().ai, AI_CHECK_TIMEOUT_MS + 1), 'paused');
+
+  progress.checkIn();
+  assert.equal(assistantConnection(progress.status().ai, 120_000), 'connected');
 });
-test('a heartbeat connects before the first check and can age into a pause after its owner exits',context=>{
- let now=100000;context.mock.method(Date,'now',()=>now);const progress=new InterviewProgress(seed);
- progress.heartbeat('only-heartbeat','pulse',{ownerPid:7});assert.equal(assistantConnection(progress.status().ai,90000),'connected');
- now+=1000;progress.heartbeat('only-heartbeat','stop',{reason:'owner_exited'});
- now+=SHORT_QUERY_TIMEOUT_MS;assert.equal(assistantConnection(progress.status().ai,90000),'paused');
+
+test('heartbeat start leases work, pulses and stop preserve its deadline, and expiry permits pause', t => {
+  let now = 100_000;
+  t.mock.method(Date, 'now', () => now);
+  const progress = new InterviewProgress(seed);
+  assert.equal(WORK_LEASE_MS, 180_000);
+  progress.heartbeat('heartbeat', 'pulse', { ownerPid: 7 });
+  const deadline = now + WORK_LEASE_MS;
+  assert.equal(progress.status().ai.work_until, deadline);
+
+  now += 10_000;
+  progress.heartbeat('heartbeat', 'pulse', { ownerPid: 7 });
+  progress.heartbeat('heartbeat', 'stop', { reason: 'owner_exited' });
+  now = deadline - 1;
+  const ai = progress.status().ai;
+  assert.equal(ai.last_check_at, null);
+  assert.equal(ai.heartbeat_active, false);
+  assert.equal(ai.work_until, deadline);
+  assert.equal(ai.work_active, true);
+  assert.equal(assistantConnection(ai, 90_000), 'connected');
+  now++;
+  assert.equal(progress.status().ai.work_active, false);
+  assert.equal(assistantConnection(progress.status().ai, 90_000), 'paused');
+  assert.equal(
+    assistantConnection({ ...progress.status().ai, heartbeat_active: true }, 90_000),
+    'connected'
+  );
 });
+
+test('work-only activity gives the page a liveness clock and clears on session close', t => {
+  let now = 100_000;
+  t.mock.method(Date, 'now', () => now);
+  const progress = new InterviewProgress(seed);
+  progress.renewWorkLease();
+  assert.equal(assistantConnection(progress.status().ai, 90_000), 'connected');
+  now += WORK_LEASE_MS;
+  assert.equal(assistantConnection(progress.status().ai, 90_000), 'paused');
+
+  progress.close();
+  progress.renewWorkLease();
+  assert.equal(progress.status().ai.work_until, null);
+  assert.equal(assistantConnection(progress.status().ai, 90_000), 'connecting');
+});
+
 test('compact context retains full recent text, all dependency/status ids and flags abridgement',()=>{
  const tree=seed();tree.nodes[0].answer.text='旧'.repeat(1000);const bytes=JSON.stringify(tree),context=interviewContext(tree);assert.equal(context.source.revision,0);assert.deepEqual(context.decision_index.at(-1).depends_on,['a']);assert.equal(context.recent_answers[0].answer.text,tree.nodes[2].answer.text);assert.equal(context.earlier_decisions[0].abridged,true);assert.equal(JSON.stringify(tree),bytes);assert.ok(JSON.stringify(context).length<bytes.length);
 });

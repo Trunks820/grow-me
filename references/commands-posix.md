@@ -33,6 +33,6 @@ node "<skill>/scripts/check.mjs" --url "http://127.0.0.1:<port>" --session "<UUI
 node "<skill>/scripts/check.mjs" --url "http://127.0.0.1:<port>" --session "<UUID>" --heartbeat-stop "<回执heartbeat_id>"
 ```
 
-短查和等待共用游标；恢复后先短查，curl GET 只读取。心跳自动寻找 AI 工具进程，找不到就传 `--owner-pid <AI 工具 PID>`；需要续租时，短查或等待传回执中的 PID。
+短查和等待共用游标，恢复后先短查。curl GET 只读取。预计连续超过 3 分钟没有[续租动作](runtime.md#工作租约与心跳)时再开心跳。心跳自动寻找 AI 工具进程，找不到就传 `--owner-pid <AI 工具 PID>`。续心跳租期时，短查或等待传回执中的 PID。
 
 开访谈前先摸项目现状；中间出题不读代码；预计末轮先趁用户作答经 `work.mjs --final-round` 集中核对，再按 A/B 取回执。

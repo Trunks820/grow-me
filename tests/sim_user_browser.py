@@ -2,7 +2,6 @@
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
@@ -34,14 +33,6 @@ def run(work):
     def control(action, **fields):
         return post('/document/control', {'action': action, 'expected_revision': service.state()['revision'], **fields})
 
-    def pulse():
-        recovery = request(service.url, '/recovery')[1]
-        result = post('/ai/heartbeat', {
-            'heartbeat_id': 'scripted-ai', 'owner_pid': os.getpid(),
-            'expected_revision': recovery['revision'], 'expected_instance_id': recovery['instance_id'],
-        })
-        assert result['active']
-
     def process(command):
         child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  text=True, encoding='utf-8')
@@ -50,7 +41,7 @@ def run(work):
 
     def start_wait():
         return process(['node', str(BASE / 'scripts/check.mjs'), '--wait', '--url', service.url,
-                        '--session', session_id, '--owner-pid', str(os.getpid())])
+                        '--session', session_id])
 
     def wait_receipt(child, kind):
         stdout, _ = child.communicate(timeout=25)
@@ -61,7 +52,6 @@ def run(work):
 
     try:
         session_id = service.state()['session_id']
-        pulse()
         first_wait = start_wait()
         first_check = None
         deadline = time.monotonic() + 5
@@ -104,7 +94,6 @@ def run(work):
         plan = wait_receipt(start_wait(), 'request_plan')
         assert plan['plan_requested']
         assert service.state()['nodes'][-1]['answer'] == {'option_ids': [], 'text': '', 'deferred': True}
-        pulse()
         time.sleep(2.5)
         control('offer')
         wait_receipt(start_wait(), 'save')
@@ -163,7 +152,7 @@ def run(work):
         assert checks['submission_discovery']['status'] == '已测'
         assert checks['idle_wait_false_wakeups']['status'] == '未测'
         for name in ['recommendation_preselected', 'draft_survives_reload',
-                     'chapters_published_sequentially', 'false_pause_during_questions', 'heartbeat_continuity']:
+                     'chapters_published_sequentially', 'false_pause_during_questions', 'ai_work_online']:
             assert checks[name]['status'] == '通过', checks[name]
         assert NOTE not in stdout and service.url not in stdout
         assert '保留 <原文>' not in report_file.read_text(encoding='utf-8')

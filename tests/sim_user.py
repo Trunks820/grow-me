@@ -20,7 +20,7 @@ CHECKS = {
     'chapters_published_sequentially': '章节逐章发布',
     'submission_discovery': 'AI 首次发现提交的延迟',
     'false_pause_during_questions': '出题期间暂停误报',
-    'heartbeat_continuity': 'AI 工作期间心跳',
+    'ai_work_online': 'AI 工作期间在线',
     'idle_wait_false_wakeups': '等待上限白叫醒',
 }
 
@@ -118,6 +118,16 @@ def answer_matches(actual, expected):
     )
 
 
+def ai_work_online(ai):
+    if ai.get('heartbeat_active') or ai.get('work_active'):
+        return True
+    for key in ('seconds_since_last_check', 'seconds_since_last_heartbeat', 'seconds_since_last_work'):
+        silence = ai.get(key)
+        if silence is not None:
+            return silence * 1000 <= ai['short_query_timeout_ms']
+    return False
+
+
 # Observe pause transitions even between Playwright actions. Render may replace the
 # notice without clearing it, so track presence rather than counting inserted nodes.
 WATCH_PAUSES = """
@@ -128,7 +138,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let shown = false;
     new MutationObserver(() => {
         const notice = card.querySelector('#ai-wait-notice');
-        const visible = !!notice && notice.getClientRects().length > 0;
+        const visible = !!notice && notice.getClientRects().length > 0 &&
+            !!document.querySelector('#copy-reminder.needs-attention');
         if (visible && !shown) window.simUserPauses.push({
             revision: Number(document.querySelector('#meta').dataset.revision),
             observed_at: Date.now()
@@ -432,15 +443,15 @@ class SimUser:
         for revision, window_samples in samples.items():
             availability.append({
                 'revision': revision, 'samples': len(window_samples),
-                'inactive_samples': sum(not ai['heartbeat_active'] for _, _, ai in window_samples),
+                'offline_samples': sum(not ai_work_online(ai) for _, _, ai in window_samples),
                 'instance_count': len({instance for _, instance, _ in window_samples}),
             })
-        if any(window['inactive_samples'] or window['instance_count'] > 1 for window in availability):
-            heartbeat_status = FAILED
+        if any(window['offline_samples'] or window['instance_count'] > 1 for window in availability):
+            online_status = FAILED
         elif availability and all(window['samples'] for window in availability):
-            heartbeat_status = PASSED
+            online_status = PASSED
         else:
-            heartbeat_status = UNTESTED
+            online_status = UNTESTED
 
         normal = {revision: entry for revision, entry in thinking.items() if entry['kind'] == 'submit'}
         pauses = [pause for pause in self.pauses if pause['revision'] in normal]
@@ -448,7 +459,7 @@ class SimUser:
         for pause in pauses:
             preceding = [(observed, ai) for observed, _, ai in samples[pause['revision']]
                          if 0 <= pause['observed_at'] - observed <= 1500]
-            if preceding and max(preceding, key=lambda sample: sample[0])[1]['heartbeat_active']:
+            if preceding and ai_work_online(max(preceding, key=lambda sample: sample[0])[1]):
                 confirmed += 1
         completed = sum('next_round_visible_at' in entry or 'save_button_visible_at' in entry
                         for entry in normal.values())
@@ -461,7 +472,7 @@ class SimUser:
         return {
             'status': pause_status, 'notices': len(pauses), 'confirmed_false': confirmed,
             'unclassified': len(pauses) - confirmed, 'completed_windows': completed,
-        }, {'status': heartbeat_status, 'windows': availability}
+        }, {'status': online_status, 'windows': availability}
 
     def chapter_report(self):
         chapters = self.document['chapters'] if self.document and self.save_revision is not None else []
@@ -480,7 +491,7 @@ class SimUser:
         return result
 
     def score(self):
-        pauses, heartbeat = self.presence_reports()
+        pauses, online = self.presence_reports()
         checked = len(self.answer_checks)
         changed = sum(not value for value in self.answer_checks.values())
         preselected = sum(item['preselected'] for item in self.recommendations)
@@ -501,7 +512,7 @@ class SimUser:
             'chapters_published_sequentially': self.chapter_report(),
             'submission_discovery': self.discovery_report(),
             'false_pause_during_questions': pauses,
-            'heartbeat_continuity': heartbeat,
+            'ai_work_online': online,
             'idle_wait_false_wakeups': {
                 'status': UNTESTED, 'count': None, 'reason': '运行日志没有 AI 等待命令的实际返回记录。',
             },

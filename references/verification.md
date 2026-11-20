@@ -12,7 +12,9 @@
 
 恢复覆盖：等待用户、已提交、黄叶、offered、requested/generating、ready；断线与真实终止进程分开测。重启使用同一原文件，核对 session/revision/原答案，当前 job 与旧 job 不混用。提醒只包含三个定位字段。错误地址不能改变别的访谈。短查询无变化时快速返回；记录实例变化。
 
-AI 查询中断回归：`tests/wait_flow_browser.py` 包含 `ai_presence_browser.py`，实际运行后台心跳并在 check.mjs 后停查超过 60 秒，验证出题等待、文档 queued 和已 claim 写作阶段仍提示暂停；N 是短查询秒数，不是心跳秒数。只有恢复短查询才消失，原等待计时不重置。覆盖从未短查但有心跳、页面初开宽限、同端口重启、桌面／390px、工作类型标签。Node 测试验证两个时间互不刷新、默认父 PID／显式 owner、只有匹配 owner 的 check 续租、真实宿主退出一个周期内停止。租期集成测试用隔离服务的受控时钟推进 3 分钟，运行真实 worker 与服务，不缩短生产常量，并核对 lease_expired 日志；另有边界单测。此测试不代表模型性能测量。
+`tests/ai_presence_browser.py --work <目录>` 使用受控服务时钟，验证发现提交后 90 秒无短查、无心跳仍在线，以及写作只靠逐章发布持续在线。心跳停止且工作租约过期后，检查暂停提示和短查秒数。恢复短查后提示消失，等待计时继续。覆盖 30 秒页面宽限、同端口重启、桌面与 390px 视口及工作类型标签。`tests/wait_flow_browser.py` 也运行此用例。
+
+`npm test` 验证工作租约的开始、续期、过期、失败请求与重启，并保留独立的心跳租期测试。用隔离服务的受控时钟推进时间，沿用生产常量。核对短查和心跳时钟分别更新、只有匹配 owner 的短查续心跳租期，以及真实 worker 退出时的日志原因。
 
 至少一个非 Codex 助手独立读同一 SKILL，从首轮到保存文档，实际生成追问，处理上游修改与黄叶，通过复制提醒恢复，并覆盖服务退出。实际用户提交或以前明确确认的原话回放均须标来源；缺失答案不能编造。Codex 不暗中写题或代写该助手的文档。CLI 存在、测试夹具、语法检查都不算真跑。
 
@@ -48,7 +50,8 @@ python tests/sim_user_browser.py --work <离线自测输出目录>
 - `keyword` 按题干子串匹配，须唯一命中。先分配关键词答案，其余预设依次分配给剩余题目。选项用页面上的完整标签或从 1 开始的序号。多选可给多项。选择题的 `text` 填入补充说明，文本题填入正文。
 - `reload_after` 在确认指定数量的本轮草稿后刷新，核对草稿标记并继续答题。省略 `enough_after` 时答完本轮再提交。填写该字段时，答完指定数量后点击「够了，先出方案」并在气泡选「先出方案」。填 0 可直接请求方案，其余题由网页提交为待定。题目与预设不符时，按报告中的轮次和题序调整预设。
 - `--state` 可省略。提供时只读配套的 `<tree.json>.runtime-timings.jsonl`，按本轮提交事件的 sequence 取 AI 首次发现的延迟。缺日志或缺首次发现事件时记「未测」。
-- 章节逐章发布以全文就绪前看到成熟果子一次增加一个、并收到对应的首次发布时间为通过依据。轮询漏掉中间状态或缺少预览时记「未测」。暂停提示按页面显示转换计数，缺少提示出现时 AI 仍在线的证据时保留为待判定。心跳报告记录提交后和写文档期间的网页样本，缺少样本的阶段记「未测」。
+- 章节逐章发布以全文就绪前看到成熟果子一次增加一个、并收到对应的首次发布时间为通过依据。轮询漏掉中间状态或缺少预览时记「未测」。
+- 「AI 工作期间在线」（`ai_work_online`）使用提交后和写文档期间的 `/progress` 样本。心跳或工作租约任一有效即在线。否则依次取短查、心跳、工作动作的首个非空静默秒数，换算为毫秒后不超过 `short_query_timeout_ms` 也算在线，其余计入 `offline_samples`。30 秒宽限仅用于页面提示。缺少样本的阶段记「未测」。出题期间按页面显示转换计数暂停提示，用同一在线规则确认误报，缺少同一时段样本的提示待判定。
 - 现有运行日志没有 AI 等待命令提前返回的记录，真实访谈报告将「等待上限白叫醒」标为「未测」。离线自测用脚本扮演 AI，直接检查 `check.mjs --wait` 跨过多个服务端等待上限后仍挂起，收到用户事件才返回。
 - JSON 写入 `--report`，终端输出中文摘要。默认总上限为 1800 秒，超时保留已有报告并退出 2，操作或已测校验失败时退出 1。完成且无已测失败时退出 0，仍需逐项查看「未测」。
 
@@ -93,11 +96,11 @@ cat outputs/task.html.chapter-timings.jsonl
 `/recovery.timing_file` 指向 `<tree.json>.runtime-timings.jsonl`；只保存事件元数据，不保存答案。每行有 event、Unix 毫秒 at、ISO at_iso、session_id、instance_id，以及相关 revision。`user_event` 有独立 sequence；check.mjs 把处理到的 revision/sequence/instance 写入 `<tree.json>.cursor.json`。AI 活跃状态仍只在内存，重启不从日志恢复“在线”。
 
 - `heartbeat_start/end`：后台工作起止；end 的 reason 区分 requested、session_closed、owner_exited、lease_expired 和 expired_observed，含 owner_pid 与 lease_until。强杀后仅能知道 last_pulse_at，不能据此编造实际退出时刻。
-- `pause_shown/pause_cleared`：页面实际展示／收起提示，含 page_id；没有打开页面就没有此事件。`ai_resumed` 仅表示 check 在超过 60 秒后恢复；心跳不能触发 AI 恢复事件，含 source 和 silence_ms。
+- `pause_shown/pause_cleared`：页面实际展示／收起提示，含 page_id。`ai_resumed` 记录间隔超过 60 秒后的短查，含 source 和 silence_ms。
 - `code_read_start/end`：work.mjs 包裹的每次命令，按 operation_id 配对；含 elapsed_ms、exit_code。宿主绕过入口的读取不可观测，未配对项标为中断。
 - `submission_discovered`：首次发现用户提交的 discovery_delay_ms；重复检查、AI 发布、waiting_for_save 不累加。与提交到新题的总等待分别报告，避免把轮询发现延迟算成模型生成耗时。
 - `chapter_first_published`：每章首次发布，含 job_id、chapter_id、first_published_at、elapsed_ms。既有 `<document>.chapter-timings.jsonl` 与 `/document/status.chapters[].first_published_at` 保留；重新发布不重置。
 
 Windows 查看：`Get-Content -LiteralPath '<tree.json>.runtime-timings.jsonl' | ConvertFrom-Json | Format-Table at_iso,event,sequence,chapter_id,elapsed_ms`。macOS/Linux 可逐行 `cat` 该文件，或用 Python 读取筛选 event。计时文件不能当成用户答案数据源。
 
-新增回归覆盖：symlink/junction CLI 输出、游标连续调用和实例恢复、仅用户事件、waiting_for_save、心跳不消费提交、持续心跳不遮蔽暂停、短查询恢复页面、冻结树原话转义／多选与章节归属、代码读取起止。受控测试不证明 Claude Code 实际变快；真实跨助手用时仍由用户复测。
+回归覆盖 symlink/junction CLI 输出、游标与实例恢复、仅用户事件、waiting_for_save、在线及暂停判定、冻结树原话转义／多选与章节归属、代码读取起止。真实跨助手用时按实际访谈记录。

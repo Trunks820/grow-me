@@ -238,7 +238,16 @@ if (isMain(import.meta.url)) {
     };
   if (args.includes('--help'))
     console.log(
-      'node scripts/check.mjs --url <origin> --session <id> [--wait | --heartbeat | --heartbeat-stop <id>] [--owner-pid PID] [--after-revision R --after-sequence S --after-instance ID] [--timeout-ms 3000]\n--wait reports activity and waits for a user event, reusing the short-check cursor and JSON format. Idle deadlines renew the wait without output. --heartbeat detects the AI tool ancestor unless --owner-pid is supplied. Checks and waits with a matching --owner-pid renew the three-minute heartbeat lease. For an offline service: add --restart --state <original-tree.json> --document <original-task.html> to a short check.'
+      [
+        'node scripts/check.mjs --url <origin> --session <id> [--wait | --heartbeat | --heartbeat-stop <id>]' +
+          ' [--owner-pid PID] [--after-revision R --after-sequence S --after-instance ID] [--timeout-ms 3000]',
+        '--wait reports activity and waits for a user event, reusing the short-check cursor and JSON format.',
+        'Idle deadlines renew the wait without output.',
+        'Checks and waits that return user events renew the three-minute work lease.',
+        '--heartbeat detects the AI tool ancestor unless --owner-pid is supplied.',
+        'Checks and waits with a matching --owner-pid renew the three-minute heartbeat lease.',
+        'To restore an offline service, add --restart --state <original-tree.json> --document <original-task.html> to a short check.'
+      ].join('\n')
     );
   else
     try {

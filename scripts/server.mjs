@@ -166,7 +166,10 @@ async function main() {
     return tree.schema_version === 1 || ['ready', 'closed'].includes(documents.phase);
   }
   function waitForAiEvent(res, { afterSequence, afterRevision, ownerPid }) {
-    const send = status => json(res, 200, { status });
+    const send = status => {
+      if (status === 'event' && !res.destroyed && !res.writableEnded) progress.renewWorkLease();
+      json(res, 200, { status });
+    };
     if (closing) return send('service_closed');
     if (sessionFinished()) return send('session_finished');
     progress.reportCheck(ownerPid);
@@ -501,8 +504,11 @@ async function main() {
         if (url.pathname === '/document/control') {
           const result = documents.control(data);
           if (['save', 'retry'].includes(data.action)) progress.userEvent(data.action);
+          else if (data.action !== 'close') progress.renewWorkLease();
           if (sessionFinished()) {
-            progress.close();
+            // Ready ends AI waiting and heartbeats while the preview session stays open.
+            if (documents.phase === 'closed') progress.close();
+            else progress.closeHeartbeats();
             for (const waiter of aiWaiters) waiter.done('session_finished');
           }
           return json(res, 200, result);
@@ -515,6 +521,7 @@ async function main() {
           if (tree.status === 'active' && progress.planRequested)
             throw new InputError('用户已确认先出方案，请进入保存流程。', 409);
           save(publishRound(tree, data));
+          progress.renewWorkLease();
         } else if (url.pathname === '/finish') {
           save(finish(tree, data));
           for (const waiter of aiWaiters) waiter.done('session_finished');

@@ -26,7 +26,8 @@ description: 用本机网页逐轮澄清需求，将用户提交回传当前对�
 3. 发布一轮或 offer 后，按宿主能力等待，游标自动保存。预计末轮先趁用户作答做第 4 步的代码核对，再取回执：
    - **A. 后台命令结束能唤回 AI**（如 Claude Code）：用宿主后台启动 `check.mjs --wait`，然后结束本条回复；按事件回执继续。
    - **B. 做不到**：本条回复内每约 10 秒运行一次 `check.mjs`，直到收到用户事件。
-4. 中间出题不读代码，用 `/context`、必要时 `/state` 和原修订；疑问记入“待核对”。预计最后一轮用户作答时，经 [计时入口](references/runtime.md#集中查代码) 集中核对。耗时工作可启用心跳，做完即停并短查。无新问题时先读 project-requirement-writer（否则 [内置指引](references/writer-guide.md)）、[分章交付](references/progressive-writer.md) 和 `assets/writer-shell.html`，再 offer；不发空轮。
+4. 中间出题不读代码，用 `/context`、必要时 `/state` 和原修订；疑问记入“待核对”。预计最后一轮用户作答时，经 [计时入口](references/runtime.md#集中查代码) 集中核对。无新问题时先读 project-requirement-writer（否则 [内置指引](references/writer-guide.md)）、[分章交付](references/progressive-writer.md) 和 `assets/writer-shell.html`，再 offer；不发空轮。
+   - 查到新用户事件、发布下一轮、更新写作进度或发布章节时自动续租 3 分钟。预计连续超过 3 分钟没有续租动作时，开启[心跳](references/runtime.md#工作租约与心跳)，做完即停并短查。`work.mjs` 已管理查代码的心跳。
    - 访谈进行中收到 `request_plan` 或查到 `plan_requested: true` 时，丢弃未发布题目，按当前答案准备 offer 并等待用户保存。把没问到的决策和标为待定的问题列入三视图的“待确认”。
 5. 保存后 claim，不再新开代码调查。用 `render-chapter.mjs` 渲染冻结答案原话，AI 只写说明。**每写完一章，立刻运行 `compose-document.mjs --preview --url <local-url>` 发布成功，再写下一章。** 参数和校验见分章交付。
    - 给相关开发项加 `data-questions`。用 `compose-document.mjs` 定稿，全文校验通过后自动在方案旁写 `task.manifest.json`。交接只取方案与冻结访谈，不查代码、不估改动规模。

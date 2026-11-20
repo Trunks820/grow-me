@@ -22,11 +22,13 @@
 
 没有长期轮次总数。页面内确认开花不算提交。offer 后、用户保存前返回 `waiting_for_save`，不再 `ready_for_ai`，不产生／累加 `discovery_delay_ms`。requested 后才能 claim。服务仍保留旧 /wait 与 /document/wait 兼容接口。
 
-## 耗时工作心跳
+## 工作租约与心跳
 
-耗时出题、查代码或写文档时运行 `check.mjs --url <origin> --session <UUID> --heartbeat`。回执包含 `heartbeat_id` 和 `owner_pid`。默认沿父进程链找最近的 Claude Code、Codex、Cursor 或 Antigravity；找不到时按提示显式传 `--owner-pid <AI 工具 PID>`。工作结束用 `--heartbeat-stop <heartbeat_id>` 停止，再短查处理期间的用户事件。
+短查或等待返回 `changed: true`、发布下一轮、文档控制（如 offer、claim、progress、章节预览、ready）成功或启动心跳时，服务自动续 3 分钟工作租约。出题期间靠查到的提交维持在线。写作期间每完成一章就联机发布。空等、未发现事件的短查和失败请求都不续工作租约。
 
-心跳每 10 秒报到，只刷新心跳时钟，不读取或消费事件。租期为 3 分钟；需要续租时，短查或等待命令传回执中相同的 `--owner-pid`。owner 退出登记 `owner_exited` 并停止报到；租期届满登记 `lease_expired`；连续 30 秒未收到心跳由服务标记失联。`work.mjs` 管理自己命令的心跳。
+预计连续超过 3 分钟没有续租动作时，运行 `check.mjs --url <origin> --session <UUID> --heartbeat`。回执包含 `heartbeat_id` 和 `owner_pid`。默认沿父进程链找最近的 Claude Code、Codex、Cursor 或 Antigravity，找不到就传 `--owner-pid <AI 工具 PID>`。工作结束用 `--heartbeat-stop <heartbeat_id>` 停止，再短查处理期间的用户事件。`work.mjs` 已为查代码管理心跳。
+
+后续心跳每 10 秒报到，只刷新心跳时钟，不消费事件。心跳自身的租期为 3 分钟，续期时用回执中的 `--owner-pid` 短查或等待。owner 退出记录 `owner_exited`，租期届满记录 `lease_expired`，连续超过 30 秒未收到心跳则标记失联。
 
 ## 集中查代码
 
@@ -42,9 +44,9 @@ node <skill>/scripts/work.mjs --url <origin> --session <UUID> --final-round -- <
 
 ## AI 查询中断提示
 
-`/progress.ai` 和 `/recovery.ai` 分开记录短查／等待报到（`last_check_at`）与心跳（`last_heartbeat_at`）。普通 GET 不刷新时钟，重启清空两组时间，不改 `tree.json` 或 revision。
+`/progress.ai` 和 `/recovery.ai` 分开记录短查／等待报到（`last_check_at`）、心跳（`last_heartbeat_at`）和工作租约（`work_active`、`work_until`）。这些状态只在内存中，结束预览或重启服务会清空租约。普通 GET 只读。
 
-等待 AI 出题或生成文档时，页面有未过期心跳就显示在线；心跳全停、超过 60 秒没有短查或等待报到才提示暂停。若从未有报到，以最后一次心跳计时；两者都没有则显示“等待 AI 对话连接”。新打开或刚切换服务实例的页面保留 30 秒宽限。用户答题和确认保存时不提示 AI 暂停。
+等待 AI 出题或生成文档时，心跳和工作租约任一有效，页面就显示在线。两者都已失效且超过 60 秒没有短查或等待报到时，页面提示暂停。没有短查时间时按最后一次心跳计时，其次用最近工作动作的时间。没有任何活动记录时显示“等待 AI 对话连接”。新打开或刚切换服务实例的页面保留 30 秒宽限。用户答题和确认保存时不提示暂停。
 
 ## 恢复原会话
 

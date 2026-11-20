@@ -93,7 +93,12 @@ test('server rejects an explicitly requested restricted port without a startup r
 
 import {findAiOwnerPid,startHeartbeat,stopHeartbeat} from '../scripts/heartbeat.mjs';
 import {runtimePost} from '../scripts/runtime-client.mjs';
-import {InterviewProgress,SHORT_QUERY_TIMEOUT_MS,HEARTBEAT_LEASE_MS} from '../scripts/progress.mjs';
+import {
+  InterviewProgress,
+  SHORT_QUERY_TIMEOUT_MS,
+  HEARTBEAT_LEASE_MS,
+  WORK_LEASE_MS
+} from '../scripts/progress.mjs';
 import {renderChapter} from '../scripts/render-chapter.mjs';
 import {composeDocument} from '../scripts/compose-document.mjs';
 import {validateDocument} from '../scripts/document.mjs';
@@ -268,7 +273,9 @@ test('wait CLI stays silent across idle deadlines, reports activity and returns 
   await until(async () => (await getAi(running)).last_check_at > first + 200);
   assert.equal(waiting.child.exitCode, null);
   assert.equal(waiting.stdout, '');
-  assert.equal(assistantConnection(await getAi(running), 90000), 'connected');
+  const idle = await getAi(running);
+  assert.equal(idle.work_until, null);
+  assert.equal(assistantConnection(idle, 90_000), 'connected');
 
   await submit(running);
   const submitted = await waiting.result;
@@ -330,6 +337,143 @@ test('wait CLI distinguishes a closed service, a finished session and the wrong 
   assert.equal(JSON.parse(finished.stdout).status, 'session_finished');
 });
 
+test('user event receipts and round publication lease work across query silence and restart', async t => {
+  const running = await service(t, tree(), { clock: true });
+  assert.equal((await checkOnce(opts(running))).changed, false);
+  const initial = await getAi(running);
+  assert.equal(initial.work_until, null);
+
+  const cursor = { expected_revision: 0, expected_instance_id: running.instance_id };
+  running.setClockOffset(1000);
+  const waiting = running.post('/ai/wait', cursor);
+  await until(async () => (await getAi(running)).last_check_at > initial.last_check_at);
+  assert.equal((await getAi(running)).work_until, null);
+  await submit(running);
+  assert.deepEqual(await (await waiting).json(), { status: 'event' });
+  const woken = await getAi(running);
+  assert.ok(woken.work_active);
+
+  running.setClockOffset(2000);
+  assert.equal((await checkOnce(opts(running))).changed, true);
+  const discovered = await getAi(running);
+  assert.ok(discovered.work_until > woken.work_until);
+  running.setClockOffset(3000);
+  assert.equal((await checkOnce(opts(running))).changed, false);
+  assert.equal((await getAi(running)).work_until, discovered.work_until);
+
+  running.setClockOffset(94_000);
+  const thinking = await getAi(running);
+  assert.ok(thinking.seconds_since_last_check >= 90);
+  assert.equal(thinking.heartbeat_active, false);
+  assert.equal(assistantConnection(thinking, 90_000), 'connected');
+  const pause = await running.post('/ai/telemetry', {
+    ...cursor,
+    expected_revision: 1,
+    event: 'pause_shown',
+    page_id: 'work-lease',
+    last_check_at: thinking.last_check_at
+  });
+  assert.deepEqual(await pause.json(), { recorded: false });
+
+  for (const [path, fields] of [
+    ['/ai/check', { expected_revision: 1, expected_session_id: 'wrong' }],
+    ['/ai/check', { expected_revision: 1, expected_instance_id: 'old' }],
+    ['/ai/wait', { expected_revision: 0 }],
+    ['/round', { expected_revision: 0, round: 2, nodes: [node('follow', { round: 2 })] }]
+  ]) {
+    assert.equal((await running.post(path, { ...cursor, ...fields })).status, 409);
+  }
+  assert.equal((await getAi(running)).work_until, discovered.work_until);
+
+  const published = await running.post('/round', {
+    expected_revision: 1,
+    round: 2,
+    nodes: [node('follow', { round: 2, depends_on: ['delivery'] })]
+  });
+  assert.equal(published.status, 200);
+  running.setClockOffset(200_000);
+  const nextRound = await getAi(running);
+  assert.ok(nextRound.work_until > discovered.work_until && nextRound.work_active);
+
+  const bytes = readFileSync(running.file);
+  const exited = once(running.child, 'exit');
+  running.child.kill();
+  await exited;
+  const restored = await running.start();
+  const restarted = await getAi(restored);
+  assert.equal(restarted.work_until, null);
+  assert.equal(restarted.work_active, false);
+  assert.equal(assistantConnection(restarted, 90_000), 'connecting');
+  assert.deepEqual(readFileSync(running.file), bytes);
+});
+
+test('validated document actions and chapter publication renew work without checks or heartbeats', async t => {
+  const answered = id =>
+    node(id, { status: 'answered', answer: { option_ids: ['none'], text: '' } });
+  const running = await service(t, tree([answered('a'), answered('b')]), { clock: true });
+  await control(running, 'offer');
+  const offered = await getAi(running);
+  assert.ok(offered.work_active);
+
+  running.setClockOffset(1000);
+  const { job_id } = await control(running, 'save');
+  assert.equal((await getAi(running)).work_until, offered.work_until);
+  const claimed = await control(running, 'claim', { job_id });
+  const claimedUntil = (await getAi(running)).work_until;
+  assert.ok(claimedUntil > offered.work_until);
+
+  running.setClockOffset(2000);
+  const documentAction = fields =>
+    running.post('/document/control', {
+      expected_revision: claimed.source.revision,
+      job_id,
+      ...fields
+    });
+  assert.equal(
+    (await documentAction({ action: 'progress', job_id: 'old', stage: 'design' })).status,
+    409
+  );
+  assert.equal((await documentAction({ action: 'progress', stage: 'invalid' })).status, 400);
+  assert.equal((await documentAction({ action: 'chapter', chapter_id: 'a' })).status, 404);
+  assert.equal((await documentAction({ action: 'ready' })).status, 404);
+  assert.equal((await getAi(running)).work_until, claimedUntil);
+
+  await control(running, 'progress', { job_id, stage: 'design' });
+  let workUntil = (await getAi(running)).work_until;
+  assert.ok(workUntil > claimedUntil);
+  const frozen = await running.state();
+  const bytes = readFileSync(running.file);
+  const parts = [];
+  for (const [index, chapter] of claimed.source.chapters.entries()) {
+    running.setClockOffset(100_000 * (index + 1));
+    const writing = await getAi(running);
+    assert.equal(writing.heartbeat_active, false);
+    assert.equal(writing.last_check_at, null);
+    assert.equal(assistantConnection(writing, 90_000), 'connected');
+    parts.push(renderChapter(claimed, frozen, chapter.id, '<p>已完成章节</p>'));
+    writeFileSync(
+      running.document + '.preview.html',
+      composeDocument(claimed, parts, { preview: true }).html
+    );
+    await control(running, 'chapter', { job_id, chapter_id: chapter.id });
+    const published = await getAi(running);
+    assert.ok(published.work_until > workUntil);
+    workUntil = published.work_until;
+  }
+
+  const source = parts[0].source;
+  parts.push(
+    { source, view: 'design', html: '<article id="R1" data-kind="requirement">需求</article>' },
+    { source, view: 'plan', html: '<article id="W1" data-kind="work">开发</article>' },
+    { source, view: 'acceptance', html: '<article id="AC1" data-kind="criterion">验收</article>' }
+  );
+  writeFileSync(running.document, composeDocument(claimed, parts).html);
+  running.setClockOffset(210_000);
+  assert.equal((await control(running, 'ready', { job_id })).phase, 'ready');
+  assert.ok((await getAi(running)).work_until > workUntil);
+  assert.deepEqual(readFileSync(running.file), bytes);
+});
+
 test('detached heartbeat renews activity every 10s without reading or consuming submissions; stop records end',async t=>{
  const s=await service(t);await checkOnce(opts(s));const cursor=readFileSync(s.file+'.cursor.json');
  const started=Date.now(),hb=JSON.parse((await run(process.execPath,[checker,'--url',s.url,'--session','v2-regression','--heartbeat','--owner-pid',String(process.pid)])).stdout);s.track(hb.pid);
@@ -344,13 +488,39 @@ test('detached heartbeat renews activity every 10s without reading or consuming 
  const events=logs(s);assert.equal(events.filter(e=>e.event==='heartbeat_start').length,1);assert.equal(events.filter(e=>e.event==='heartbeat_end').length,1);
 });
 
-test('heartbeat validates session/revision/instance and exits when service instance disappears',async t=>{
- const s=await service(t);for(const override of [{expected_session_id:'wrong'},{expected_revision:99},{expected_instance_id:'old'}]){
-  const response=await s.post('/ai/heartbeat',{heartbeat_id:'rejected',expected_revision:0,expected_instance_id:s.instance_id,...override});assert.equal(response.status,409);
- }
- assert.equal((await(await fetch(s.url+'/progress')).json()).ai.last_activity_at,null);
- const hb=await startHeartbeat({...opts(s),ownerPid:process.pid});s.track(hb.pid);s.child.kill();await once(s.child,'exit');
- const until=Date.now()+13000;let alive=true;while(alive&&Date.now()<until){try{process.kill(hb.pid,0);await delay(100);}catch{alive=false;}}assert.equal(alive,false);
+test('heartbeat validates session/revision/instance and exits when service instance disappears', async t => {
+  const s = await service(t);
+  for (const override of [
+    { expected_session_id: 'wrong' },
+    { expected_revision: 99 },
+    { expected_instance_id: 'old' }
+  ]) {
+    const response = await s.post('/ai/heartbeat', {
+      heartbeat_id: 'rejected',
+      expected_revision: 0,
+      expected_instance_id: s.instance_id,
+      ...override
+    });
+    assert.equal(response.status, 409);
+  }
+  const rejected = await getAi(s);
+  assert.equal(rejected.last_activity_at, null);
+  assert.equal(rejected.work_until, null);
+  const hb = await startHeartbeat({ ...opts(s), ownerPid: process.pid });
+  s.track(hb.pid);
+  s.child.kill();
+  await once(s.child, 'exit');
+  const until = Date.now() + 13000;
+  let alive = true;
+  while (alive && Date.now() < until) {
+    try {
+      process.kill(hb.pid, 0);
+      await delay(100);
+    } catch {
+      alive = false;
+    }
+  }
+  assert.equal(alive, false);
 });
 
 test('only short checks clear silence; heartbeat expiry logs remain truthful without modifying the tree',()=>{
@@ -425,50 +595,76 @@ test('heartbeat owner lookup skips shells, recognizes the four tools and chooses
   ], 70), null);
 });
 
-test('an inferred heartbeat keeps stale checks online; owner exit removes it and permits pause telemetry', {timeout:15000}, async context => {
-  const running = await service(context, tree(), { clock: true });
-  await submit(running);
-  await checkOnce(opts(running));
-  running.setClockOffset(SHORT_QUERY_TIMEOUT_MS + 1000);
+test(
+  'owner exit removes the inferred heartbeat and work lease expiry permits pause telemetry',
+  { timeout: 15000 },
+  async context => {
+    const running = await service(context, tree(), { clock: true });
+    await submit(running);
+    await checkOnce(opts(running));
+    running.setClockOffset(SHORT_QUERY_TIMEOUT_MS + 1000);
 
-  await assert.rejects(startHeartbeat(opts(running), {
-    loadProcessTable: async () => [{ pid: process.pid, ppid: 1, name: 'node' }]
-  }), /--owner-pid/);
-  const host = spawn(process.execPath, ['-e', 'setInterval(()=>{}, 1000)'], { stdio: 'ignore', windowsHide: true });
-  const hostExit = once(host, 'exit');
-  context.after(async () => {
-    if (host.exitCode === null && host.signalCode === null) host.kill();
+    await assert.rejects(
+      startHeartbeat(opts(running), {
+        loadProcessTable: async () => [{ pid: process.pid, ppid: 1, name: 'node' }]
+      }),
+      /--owner-pid/
+    );
+    const host = spawn(process.execPath, ['-e', 'setInterval(()=>{}, 1000)'], {
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    const hostExit = once(host, 'exit');
+    context.after(async () => {
+      if (host.exitCode === null && host.signalCode === null) host.kill();
+      await hostExit;
+    });
+    const shellPid = Math.max(process.pid, host.pid) + 1;
+    const hb = await startHeartbeat(opts(running), {
+      loadProcessTable: async () => [
+        { pid: process.pid, ppid: shellPid, name: 'node' },
+        { pid: shellPid, ppid: host.pid, name: 'pwsh' },
+        { pid: host.pid, ppid: 1, name: 'claude.exe' }
+      ]
+    });
+    running.track(hb.pid);
+    assert.equal(hb.owner_pid, host.pid);
+    const active = await getAi(running);
+    assert.ok(active.seconds_since_last_check > 60);
+    assert.equal(active.heartbeat_active, true);
+    assert.equal(assistantConnection(active, 90000), 'connected');
+    const pause = () =>
+      running
+        .post('/ai/telemetry', {
+          expected_revision: 1,
+          expected_instance_id: running.instance_id,
+          event: 'pause_shown',
+          page_id: 'owner-exit',
+          last_check_at: active.last_check_at
+        })
+        .then(response => response.json());
+    assert.deepEqual(await pause(), { recorded: false });
+
+    await delay(1200);
+    process.kill(hb.pid, 0);
+    host.kill();
     await hostExit;
-  });
-  const shellPid = Math.max(process.pid, host.pid) + 1;
-  const hb = await startHeartbeat(opts(running), {
-    loadProcessTable: async () => [
-      { pid: process.pid, ppid: shellPid, name: 'node' },
-      { pid: shellPid, ppid: host.pid, name: 'pwsh' },
-      { pid: host.pid, ppid: 1, name: 'claude.exe' }
-    ]
-  });
-  running.track(hb.pid);
-  assert.equal(hb.owner_pid, host.pid);
-  const active = await getAi(running);
-  assert.ok(active.seconds_since_last_check > 60);
-  assert.equal(active.heartbeat_active, true);
-  assert.equal(assistantConnection(active, 90000), 'connected');
-  const pause = () => running.post('/ai/telemetry', {
-    expected_revision: 1, expected_instance_id: running.instance_id, event: 'pause_shown',
-    page_id: 'owner-exit', last_check_at: active.last_check_at
-  }).then(response => response.json());
-  assert.deepEqual(await pause(), { recorded: false });
+    await until(async () => !(await getAi(running)).heartbeat_active, 10000);
+    assert.equal(
+      logs(running)
+        .filter(event => event.event === 'heartbeat_end')
+        .at(-1).reason,
+      'owner_exited'
+    );
+    assert.equal(assistantConnection(await getAi(running), 90_000), 'connected');
+    assert.deepEqual(await pause(), { recorded: false });
 
-  await delay(1200);
-  process.kill(hb.pid, 0);
-  host.kill();
-  await hostExit;
-  await until(async () => !(await getAi(running)).heartbeat_active, 10000);
-  assert.equal(logs(running).filter(event => event.event === 'heartbeat_end').at(-1).reason, 'owner_exited');
-  assert.equal(assistantConnection(await getAi(running), 90000), 'paused');
-  assert.deepEqual(await pause(), { recorded: true });
-});
+    running.setClockOffset(SHORT_QUERY_TIMEOUT_MS + WORK_LEASE_MS + 2000);
+    assert.equal((await getAi(running)).work_active, false);
+    assert.equal(assistantConnection(await getAi(running), 90000), 'paused');
+    assert.deepEqual(await pause(), { recorded: true });
+  }
+);
 
 test('server lease expiry stops the real worker and logs lease_expired (controlled service clock)',async t=>{
  const s=await service(t,tree(),{clock:true}),hb=await startHeartbeat({...opts(s),ownerPid:process.pid});s.track(hb.pid);const bytes=readFileSync(s.file);

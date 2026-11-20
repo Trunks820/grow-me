@@ -22,12 +22,33 @@ def seed(nodes,round=1):
     return {'schema_version':2,'session_id':'controlled-browser-'+uuid.uuid4().hex[:8],'topic':'受控页面验收','revision':0,'current_round':round,'status':'active','nodes':nodes}
 
 class Service:
-    def __init__(self,work,tree):
+    def __init__(self,work,tree,*,clock=False):
         self.work=work;work.mkdir(parents=True,exist_ok=True);self.file=work/'tree.json';self.file.write_text(json.dumps(tree,ensure_ascii=False),encoding='utf-8')
-        self.child=subprocess.Popen(['node',str(BASE/'scripts/server.mjs'),'--state',str(self.file),'--wait-ms','150'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8')
+        self.node_args = ['node']
+        if clock:
+            self.clock_file = (work / 'clock-offset').resolve()
+            self.set_clock_offset(0)
+            preload = work / 'test-clock.mjs'
+            preload.write_text(
+                "import { readFileSync } from 'node:fs';\n"
+                "const realNow = Date.now;\n"
+                f"Date.now = () => realNow() + Number(readFileSync({json.dumps(str(self.clock_file))}, 'utf8'));\n",
+                encoding='utf-8',
+            )
+            self.node_args.extend(['--import', preload.resolve().as_uri()])
+        self.start()
+
+    def start(self, port=0):
+        command = [*self.node_args, str(BASE / 'scripts/server.mjs'), '--state', str(self.file),
+                   '--port', str(port), '--wait-ms', '150']
+        self.child=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8')
         line=self.child.stdout.readline()
         if not line:raise RuntimeError(self.child.stderr.read())
         self.startup=json.loads(line);self.url=self.startup['url']
+
+    def set_clock_offset(self, milliseconds):
+        self.clock_file.write_text(str(milliseconds), encoding='ascii')
+
     def state(self):return request(self.url,'/state')[1]
     def close(self):
         if self.child.poll() is None:self.child.terminate();self.child.wait(timeout=5)

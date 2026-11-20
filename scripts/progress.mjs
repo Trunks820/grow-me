@@ -3,6 +3,7 @@ export const AI_CHECK_TIMEOUT_MS = 30_000;
 export const HEARTBEAT_INTERVAL_MS = 10_000;
 export const SHORT_QUERY_TIMEOUT_MS = 60_000;
 export const HEARTBEAT_LEASE_MS = 3 * 60_000;
+export const WORK_LEASE_MS = 3 * 60_000;
 const SUBMISSION_EVENTS = ['submit', 'review', 'request_plan'];
 export class InterviewProgress {
   constructor(getTree, { log = null, getPhase = () => null, onUserEvent = () => {} } = {}) {
@@ -12,6 +13,8 @@ export class InterviewProgress {
     this.lastSubmission = null;
     this.lastCheckAt = null;
     this.lastHeartbeatAt = null;
+    this.lastWorkAt = null;
+    this.closed = false;
     this.heartbeats = new Map();
     this.ended = new Set();
     this.work = new Map();
@@ -22,6 +25,9 @@ export class InterviewProgress {
   }
   record(event, detail = {}) {
     this.log?.append(event, { revision: this.getTree().revision, ...detail });
+  }
+  renewWorkLease() {
+    if (!this.closed) this.lastWorkAt = Date.now();
   }
   reportCheck(ownerPid) {
     this.sweep();
@@ -63,6 +69,7 @@ export class InterviewProgress {
       });
       this.log?.discovered.set(submission.sequence, Date.now());
     }
+    if (events.length) this.renewWorkLease();
     return { ...this.status(), events, discovery_delay_ms: delay };
   }
   heartbeat(id, action = 'pulse', { ownerPid, reason = 'requested' } = {}) {
@@ -85,6 +92,7 @@ export class InterviewProgress {
         owner_pid: ownerPid,
         lease_until: heartbeat.leaseUntil
       });
+      this.renewWorkLease();
     }
     heartbeat.lastPulseAt = Date.now();
     this.lastHeartbeatAt = heartbeat.lastPulseAt;
@@ -111,8 +119,13 @@ export class InterviewProgress {
       else if (now - h.lastPulseAt > AI_CHECK_TIMEOUT_MS) this.endHeartbeat(id, 'expired_observed');
     }
   }
-  close() {
+  closeHeartbeats() {
     for (const id of this.heartbeats.keys()) this.endHeartbeat(id, 'session_closed');
+  }
+  close() {
+    this.closed = true;
+    this.lastWorkAt = null;
+    this.closeHeartbeats();
   }
   userEvent(kind) {
     const tree = this.getTree(),
@@ -134,6 +147,7 @@ export class InterviewProgress {
     this.sweep();
     const tree = this.getTree(),
       now = Date.now(),
+      workUntil = this.lastWorkAt === null ? null : this.lastWorkAt + WORK_LEASE_MS,
       offered = this.getPhase() === 'offered',
       waiting =
         tree.schema_version !== 1 &&
@@ -169,6 +183,10 @@ export class InterviewProgress {
           this.lastCheckAt === null ? null : Math.max(0, now - this.lastCheckAt) / 1000,
         seconds_since_last_heartbeat:
           this.lastHeartbeatAt === null ? null : Math.max(0, now - this.lastHeartbeatAt) / 1000,
+        seconds_since_last_work:
+          this.lastWorkAt === null ? null : Math.max(0, now - this.lastWorkAt) / 1000,
+        work_active: workUntil !== null && now < workUntil,
+        work_until: workUntil,
         heartbeat_active: this.heartbeats.size > 0,
         heartbeat_activity: this.heartbeats.size
           ? this.work.size
