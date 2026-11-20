@@ -6,7 +6,30 @@ const J = i => {
 };
 const ease = t => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
 const trunkBaseWidth = round => 12 + 2.4 * Math.min(6, Math.max(1, round));
-const MAX_CANVAS_HEIGHT = 0.75;
+const trunkTaper = 1.7;
+const taperWidth = (base, tip, t, power) => base + (tip - base) * Math.pow(t, power);
+const MAX_CANVAS_HEIGHT = 0.9;
+const flowerStroke = 0.55;
+const flowers = [
+  { x: -7.5, y: 5.5, offset: 3, petal: 2.6, opacity: 0.9 },
+  { x: 7, y: 6.5, offset: 2.6, petal: 2.2, opacity: 0.85 },
+  { x: 0, y: 0, offset: 4.9, petal: 4.2, opacity: 1 }
+];
+const petalAngles = [-90, -18, 54, 126, 198].map(a => (a * Math.PI) / 180);
+const petalCenters = ({ x, y, offset }) =>
+  petalAngles.map(a => [x + Math.cos(a) * offset, y + Math.sin(a) * offset]);
+const flowerBounds = flowers.reduce((bounds, flower) => {
+  const radius = flower.petal + flowerStroke / 2;
+  for (const [x, y] of petalCenters(flower)) {
+    bounds.left = Math.min(bounds.left, x - radius);
+    bounds.right = Math.max(bounds.right, x + radius);
+    bounds.top = Math.min(bounds.top, y - radius);
+    bounds.bottom = Math.max(bounds.bottom, y + radius);
+  }
+  return bounds;
+}, { left: 0, right: 0, top: 0, bottom: 0 });
+const flowerWidth = flowerBounds.right - flowerBounds.left,
+  flowerHeight = flowerBounds.bottom - flowerBounds.top;
 function seed(id) {
   let h = 2166136261;
   for (const c of id) {
@@ -28,11 +51,11 @@ export function branchPoints(n) {
       dx = n.x - n.px,
       dy = n.y - n.py,
       L = Math.hypot(dx, dy) || 1,
-      w = Math.sin((k / 16) * Math.PI) * (J(n.seed * 17 + k) - 0.5) * 5;
+      w = Math.sin((k / 16) * Math.PI) * (J(n.seed * 17 + k) - 0.5) * 2.2;
     return [p.x - (dy / L) * w, p.y + (dx / L) * w];
   });
 }
-function taperedOutline(points, w0, w1, progress = 1) {
+function taperedOutline(points, w0, w1, progress = 1, power = 1) {
   if (progress <= 0) return [];
   const f = clamp(progress, 0, 1),
     last = (points.length - 1) * f,
@@ -52,15 +75,15 @@ function taperedOutline(points, w0, w1, progress = 1) {
       dy = a[1] - b[1],
       d = Math.hypot(dx, dy) || 1,
       w =
-        ((w0 + (((w1 - w0) * k) / (list.length - 1)) * f) / 2) *
+        (taperWidth(w0, w1, (k / (list.length - 1)) * f, power) / 2) *
         (1 + Math.sin(k * 2.3 + w0) * 0.12);
     left.push([q[0] - (dy / d) * w, q[1] + (dx / d) * w]);
     right.push([q[0] + (dy / d) * w, q[1] - (dx / d) * w]);
   });
   return left.concat(right.reverse());
 }
-export function taper(points, w0, w1, progress = 1) {
-  const outline = taperedOutline(points, w0, w1, progress);
+export function taper(points, w0, w1, progress = 1, power = 1) {
+  const outline = taperedOutline(points, w0, w1, progress, power);
   if (!outline.length) return '';
   const format = q => q.map(x => x.toFixed(2)).join(' ');
   return (
@@ -106,35 +129,33 @@ function curvedTwig(start, end, bend, width, tipWidth = 0.3) {
   };
 }
 export function branchTwigs(n, terminal) {
-  const result = [];
-  for (const [k, sg] of [
-    [6, -1],
-    [11, 1]
-  ]) {
-    const q = n.points[k],
-      b = n.points[k + 1],
-      a = Math.atan2(b[1] - q[1], b[0] - q[0]) + sg * (0.5 + J(n.seed + k) * 0.5),
-      l = 10 + J(n.seed * 3 + k) * 14;
-    result.push(
-      curvedTwig(
-        q,
-        [q[0] + Math.cos(a) * l, q[1] + Math.sin(a) * l - 3],
-        sg * (1.5 + J(n.seed + k) * 2),
-        Math.max(1, n.width * 0.35),
-        0.4
-      )
-    );
-  }
+  const k = 11,
+    side = J(n.seed + 5) < 0.5 ? 1 : -1,
+    q = n.points[k],
+    b = n.points[k + 1],
+    a = Math.atan2(b[1] - q[1], b[0] - q[0]) + side * (0.5 + J(n.seed + k) * 0.5),
+    length = 7 + J(n.seed * 3 + k) * 8;
+  const result = [
+    curvedTwig(
+      q,
+      [q[0] + Math.cos(a) * length, q[1] + Math.sin(a) * length - 3],
+      side * (1.5 + J(n.seed + k) * 2),
+      Math.max(1, n.width * 0.35),
+      0.4
+    )
+  ];
   if (terminal) {
-    const q = n.points[16],
-      b = n.points[14],
-      a = Math.atan2(q[1] - b[1], q[0] - b[0]);
-    for (const [k, da] of [-0.55, 0.45].entries()) {
-      const l = 9 + J(n.seed + k * 7) * 9;
-      result.push(
-        curvedTwig(q, [q[0] + Math.cos(a + da) * l, q[1] + Math.sin(a + da) * l], da * 3, 1)
-      );
-    }
+    const tip = n.points[16],
+      previous = n.points[14],
+      turn = J(n.seed + 9) < 0.5 ? -0.45 : 0.4,
+      angle = Math.atan2(tip[1] - previous[1], tip[0] - previous[0]) + turn,
+      length = 6 + J(n.seed) * 6;
+    result.push(curvedTwig(
+      tip,
+      [tip[0] + Math.cos(angle) * length, tip[1] + Math.sin(angle) * length],
+      turn * 3,
+      1
+    ));
   }
   return result;
 }
@@ -149,15 +170,20 @@ export function layoutTree(tree) {
   for (const { node } of graph) counts.set(node.round, (counts.get(node.round) || 0) + 1);
   let top = 695;
   for (let r = 1; r <= (tree.current_round ?? Math.max(...graph.map(e => e.node.round))); r++) {
-    segment.set(r, clamp(40 + 12 * (counts.get(r) || 0), 70, 130));
+    segment.set(
+      r,
+      r === 1
+        ? clamp(50 + 16 * (counts.get(r) || 0), 80, 170)
+        : clamp(40 + 12 * (counts.get(r) || 0), 70, 130)
+    );
     top -= segment.get(r);
     tops.set(r, top);
   }
   // Project the same Bezier construction into a growing, bounded crown. This
   // changes drawing proportions only; question counts, parents and seeds stay put.
   const stage = tops.size,
-    stemHeight = 110 + 12 * Math.min(stage, 6),
-    crownBudget = 200 + 340 * (1 - Math.exp(-(stage - 1) / 3));
+    stemHeight = 80 + 18 * Math.min(stage, 6),
+    crownBudget = stage === 1 ? 360 : 260 + 420 * (1 - Math.exp(-(stage - 1) / 3));
   const xScale = 0.82 + 0.04 * Math.min(stage, 6),
     yScale = Math.min(1, crownBudget / (695 - top + 240));
   const projectX = x => 480 + (x - 480) * xScale,
@@ -204,36 +230,46 @@ export function layoutTree(tree) {
         seed: s
       };
     n.roundDepth = parent?.round === r ? parent.roundDepth + 1 : 0;
-    let k, baseAngle;
+    let k,
+      baseAngle,
+      loneTop = false;
     if (!parent) {
       side = -side;
       n.side = side;
       k = (rootCount.get(r) || 0) + 1;
       rootCount.set(r, k);
-      baseAngle = side > 0 ? -24 - r * 3 : -156 + r * 3;
+      loneTop = r > 1 && rootsByRound.get(r).length === 1 && r === rootRounds.at(-1);
+      baseAngle = side > 0 ? -78 : -102;
       n.width = Math.max(5, 10.5 - 0.9 * r);
     } else {
       k = (kidCount.get(parent.id) || 0) + 1;
       kidCount.set(parent.id, k);
       n.side = parent.side;
-      baseAngle = parent.angle + (k % 2 ? -1 : 1) * (18 + k * 4) * (parent.side > 0 ? 1 : -1) * -1;
+      baseAngle = parent.angle + (k % 2 ? -1 : 1) * (16 + k * 3) * (parent.side > 0 ? 1 : -1) * -1;
       n.width = Math.max(1.6, parent.width * 0.45);
     }
     // Keep the existing session/node seed and bounded Bezier variation. Reserve
     // space for the actual flower/leaf targets, rather than unadorned wood tips.
     let best,
-      bestGap = -Infinity;
-    for (let trial = 0; trial < 192; trial++) {
-      const candidateSeed = trial
-        ? seed(JSON.stringify([tree.session_id, node.id, 'avoid', trial]))
+      bestGap = -Infinity,
+      bestClear = false;
+    const attempts = 192;
+    for (let trial = 0; trial < attempts * 3; trial++) {
+      const widerFork = trial >= attempts * 2;
+      if (trial === attempts * 2 && (!parent || bestClear)) break;
+      const branchTrial = trial % attempts;
+      const candidateSeed = branchTrial
+        ? seed(JSON.stringify([tree.session_id, node.id, 'avoid', branchTrial]))
         : s;
-      const candidate = { angle: baseAngle + (J(candidateSeed) - 0.5) * (parent ? 26 : 22) };
+      const angleRange = parent ? (widerFork ? 46 : 26) : 22;
+      const candidate = { angle: baseAngle + (J(candidateSeed) - 0.5) * angleRange };
       if (parent) {
         candidate.attachT = 0.7 + J(candidateSeed + 77) * 0.1;
         const p = point(parent, candidate.attachT);
         candidate.px = p.x;
         candidate.py = p.y;
-        candidate.length = Math.max(62, parent.length * (0.45 + J(candidateSeed + 9) * 0.25));
+        const length = Math.max(62, parent.length * (0.45 + J(candidateSeed + 9) * 0.25));
+        candidate.length = widerFork ? length * (1 + J(candidateSeed + 66) * 0.3) : length;
       } else {
         const band = rootBands.get(r),
           size = rootsByRound.get(r).length,
@@ -242,7 +278,7 @@ export function layoutTree(tree) {
           step = (span - pad * 2) / Math.max(1, size - 1);
         candidate.py =
           size === 1
-            ? band.top + pad
+            ? band.top + span * 0.45
             : band.bottom - pad - step * (k - 1) + (J(s + 77) - 0.5) * Math.min(10, step * 0.24);
         candidate.px = tx(candidate.py);
         const crownLevel = clamp((candidate.py - top) / (695 - top), 0, 1),
@@ -250,16 +286,28 @@ export function layoutTree(tree) {
             1 + Math.min(1, (stage - 1) / 4) * (-0.2 + 0.24 * Math.sin(Math.PI * crownLevel));
         candidate.length =
           clamp(100 + 20 * counts.get(r) - 6 * r, 130, 240) *
+          (stage === 1 ? 0.78 : 1) *
+          (loneTop ? 0.8 : 1) *
           (0.85 + J(candidateSeed + 50) * 0.3) *
-          lengthScale;
+          lengthScale *
+          (0.68 + 0.42 * crownLevel);
+        if (!loneTop) {
+          const tilt = 20 + 36 * (1 - crownLevel);
+          candidate.angle = (n.side > 0 ? -tilt : -180 + tilt) + (J(candidateSeed) - 0.5) * 16;
+        }
       }
       const angle = (candidate.angle * Math.PI) / 180;
       candidate.x = candidate.px + Math.cos(angle) * candidate.length;
       candidate.y = candidate.py + Math.sin(angle) * candidate.length;
       candidate.cx =
-        (candidate.px + candidate.x) / 2 + Math.sin(angle) * (10 + J(s + 3) * 22) * n.side;
-      candidate.cy = (candidate.py + candidate.y) / 2 - 10 - J(s + 4) * 14;
-      candidate.bloomT = 0.42 + J(candidateSeed + 88) * 0.36;
+        (candidate.px + candidate.x) / 2 + Math.sin(angle) * (16 + J(s + 3) * 24) * n.side;
+      candidate.cy = (candidate.py + candidate.y) / 2 - 18 - J(s + 4) * 16;
+      // On crowded branches, retry a spot farther in from the tip.
+      const flowerPosition = J(candidateSeed + 88),
+        nearTip = trial < attempts;
+      candidate.bloomT = nearTip
+        ? 0.72 + flowerPosition * 0.18
+        : 0.42 + flowerPosition * (widerFork ? 0.48 : 0.3);
       let bloom = point(candidate, candidate.bloomT);
       while (
         candidate.bloomT > 0.42 &&
@@ -270,26 +318,28 @@ export function layoutTree(tree) {
       }
       candidate.bloomX = bloom.x;
       candidate.bloomY = bloom.y;
-      const gap = Math.min(
-        Infinity,
-        ...[...positions.values()].map(p => distance(p.bloomX - bloom.x, p.bloomY - bloom.y))
-      );
-      if (gap > bestGap) {
+      let gap = Infinity,
+        clear = true;
+      for (const p of positions.values()) {
+        const dx = Math.abs(p.bloomX - bloom.x) * xScale,
+          dy = Math.abs(p.bloomY - bloom.y) * yScale;
+        gap = Math.min(gap, Math.hypot(dx, dy));
+        if (dx < flowerWidth && dy < flowerHeight) clear = false;
+      }
+      // Reserve room for the entire cluster even while the question is a bud.
+      if ((clear && !bestClear) || (clear === bestClear && gap > bestGap)) {
         best = candidate;
         bestGap = gap;
+        bestClear = clear;
       }
-      if (gap >= 25) break;
+      if (clear && gap >= 25) break;
     }
     Object.assign(n, best);
     if (!parent) {
-      const trunkWidth =
-        0.85 +
-        ((trunkBaseWidth(stage) - 0.85) * (projectY(n.py) - projectY(top))) / (885 - projectY(top));
+      const u = 1 - (projectY(n.py) - projectY(top)) / (885 - projectY(top)),
+        trunkWidth = taperWidth(trunkBaseWidth(stage), 0.85, u, trunkTaper);
       n.width = Math.min(n.width, Math.max(2.4, trunkWidth * 0.85));
     }
-    const a = (n.angle * Math.PI) / 180;
-    n.cx = (n.px + n.x) / 2 + Math.sin(a) * (10 + J(s + 3) * 22) * n.side;
-    n.cy = (n.py + n.y) / 2 - 10 - J(s + 4) * 14;
     positions.set(n.id, n);
   }
   const nodes = tree.nodes.map(n => positions.get(n.id));
@@ -339,7 +389,8 @@ export function layoutTree(tree) {
         )[0],
       stem = point(tip, 1);
     let best,
-      bestGap = -Infinity;
+      bestScore = -Infinity,
+      bestClear = false;
     outer: for (const dy of [18, 26, 34, 42, 50, 58, 66, 74, 82, 90, 98])
       for (const dx of [0, 6, -6, 12, -12, 20, -20, 28, -28]) {
         const x = stem.x + dx,
@@ -348,13 +399,20 @@ export function layoutTree(tree) {
             ...nodes.map(n => Math.hypot(n.bloomX - x, n.bloomY - y)),
             ...fruit.map(f => Math.hypot(f.x - x, f.y - y))
           );
+        const clear = nodes.every(n => {
+          const dx = x - n.bloomX,
+            dy = y - n.bloomY;
+          return dx <= flowerBounds.left - 6.5 || dx >= flowerBounds.right + 6.5 ||
+            dy <= flowerBounds.top - 6.5 || dy >= flowerBounds.bottom + 6.5;
+        });
         const clearance = woodClearance(x, y),
           score = Math.min(gap, clearance + 15);
-        if (score > bestGap) {
+        if ((clear && !bestClear) || (clear === bestClear && score > bestScore)) {
           best = { x, y };
-          bestGap = score;
+          bestScore = score;
+          bestClear = clear;
         }
-        if (gap >= 25 && clearance >= 10) break outer;
+        if (clear && gap >= 25 && clearance >= 10) break outer;
       }
     fruit.push({
       id: c.id,
@@ -403,16 +461,16 @@ export function layoutTree(tree) {
 // Centre the illustration while retaining the original minimum scale.
 export function cameraFrame(tree, layout = layoutTree(tree)) {
   const b = layout.paintBounds,
-    width = Math.max(layout.width, b.width + 64),
-    height = Math.max(layout.height, b.height / MAX_CANVAS_HEIGHT);
+    width = Math.max(820, b.width + 140),
+    height = Math.max(840, b.height / MAX_CANVAS_HEIGHT);
   return { x: b.x + (b.width - width) / 2, y: b.y + (b.height - height) / 2, width, height };
 }
 function paintBounds(tree, layout) {
   const points = [],
     add = list => points.push(...list),
-    stroke = (list, w0, w1) => add(taperedOutline(list, w0, w1));
+    stroke = (list, w0, w1, power) => add(taperedOutline(list, w0, w1, 1, power));
   const trunk = trunkGeometry(layout, tree.current_round, 1);
-  stroke(trunk.points, trunk.baseWidth, trunk.tipWidth);
+  stroke(trunk.points, trunk.baseWidth, trunk.tipWidth, trunkTaper);
   const bx = 480 + layout.offset,
     rootScale = trunkBaseWidth(tree.current_round) / 28;
   add([
@@ -423,8 +481,8 @@ function paintBounds(tree, layout) {
   for (const n of layout.nodes) {
     stroke(n.points, n.width, !layout.nodes.some(c => c.parentId === n.id) ? 1 : n.width * 0.5);
     add([
-      [n.bloomX - 9, n.bloomY - 9],
-      [n.bloomX + 9, n.bloomY + 9]
+      [n.bloomX + flowerBounds.left, n.bloomY + flowerBounds.top],
+      [n.bloomX + flowerBounds.right, n.bloomY + flowerBounds.bottom]
     ]);
     for (const t of branchTwigs(n, !layout.nodes.some(c => c.parentId === n.id)))
       stroke(t.points, t.width, t.tipWidth);
@@ -472,6 +530,27 @@ export function trunkGeometry(layout, round, maturity = 0, visibleTop = layout.t
       endX = x + side * (18 + J(s + k) * 12);
     return { ...curvedTwig([x, y], [endX, endY], side * 4, k === 0 ? 1.8 : 1.1, 0.2), progress: 1 };
   });
+  // Decorative shoots on bare stretches of the leader, so a lone late topic
+  // does not stand on an empty pole. They carry no question.
+  const roots = layout.nodes.filter(n => !n.parentId).map(n => n.py).sort((a, b) => b - a),
+    stops = [...roots, layout.top + 40];
+  let side = J(s + 5) < 0.5 ? 1 : -1;
+  for (let i = 0; i < stops.length - 1; i++) {
+    const gap = stops[i] - stops[i + 1];
+    if (gap < 46) continue;
+    const count = Math.floor(gap / 38);
+    for (let j = 1; j <= count; j++) {
+      const y = stops[i] - (gap * j) / (count + 1);
+      if (y < top) continue;
+      const x = center(y),
+        l = 24 + J(s + 30 + i * 7 + j) * 18;
+      side = -side;
+      twigs.push({
+        ...curvedTwig([x, y], [x + side * l * 0.8, y - l * 0.75], side * 3, 2.4, 0.3),
+        progress: 1
+      });
+    }
+  }
   return { points, top, baseWidth, tipWidth, twigs };
 }
 export function replayFrame(layout, elapsed) {
@@ -550,23 +629,33 @@ function svg(tag, attrs = {}, text) {
 }
 const defs = `<defs>
 <filter id="wash" x="-50%" y="-80%" width="200%" height="260%"><feTurbulence type="fractalNoise" baseFrequency=".025" numOctaves="3" seed="7"/><feDisplacementMap in="SourceGraphic" scale="18"/><feGaussianBlur stdDeviation="8"/></filter>
-<filter id="ink" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence baseFrequency=".6" numOctaves="1" seed="2"/><feDisplacementMap in="SourceGraphic" scale="2.2"/></filter>
+<filter id="ink" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence baseFrequency=".6" numOctaves="1" seed="2"/><feDisplacementMap in="SourceGraphic" scale="1.3"/></filter>
 <filter id="dry"><feTurbulence type="fractalNoise" baseFrequency=".7 .35" numOctaves="2" seed="5"/><feColorMatrix values="0 0 0 0 .95 0 0 0 0 .92 0 0 0 0 .86 0 0 0 -2 1.25"/><feComposite in2="SourceGraphic" operator="in"/></filter>
-<g id="tree-bud"><circle r="2.6" fill="#2f2c26"/></g><g id="tree-flower">${[0, 72, 144, 216, 288].map(a => `<circle cx="${Math.cos((a * Math.PI) / 180) * 3.4}" cy="${Math.sin((a * Math.PI) / 180) * 3.4}" r="2.9" fill="#f7f2e8" stroke="#8b8270" stroke-width=".5"/>`).join('')}<circle r="1.6" fill="#c08a4a"/></g><g id="tree-yellow-leaf"><ellipse rx="9" ry="3.6" fill="#c9a25e" opacity=".75"/></g></defs>`;
+<g id="tree-bud"><path d="M0 -6.2 C3.4 -2.6 3.6 1.8 0 3.6 C-3.6 1.8 -3.4 -2.6 0 -6.2Z" fill="#2f2c26"/><path d="M0 3.4 L0 6" stroke="#2f2c26" stroke-width="1"/></g>
+<g id="tree-flower">${flowers.map(flower => {
+  const { x, y, petal, opacity } = flower;
+  const petals = petalCenters(flower).map(([cx, cy]) =>
+    `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${petal}" fill="#f7f2e8" stroke="#8b8270" stroke-width="${flowerStroke}" opacity="${opacity}"/>`
+  );
+  return petals.join('') + `<circle cx="${x}" cy="${y}" r="${(petal * 0.55).toFixed(2)}" fill="#c08a4a" opacity="${opacity}"/>`;
+}).join('')}</g>
+<g id="tree-yellow-leaf"><ellipse rx="9" ry="3.6" fill="#c9a25e" opacity=".75"/></g></defs>`;
 export function createDecisionTree(container, { onNode = () => {}, onFruit = () => {} } = {}) {
   const canvas = container.querySelector('#tree-canvas');
   canvas.innerHTML = defs;
-  const washes = svg('g', { 'aria-hidden': 'true' }),
+  const washes = svg('g', { 'aria-hidden': 'true', 'pointer-events': 'none' }),
     wood = svg('g', {
       class: 'tree-wood',
       fill: '#2f2c26',
       filter: 'url(#ink)',
+      'pointer-events': 'none',
       'aria-hidden': 'true'
     }),
     texture = svg('g', {
       fill: '#2f2c26',
       filter: 'url(#dry)',
-      opacity: '.22',
+      opacity: '.12',
+      'pointer-events': 'none',
       'aria-hidden': 'true'
     }),
     tips = svg('g'),
@@ -742,13 +831,12 @@ export function createDecisionTree(container, { onNode = () => {}, onFruit = () 
     texture.replaceChildren();
     washes.replaceChildren();
     for (const n of drawing.nodes) {
-      if (drawing.nodes.some(child => child.parentId === n.id)) continue;
       const g = nodeProgress(n);
       if (g <= 0) continue;
-      const rx = 32 + J(n.seed + 101) * 22,
-        ry = 24 + J(n.seed + 102) * 22,
-        cx = n.x - n.side * 12,
-        cy = n.y + 8;
+      const rx = 26 + J(n.seed + 101) * 14,
+        ry = 18 + J(n.seed + 102) * 12,
+        cx = n.bloomX + n.side * 4,
+        cy = n.bloomY + 2;
       const cloud = Array.from({ length: 8 }, (_, k) => {
         const a = (k * Math.PI) / 4,
           scale = 0.72 + J(n.seed + 110 + k) * 0.42;
@@ -768,7 +856,7 @@ export function createDecisionTree(container, { onNode = () => {}, onFruit = () 
           'data-node-id': n.id,
           d,
           fill: colors[(n.round - 1) % colors.length],
-          opacity: 0.16 * g,
+          opacity: 0.24 * g,
           filter: 'url(#wash)'
         })
       );
@@ -789,7 +877,7 @@ export function createDecisionTree(container, { onNode = () => {}, onFruit = () 
         maturity,
         trunkTop
       ),
-      d = taper(trunk.points, trunk.baseWidth, trunk.tipWidth);
+      d = taper(trunk.points, trunk.baseWidth, trunk.tipWidth, 1, trunkTaper);
     lastTrunkTop = trunk.top;
     wood.append(
       svg('path', { class: 'tree-trunk', 'data-tip-width': trunk.tipWidth.toFixed(3), d })
@@ -800,7 +888,7 @@ export function createDecisionTree(container, { onNode = () => {}, onFruit = () 
         wood.append(
           svg('path', {
             class: 'tree-completion-twig',
-            d: taper(twig.points, twig.width, 0.2, twig.progress)
+            d: taper(twig.points, twig.width, twig.tipWidth, twig.progress)
           })
         );
     const bx = 480 + drawing.offset,
@@ -968,7 +1056,7 @@ export function createDecisionTree(container, { onNode = () => {}, onFruit = () 
           });
           view.append(
             svg('circle', { r: 11, fill: 'transparent', class: 'tree-hit' }),
-            svg('use', { class: 'tree-symbol' })
+            svg('use', { class: 'tree-symbol', 'pointer-events': 'none' })
           );
           tips.append(view);
           views.set(n.id, view);

@@ -177,7 +177,7 @@ def run_suite(work,scenario='all',layout_fixture='v7'):
                 assert not overlaps,overlaps
                 capture(page,work,'saved-fruits')
                 for target in page.locator('.tree-fruit').all():
-                    with page.expect_popup() as popup_info:target.click()
+                    with page.expect_popup() as popup_info:target.locator('.fruit-hit').click()
                     popup=popup_info.value;popup.wait_for_load_state();assert '#topic-' in popup.url;popup.close()
                 page.set_viewport_size({'width':390,'height':844});no_overflow(page);capture(page,work,'saved-fruits-mobile')
                 report['checks']['28_nodes_clickable_at_three_viewports']=True;report['checks']['28_no_entity_overlap_and_no_tree_labels']=True;report['checks']['fruit_count_matches_roots_and_chapter_links']=True

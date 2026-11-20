@@ -47,12 +47,20 @@ def main():
                 drawing = page.evaluate('''async tree=>{
                   const {layoutTree,cameraFrame,trunkGeometry}=await import('/tree.mjs'),layout=layoutTree(tree);
                   const canvas=document.querySelector('#tree-canvas').getBoundingClientRect(),wood=document.querySelector('.tree-wood').getBoundingClientRect();
-                  const washes=[...document.querySelectorAll('.tree-wash')].map(n=>({width:n.getBBox().width,height:n.getBBox().height,opacity:Number(n.getAttribute('opacity'))}));
-                  return {trunk_width:trunkGeometry(layout,tree.current_round).baseWidth,ink_height_ratio:layout.paintBounds.height/cameraFrame(tree,layout).height,rendered_wood_height_ratio:wood.height/canvas.height,washes};
+                  const washes=[...document.querySelectorAll('.tree-wash')].map(n=>{
+                    const {x,y,width,height}=n.getBBox(), point=layout.nodes.find(p=>p.id===n.dataset.nodeId);
+                    const cx=point.bloomX+point.side*4,cy=point.bloomY+2;
+                    return {width,height,opacity:Number(n.getAttribute('opacity')),centered:x<cx&&cx<x+width&&y<cy&&cy<y+height};
+                  });
+                  const decorations=[...document.querySelectorAll('.tree-completion-twig,.tree-symbol')];
+                  return {trunk_width:trunkGeometry(layout,tree.current_round).baseWidth,ink_height_ratio:layout.paintBounds.height/cameraFrame(tree,layout).height,rendered_wood_height_ratio:wood.height/canvas.height,washes,decorations_pass_through:decorations.every(n=>getComputedStyle(n).pointerEvents==='none')};
                 }''', tree)
-                assert drawing['ink_height_ratio'] <= .75+1e-8
-                assert drawing['rendered_wood_height_ratio'] <= .75+1e-8
-                assert drawing['washes'] and all(w['width'] < 130 and w['height'] < 120 and 0 < w['opacity'] <= .16 for w in drawing['washes'])
+                assert drawing['ink_height_ratio'] <= .9+1e-8
+                assert drawing['rendered_wood_height_ratio'] <= .9+1e-8
+                assert len(drawing['washes']) == len(tree['nodes'])
+                assert all(w['width'] < 92 and w['height'] < 69 and w['opacity'] == .24 and w['centered'] for w in drawing['washes'])
+                assert drawing['decorations_pass_through']
+                expect(page.locator('#tree-flower > circle')).to_have_count(18)
                 assert page.locator('#tree-canvas text').count() == 0
                 page.locator('#tree-canvas').screenshot(path=str(out / f'round-{round}.png'))
                 page.screenshot(path=str(out / f'round-{round}-page.png'), full_page=True)

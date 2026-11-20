@@ -69,11 +69,11 @@ const view = createDecisionTree(document.querySelector('#decision-tree'), {
 });
 // A visible, half-open question bud; branch geometry and the seeded renderer stay unchanged.
 document.querySelector('#tree-bud').innerHTML =
-  `<path d="M0 6 Q1 3 0 1" fill="none" stroke="#827d58" stroke-width=".9"/>
+  `<g transform="scale(1.4)"><path d="M0 6 Q1 3 0 1" fill="none" stroke="#827d58" stroke-width=".9"/>
 <path d="M0 4 C-3 1 -3 -4 0 -7 C3 -4 3 1 0 4Z" fill="#f8eed9" stroke="#9b8663" stroke-width=".65"/>
 <path d="M0 5 C-5 3 -6 -1 -5 -4 C-2 -4 0 0 0 5Z" fill="#c9b78d" stroke="#8e7e5e" stroke-width=".7"/>
 <path d="M0 5 C5 3 6 -1 5 -4 C2 -4 0 0 0 5Z" fill="#e4d3ae" stroke="#8e7e5e" stroke-width=".7"/>
-<path d="M-3 4 Q0 7 3 4" fill="none" stroke="#898261" stroke-width=".8"/>`;
+<path d="M-3 4 Q0 7 3 4" fill="none" stroke="#898261" stroke-width=".8"/></g>`;
 document.querySelector('#tree-canvas defs').insertAdjacentHTML(
   'beforeend',
   `<g id="tree-deferred"><circle r="5.7" fill="#e5e8e4" stroke="#566d70" stroke-width="1"/>
