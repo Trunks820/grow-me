@@ -165,14 +165,24 @@ function handoffFixture(t) {
   }
   put('design', 'design', `<p data-kind="requirement" id="R1">报名后发送通知</p>
     <ul><li data-kind="question" id="Q1">谁维护<strong>通知模板</strong>？</li><li data-kind="question" id="Q2">谁确认交付日期？</li></ul>`);
-  const plan = `<article data-kind="work" id="W2" data-requirements="R1" data-criteria="AC2" data-depends="W1" data-questions="deferred-b Q1">
-      <h3>发送通知</h3><p data-field="goal">报名后发送<strong>一条</strong>通知。</p><span data-field="status">planned</span>
-    </article><article data-kind="phase" id="W1" data-requirements="R1" data-criteria="AC1">
+  const plan = `<div data-kind="work" id="W2" data-requirements="R1" data-criteria="AC2" data-depends="W1" data-questions="deferred-b Q1">
+      <div data-field="effects"><h3>撤不回的动作</h3><ul>
+        <li>写线上数据库：执行&nbsp; <code>add_xxx</code><span hidden>隐藏文字</span></li>
+        <li><strong>对外</strong>发通知<template>模板文字</template></li>
+      </ul></div>
+      <p>报名后发送<strong>一条</strong>通知。</p><span data-field="status">planned</span>
+    </div><article data-kind="phase" id="W1" data-requirements="R1" data-criteria="AC1">
       <h3>记录报名</h3><p data-field="goal">保存报名回执。</p>
-    </article><p data-kind="work" id="W3">整理操作说明</p>`;
+      <ul data-field="effects"><li>　无&nbsp;</li></ul>
+    </article><p data-kind="work" id="W3">整理操作说明</p>
+    <article data-kind="phase" id="W4"><p>核对上线窗口</p>
+      <ul data-field="effects"><li>暂无</li><li>没有</li></ul>
+    </article><article data-kind="work" id="W5"><p>整理回执模板</p>
+      <div data-field="effects">撤不回的动作</div>
+    </article>`;
   put('plan', 'plan', plan);
   const acceptance = `<article data-kind="criterion" id="AC1" data-requirements="R1"><p>报名成功后收到 <strong>回执</strong>。</p><span data-field="status">unverified</span></article>
-    <article data-kind="criterion" id="AC2" data-requirements="R1"><p>确认 A &amp; B。</p><p>只发送一次。</p><span data-field="status">unverified</span></article>`;
+    <article data-kind="criterion" id="AC2" data-requirements="R1"><p>确认 A &amp; B。</p><div data-field="effects"><ul><li>只发送一次。</li></ul></div><span data-field="status">unverified</span></article>`;
   put('acceptance', 'acceptance', acceptance);
   return {
     file, manifest: join(dirname(file), 'task.manifest.json'), frozen, plan, acceptance, put,
@@ -195,14 +205,16 @@ test('AC7 final assembly exports ordered packs and question assignments with an 
   assert.equal(JSON.parse(stdout).manifest_file, s.manifest);
   assert.ok(existsSync(s.file));
   const manifest = JSON.parse(readFileSync(s.manifest, 'utf8'));
-  const empty = { external_effects: [], scope_files: [], tags: [] };
+  const empty = { scope_files: [], tags: [] };
   assert.deepEqual(manifest, {
     project: s.frozen.topic,
     upstream_source: `grow-me session ${s.frozen.session_id} / revision ${s.frozen.revision}`,
     packs: [
-      { id: 'W2', title: '发送通知', goal: '报名后发送一条通知。', depends_on: ['W1'], acceptance_criteria: ['AC2 · 确认 A & B。 只发送一次。'], open_questions: ['邮件 & 短信用哪种？', '谁维护通知模板？'], ...empty },
-      { id: 'W1', title: '记录报名', goal: '保存报名回执。', depends_on: [], acceptance_criteria: ['AC1 · 报名成功后收到 回执。'], open_questions: ['几点开始通知？', '谁确认交付日期？'], ...empty },
-      { id: 'W3', title: '整理操作说明', goal: '整理操作说明', depends_on: [], acceptance_criteria: [], open_questions: [], ...empty }
+      { id: 'W2', title: '报名后发送一条通知。', goal: '报名后发送一条通知。', depends_on: ['W1'], acceptance_criteria: ['AC2 · 确认 A & B。 只发送一次。'], open_questions: ['邮件 & 短信用哪种？', '谁维护通知模板？'], external_effects: ['写线上数据库：执行 add_xxx', '对外发通知'], ...empty },
+      { id: 'W1', title: '记录报名', goal: '保存报名回执。', depends_on: [], acceptance_criteria: ['AC1 · 报名成功后收到 回执。'], open_questions: ['几点开始通知？', '谁确认交付日期？'], external_effects: [], ...empty },
+      { id: 'W3', title: '整理操作说明', goal: '整理操作说明', depends_on: [], acceptance_criteria: [], open_questions: [], external_effects: [], ...empty },
+      { id: 'W4', title: '核对上线窗口', goal: '核对上线窗口', depends_on: [], acceptance_criteria: [], open_questions: [], external_effects: ['暂无', '没有'], ...empty },
+      { id: 'W5', title: '整理回执模板', goal: '整理回执模板', depends_on: [], acceptance_criteria: [], open_questions: [], external_effects: [], ...empty }
     ]
   });
   const finalHtml = readFileSync(s.file);

@@ -43,31 +43,41 @@ function readRecord(html) {
   const anchors = [];
   const revisions = [];
   const stack = [];
-  function addText({ owner, field, visible }, value) {
-    if (visible && owner) owner._text[field].push(value);
+  function addText({ owner, field, visible, effectText }, value) {
+    if (!visible || !owner) return;
+    if (field === 'effects') effectText?.push(value);
+    else owner._text[field].push(value);
   }
 
   parseTaskHtml(html, {
     start(tag, attrs) {
-      let { owner, field, visible } = stack.at(-1) ?? { field: 'body', visible: true };
+      let { owner, field, visible, effectText } = stack.at(-1) ?? { field: 'body', visible: true };
       visible &&= !invisible.has(tag);
       if (attrs.id) ids.set(attrs.id, (ids.get(attrs.id) ?? 0) + 1);
       if (Object.hasOwn(attrs, 'data-task-record')) revisions.push(attrs['data-revision'] || '');
-      if (visible && Object.hasOwn(attrs, 'data-kind')) {
-        attrs._text = { body: [], title: [], goal: [], status: [] };
+      if (visible && field !== 'effects' && Object.hasOwn(attrs, 'data-kind')) {
+        attrs._text = { body: [], title: [], goal: [], status: [], effects: [] };
         entries.push(attrs);
         owner = attrs;
         field = 'body';
+        effectText = undefined;
       }
       if (owner) {
-        if (attrs['data-field'] === 'status') field = 'status';
+        if (field === 'effects' || (workKinds.has(kind(owner)) && attrs['data-field'] === 'effects')) {
+          field = 'effects';
+          visible &&= !Object.hasOwn(attrs, 'hidden');
+          if (tag === 'li' && visible) {
+            effectText = [];
+            owner._text.effects.push(effectText);
+          }
+        } else if (attrs['data-field'] === 'status') field = 'status';
         else if (workKinds.has(kind(owner))) {
           if (attrs['data-field'] === 'goal') field = 'goal';
           else if (field === 'body' && headings.has(tag) && !text(owner, 'title')) field = 'title';
         }
       }
       if (tag === 'a' && attrs.href?.startsWith('#')) anchors.push(unquote(attrs.href.slice(1)));
-      const frame = { tag, owner, field, visible };
+      const frame = { tag, owner, field, visible, effectText };
       if (blocks.has(tag)) addText(frame, ' ');
       if (!VOID_TAGS.has(tag)) stack.push(frame);
     },
@@ -102,7 +112,9 @@ function manifestPacks(work, questions, index, errors) {
         ref => `${ref} · ${text(index.get(ref), 'body')}`
       ),
       open_questions: questionIds.map(ref => questions.get(ref)),
-      external_effects: [],
+      external_effects: item._text.effects
+        .map(parts => normalizeTaskSpace(parts.join('')))
+        .filter(effect => effect !== '无'),
       scope_files: [],
       tags: []
     };

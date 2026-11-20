@@ -16,6 +16,21 @@ Use this guide when `project-requirement-writer` is not installed. If it is avai
 2. **开发清单**: independently verifiable deliverables with actual dependencies and visible status. Use `data-kind="work"` or `data-kind="phase"` with a stable ID, a heading, a visible `data-field="goal"`, `data-requirements="R1"`, `data-criteria="AC1"` and optional `data-constraints` / `data-depends`. Put the visible state in `<span data-field="status">planned</span>`. Link to definitions rather than copying them. Do not invent development tasks for an interview whose scope is reflection or documentation only.
 3. **验收标准**: each criterion gives its source requirement, scenario/actions, observable pass condition and verification method. Use `data-kind="criterion"`, `data-requirements="R1"` and a visible status of `unverified`, `passed`, `failed`, `blocked` or `stale`. Generated criteria begin unverified; only record checks that actually ran. Human acceptance stays unverified until the human confirms it.
 
+In 开发清单, add one `data-field="effects"` block inside each work item or phase. List the irreversible actions that executing that item will perform, one per `<li>`. Use `<li>无</li>` when the item has none. The attribute can go directly on the `<ul>`. The manifest exports only the list items, in order, with normalized whitespace. A standalone `无` is omitted. An older plan without the block still exports an empty list.
+
+- Include writes to production or other real databases (including running migrations), deployments or enabling production flags, outbound messages, notifications or emails, paid API calls (including batch calls), and deleting or overwriting user data.
+- Exclude local commits, work against test databases, and code-only changes. For a migration script that will be written but left unrun, mention the irreversible production step in the handoff notes.
+
+```html
+<div data-kind="work" id="W1">
+  <h3>上线报名记录</h3>
+  <div data-field="effects">
+    撤不回的动作：
+    <ul><li>写线上数据库：执行迁移 add_xxx</li></ul>
+  </div>
+</div>
+```
+
 Keep business operations and outcomes readable. Fold commands, schema details and run logs into adjacent native `<details>` sections. All canonical text must remain in semantic HTML and readable offline without scripts; the bundled shell handles tabs, anchors and read-only task packages.
 
 Write each additional 待确认 item once as a visible `data-kind="question"` entry with a stable ID such as `Q1`, and link to it from the other views. Use space-separated IDs in `data-questions="deferred-timing Q1"` on every work item that needs those answers. Use the generated pending-entry IDs for deferred interview questions (see the progressive guide). Unlinked pending items go to the first work item without dependencies.

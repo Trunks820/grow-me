@@ -31,7 +31,7 @@ description: 用本机网页逐轮澄清需求，将用户提交回传当前对�
    - 查到新用户事件、发布下一轮、更新写作进度或发布章节时自动续租 3 分钟。预计连续超过 3 分钟没有续租动作时，开启[心跳](references/runtime.md#工作租约与心跳)，做完即停并短查。`work.mjs` 已管理查代码的心跳。
    - 访谈进行中收到 `request_plan` 或查到 `plan_requested: true` 时，丢弃未发布题目，按当前答案准备 offer 并等待用户保存。把没问到的决策和标为待定的问题列入三视图的“待确认”。
 5. 保存后用 `check.mjs` 回执的 `document.job_id` 或 `/document/status` 的 `job_id` 执行 claim，不再新开代码调查。用 `render-chapter.mjs` 渲染冻结答案原话，AI 只写说明。**每写完一章，立刻运行 `compose-document.mjs --preview --url <local-url>` 发布成功，再写下一章。** 参数和校验见分章交付。
-   - 给相关开发项加 `data-questions`。用 `compose-document.mjs` 定稿，全文校验通过后自动在方案旁写 `task.manifest.json`。交接只取方案与冻结访谈，不查代码、不估改动规模。
+   - 给相关开发项加 `data-questions`。开发项的撤不回动作写进 `data-field="effects"` 块，导出为 `external_effects`。用 `compose-document.mjs` 定稿，全文校验通过后自动在方案旁写 `task.manifest.json`。交接只取方案与冻结访谈，不查代码、不估改动规模。
 6. 恢复后先运行 `check.mjs`，核对身份、实例和 revision；curl GET 不算轮询。服务不在时按 [恢复规则](references/runtime.md#恢复原会话) 从原文件重启后立即短查。复制提醒只含会话编号、轮次、地址。
 
 开发或交付前读 [验证与计时](references/verification.md)；等待、心跳和暂停以 [runtime](references/runtime.md) 为准。保留真实失败与未测项；CLI 安装成功、受控浏览器通过都不等于另一个助手真跑通过。
