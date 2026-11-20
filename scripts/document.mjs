@@ -64,7 +64,8 @@ export function validateDocument(
     422
   );
   requireValue(attribute('data-source-digest') === fingerprint(tree), '文档源内容指纹不匹配', 422);
-  if (jobId) requireValue(attribute('data-source-job') === jobId, '文档生成任务已过期', 409);
+  if (jobId)
+    requireValue(attribute('data-source-job') === jobId, '文档 data-source-job 与当前生成任务不符');
   if (!partial) requireValue(attribute('data-generating') !== 'true', '需要定稿全文', 422);
   const tags = body.match(/<[a-zA-Z][^>]*>/g) ?? [];
   const ids = tags.flatMap(tag =>
@@ -132,6 +133,7 @@ export class DocumentBridge {
     this.phase = 'idle';
     this.offeredRevision = null;
     this.jobId = null;
+    this.replacedJobs = new Set();
     this.error = null;
     this.startedAt = null;
     this.updatedAt = Date.now();
@@ -206,6 +208,20 @@ export class DocumentBridge {
       this.changed();
     }
   }
+  requireJob(body, phase) {
+    const hint = '请从 check.mjs 回执的 document.job_id 或 GET /document/status 取当前 job_id';
+    requireValue(
+      body.job_id != null && (typeof body.job_id !== 'string' || body.job_id.trim()),
+      `缺少 job_id。${hint}`
+    );
+    requireValue(!this.replacedJobs.has(body.job_id), `生成请求已过期。${hint}`);
+    if (this.jobId !== null)
+      requireValue(body.job_id === this.jobId, `job_id 与当前生成任务不符。${hint}`);
+    requireValue(
+      this.phase === phase,
+      `当前阶段是 ${this.phase}，不能 ${body.action}（需要 ${phase}）`
+    );
+  }
   control(body) {
     const tree = this.getTree();
     requireValue(
@@ -248,6 +264,7 @@ export class DocumentBridge {
           '当前不能重试'
         );
         this.phase = 'requested';
+        if (this.jobId !== null) this.replacedJobs.add(this.jobId);
         this.jobId = randomUUID();
         this.error = null;
         this.startedAt = Date.now();
@@ -256,15 +273,13 @@ export class DocumentBridge {
         this.publishedAt.clear();
         break;
       case 'claim':
-        requireValue(
-          tree.status === 'complete' && this.phase === 'requested' && body.job_id === this.jobId,
-          '生成请求已过期'
-        );
+        this.requireJob(body, 'requested');
+        requireValue(tree.status === 'complete', '请先保存访谈再 claim');
         this.phase = 'generating';
         this.stage = 'drafting';
         break;
       case 'progress':
-        requireValue(this.phase === 'generating' && body.job_id === this.jobId, '生成请求已过期');
+        this.requireJob(body, 'generating');
         requireValue(
           ['drafting', 'design', 'plan', 'acceptance', 'checking'].includes(body.stage),
           '未知生成阶段',
@@ -273,7 +288,7 @@ export class DocumentBridge {
         this.stage = body.stage;
         break;
       case 'chapter': {
-        requireValue(this.phase === 'generating' && body.job_id === this.jobId, '生成请求已过期');
+        this.requireJob(body, 'generating');
         const content = validateDocument(this.file + '.preview.html', tree, this.jobId, {
           partial: true,
           chapterId: body.chapter_id
@@ -310,19 +325,15 @@ export class DocumentBridge {
         break;
       }
       case 'ready':
-        requireValue(
-          tree.status === 'complete' && this.phase === 'generating' && body.job_id === this.jobId,
-          '生成请求已过期'
-        );
+        this.requireJob(body, 'generating');
+        requireValue(tree.status === 'complete', '请先保存访谈再 ready');
         validateDocument(this.file, tree, this.jobId);
         this.phase = 'ready';
         this.error = null;
         break;
       case 'failed':
-        requireValue(
-          tree.status === 'complete' && this.phase === 'generating' && body.job_id === this.jobId,
-          '生成请求已过期'
-        );
+        this.requireJob(body, 'generating');
+        requireValue(tree.status === 'complete', '请先保存访谈再 failed');
         this.phase = 'failed';
         this.error = publicError(body.error, '文档生成遇到问题，请重试。');
         break;

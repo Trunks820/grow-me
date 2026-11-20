@@ -95,7 +95,7 @@ test('review exit starts a wait, polling and unrelated revisions do not reset it
  let tree=seed();const progress=new InterviewProgress(()=>tree),initial=progress.status().started_at;assert.ok(initial);
  tree=reopenDecision(tree,{id:'a',expected_revision:0});progress.onMutation();assert.equal(progress.status().stage,'review');assert.equal(progress.status().started_at,null);
  tree=editDecision(tree,{id:'a',expected_revision:1,answer:tree.nodes[0].answer});progress.onMutation();assert.equal(progress.status().stage,'review');tree=editDecision(tree,{id:'c',expected_revision:2,answer:tree.nodes[2].answer});progress.onMutation();const since=progress.status().started_at;assert.ok(since);assert.equal(progress.status().started_at,since);
- const bytes=JSON.stringify(tree);assert.throws(()=>publishRound(tree,{expected_revision:3,round:3,nodes:[]}),/round needs nodes/);assert.equal(JSON.stringify(tree),bytes);
+ const bytes=JSON.stringify(tree);assert.throws(()=>publishRound(tree,{expected_revision:3,round:3,nodes:[]}),/round needs at least one node/);assert.equal(JSON.stringify(tree),bytes);
 });
 test('a completed chapter opens before the other views; unfinished, stale and protocol fragments cannot publish',t=>{
  const s=setup(t),status=s.bridge.status(),a=status.source.chapters[0],b=status.source.chapters[1],p=part(status,'chapter','<p>已经写好的主题正文</p>',{chapter_id:a.id,title:'已完成主题'});
@@ -129,5 +129,5 @@ test('three independently written views and chapter pieces assemble deterministi
  const s=setup(t),status=s.bridge.status(),parts=status.source.chapters.map(c=>part(status,'chapter','<p>该主题的正式方案</p>',{chapter_id:c.id}));
  parts.push(part(status,'design','<article id="R1" data-kind="requirement"><h3>需求定义</h3><p>确认需求</p></article>'),part(status,'plan','<article id="W1" data-kind="work" data-requirements="R1" data-criteria="AC1"><h3>开发项</h3><span data-field="status">planned</span><a href="#R1">需求</a><a href="#AC1">验收</a></article>'),part(status,'acceptance','<article id="AC1" data-kind="criterion" data-requirements="R1"><h3>验收定义</h3><span data-field="status">unverified</span><a href="#R1">需求</a></article>'));
  const content=composeDocument(status,parts).html;assert.equal(composeDocument(status,[...parts].reverse()).html,content);writeFileSync(s.bridge.file,content);validateDocument(s.bridge.file,s.tree(),status.job_id);s.control({action:'ready'});assert.equal(s.bridge.status().phase,'ready');assert.ok(s.bridge.status().chapters.every(c=>c.status==='ready'));assert.match(s.bridge.read(),/data-kind="criterion"/);
- writeFileSync(s.bridge.file,content.replace('data-source-job="'+status.job_id+'"','data-source-job="expired-job"'));assert.throws(()=>s.bridge.read(),/生成任务已过期/,'a late writer cannot silently replace the current ready job');
+ writeFileSync(s.bridge.file,content.replace('data-source-job="'+status.job_id+'"','data-source-job="expired-job"'));assert.throws(()=>s.bridge.read(),/data-source-job 与当前生成任务不符/,'a late writer cannot silently replace the current ready job');
 });

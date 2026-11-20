@@ -56,7 +56,7 @@ Use **仍然有效** to keep a confirmed answer or **仍待定** to keep a defer
 | POST | `/ai/check` | `{expected_revision, expected_instance_id}`; identity-bound AI query receipt in memory, returns current progress |
 | POST | `/submit` | `{round, expected_revision, answers:[{id,answer}]}` for every open question of the current round |
 | POST | `/request-plan` | `{round, expected_revision, answers:[{id,answer}]}` with any locally confirmed or deferred drafts for the current round |
-| POST | `/round` | `{round, expected_revision, nodes:[...]}`; publishes the next round, preserving prior nodes |
+| POST | `/round` | `{round, expected_revision, nodes:[...]}`; each new node uses the requested `round`, `status: "pending"`, and an explicit `answer: null` |
 | POST | `/decision` | `{id, expected_revision, answer}`; revise or explicitly reconfirm one node |
 | POST | `/reopen` | `{id, expected_revision}`; mark this node and all descendants `needs_review`, retaining answers |
 | POST | `/finish` | `{expected_revision}`; save `complete`, release waits, exit and release port |
@@ -95,12 +95,14 @@ Waiting loops a visual extension, without adding rounds/nodes or cumulative tree
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | /document/control | action offer / save / claim / progress / chapter / ready / failed / retry / close, with expected_session_id and expected_revision; job completion also requires the current job_id |
+| POST | /document/control | action offer / save / claim / progress / chapter / ready / failed / retry / close, with expected_session_id and expected_revision; claim / progress / chapter / ready / failed also require the current job_id |
 | GET | /document/status | phase, control sequence, offered revision, job, failure and source context derived from tree.json |
 | GET | /document/wait?after=S | Bounded current-conversation wait for a newer control sequence; pending is normal |
 | GET | /document | Source-validated standalone HTML; ?download=1 downloads the final file; ?chapter=ID reads an already validated chapter snapshot during generation |
 | GET | /progress | Transient waiting start, server clock, AI presence, stage, actual round and completed round count |
 | GET | /context | Bounded decision summary, exact latest answers, full dependency/status index and source revision/digest |
+
+Get the current job ID from `check.mjs` (`document.job_id`) or `GET /document/status` (`job_id`) after save or retry. HTTP 409 identifies a missing or mismatched `job_id`, a wrong phase, or a job known to have been replaced by a retry in this instance.
 
 Offer is valid only while the current tree revision is fully answered and review-free. A canonical mutation invalidates it. Human save uses the existing finish model to atomically freeze complete and increment revision once. The read-only preview remains alive. Claim enters generating; only source-valid output can become ready. progress accepts fixed stage names, never arbitrary stream text. chapter accepts a root chapter_id and validates the fixed <document_file>.preview.html sibling against the current source/job, all three views and a completed chapter in design-view (data-chapter-ready="true"). It freezes an immutable readable snapshot for that chapter; unpublished chapters and the final document stay unavailable. Retry clears snapshots and replaces the job. The UI labels unripe fruit “生成中”, and only opens source-matching ready chapters. Failure messages are short operational text, not raw protocol output. See [progressive writer handoff](progressive-writer.md). Failure/retry keeps the identical frozen tree and creates a fresh transient job. Closing the preview exits and releases the port. The original /finish still immediately closes an active interview.
 

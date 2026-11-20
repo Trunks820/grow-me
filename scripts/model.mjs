@@ -292,23 +292,27 @@ export function publishRound(tree, body) {
     'current round is not answered',
     409
   );
-  requireValue(Array.isArray(body.nodes) && body.nodes.length > 0, 'round needs nodes');
+  requireValue(Array.isArray(body.nodes), 'nodes must be an array');
+  requireValue(body.nodes.length > 0, 'round needs at least one node');
   const candidates = structuredClone(body.nodes);
-  for (const n of candidates)
-    requireValue(
-      n &&
-        typeof n === 'object' &&
-        (!n.recommendation || Array.isArray(n.recommendation.source_ids)),
-      'recommendation needs source_ids'
-    );
-  bindRecommendations(next, candidates);
   for (const n of candidates) {
+    requireValue(n && typeof n === 'object' && !Array.isArray(n), 'new question must be an object');
+    const label = nonempty(n.id) ? `new question ${n.id}` : 'new question without an id';
+    if (n.recommendation)
+      requireValue(
+        Array.isArray(n.recommendation.source_ids),
+        `${label}: recommendation.source_ids must be an array`
+      );
+    requireValue(n.round === body.round, `${label}: round must be ${body.round}`);
+    requireValue(n.status === 'pending', `${label}: status must be "pending"`);
     requireValue(
-      n.round === body.round && n.status === 'pending' && n.answer === null,
-      'new questions must be pending in the new round'
+      Object.hasOwn(n, 'answer'),
+      `${label}: missing answer field. Write "answer": null`
     );
+    requireValue(n.answer === null, `${label}: answer must be null`);
     ready(tree, n);
   }
+  bindRecommendations(next, candidates);
   next.nodes.push(...candidates);
   next.current_round = body.round;
   next.revision++;

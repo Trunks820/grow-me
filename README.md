@@ -12,7 +12,7 @@
 
 ## 怎么用
 
-需要 Node.js 22+，以及能读取 `SKILL.md`、运行终端和短查询的 AI 编码助手。下载 ZIP 后解压出 `grow-me` 目录即可；通过克隆安装时另需 Git。当前工作流在 Codex 中实测；其他助手需要具备相同能力，兼容性待验证。Python 只用于文档校验和开发测试。
+需要 Node.js 22+，以及能读取 `SKILL.md`、运行终端和短查询的 AI 编码助手。**保存定稿必须安装 Python 3.10+**，开访谈前用 Windows 的 `python --version` 或 macOS/Linux 的 `python3 --version` 确认能运行。下载 ZIP 后解压出 `grow-me` 目录即可；通过克隆安装时另需 Git。当前工作流在 Codex 中实测；其他助手需要具备相同能力，兼容性待验证。
 
 ### 跟 AI 一起梳理一个真实需求
 
@@ -90,7 +90,7 @@ npm run demo
 
 - 服务只监听 `127.0.0.1`，朋友需要在自己的电脑运行；这不是托管网站。
 - 实际出题和文档生成耗时取决于 AI 助手与需求内容。分片组装、模板复用和摘要输入已经提供，真实提速尚未完成对比验收。
-- Python 3.10+ 用于内置 writer 校验；Playwright 仅供开发测试，普通答题无需安装浏览器测试依赖。
+- Playwright 仅用于浏览器开发测试。
 - 原始访谈、用户答案、聊天记录、本机运行日志与私人技能配置均不在仓库内。提交 Issue 或截图前，请自行去掉个人回答。
 
 ## 帮忙试用时，记这四类时间
@@ -118,6 +118,12 @@ python tests/wait_flow_browser.py --work outputs/qa/waiting
 python tests/seeded_growth.py --work outputs/qa/seeded
 python tests/choices_browser.py --work outputs/qa/choices
 python tests/schema_acceptance.py
+```
+
+Linux（包括启用 PEP 668 的 Debian/Ubuntu）先用 `python3 -m venv .venv` 创建虚拟环境，再执行 `. .venv/bin/activate`，在环境内运行上面的 `python` 命令。只需安装 Chromium。可选的 `--with-deps` 用于安装系统依赖，在 Debian/Ubuntu 上需要 root 权限和 apt。Chromium 下载失败时可以指定镜像，例如：
+
+```sh
+PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright python -m playwright install chromium
 ```
 
 Node 测试覆盖 v2 校验、v1 只读兼容、依赖复核、文档任务、确定性树形与 200 个布局种子；Chromium 测试覆盖答题、断线、长等待、章节跳转和 28 题布局。受控时钟与合成数据不算真实模型的性能测试。

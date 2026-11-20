@@ -10,7 +10,7 @@ Every newly authored question, including first-round roots, supplies optional-v2
 
 ## Write and publish one chapter at a time
 
-After claiming, save `/document/status` in the workspace as `status.json`. Share a short ID contract among the three views: the same requirement IDs, work/criterion IDs, dependencies, chapter anchors and confirmed decisions. These are transient generation inputs; tree.json remains the only interview state. Avoid reprinting full tree/history or template code in every task.
+After the user saves or retries, get the current `job_id` from `check.mjs` (`document.job_id`) or `GET /document/status` (`job_id`). Use it to claim while the phase is `requested`, then save `/document/status` in the workspace as `status.json`. Share a short ID contract among the three views: the same requirement IDs, work/criterion IDs, dependencies, chapter anchors and confirmed decisions. These are transient generation inputs; tree.json remains the only interview state. Avoid reprinting full tree/history or template code in every task.
 
 Each part is a UTF-8 JSON file in a workspace generation directory:
 
@@ -63,7 +63,7 @@ node <skill>/scripts/compose-document.mjs --context <status.json> --tree <tree.j
 
 For a maintained task page, update the configured HTML in place with current source markers and the same pending-question IDs and text the preview uses. Run the final command with `--existing` in place of `--parts <parts-dir>` to validate that page and export its handoff.
 
-Final assembly checks the source, all views and chapters, then runs `validate_task.py` (`python` on Windows, `python3` elsewhere). After these checks pass, it publishes the final HTML and atomically writes `task.manifest.json` beside it. The manifest uses the frozen interview topic, session and revision, work dependencies, readable acceptance text with AC IDs, and linked pending questions. Unlinked pending items go to the first dependency-free pack. Leave `external_effects`, `scope_files` and `tags` empty. Leave out `estimated_files`, `cross_module` and `risk` and skip code investigation for export. A preview never exports the manifest.
+Final assembly requires Python 3.10+ to run `validate_task.py` (`python` on Windows, `python3` elsewhere). It checks the source, all views and chapters, then runs the validator. After these checks pass, it publishes the final HTML and atomically writes `task.manifest.json` beside it. The manifest uses the frozen interview topic, session and revision, work dependencies, readable acceptance text with AC IDs, and linked pending questions. Unlinked pending items go to the first dependency-free pack. Leave `external_effects`, `scope_files` and `tags` empty. Leave out `estimated_files`, `cross_module` and `risk` and skip code investigation for export. A preview never exports the manifest.
 
 Run `scripts/read_task.py` and applicable display checks, then post ready with the current expected_session_id/expected_revision/job_id. On failure, retain frozen answers, post failed with a concise human-readable error, and retry under the new job. Never put raw SSE events, JSON payloads or traces into a status/error field.
 

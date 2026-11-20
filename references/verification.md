@@ -24,6 +24,8 @@ Job 回归先用 WMI 启动一个立即退出的 Node 进程探测能力。非 W
 
 让被测 AI 按正常流程启动一场新的 v2 访谈、出题和写方案。另开终端运行模拟用户。首次使用可通过 `python -m pip install -r requirements-dev.txt` 和 `python -m playwright install chromium` 准备浏览器测试环境。模拟用户只通过网页点击和填写，并观察网页自己收到的状态回执。被测 AI 可以使用任意工具。
 
+Linux 上先执行 `python3 -m venv .venv` 和 `. .venv/bin/activate`，再安装测试依赖，避免 Debian/Ubuntu 的 PEP 668 限制。只需安装 Chromium；可选的 `--with-deps` 在 Debian/Ubuntu 上需要 root 权限和 apt。浏览器下载失败时可以换镜像，例如 `PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright python -m playwright install chromium`。
+
 ```text
 python tests/sim_user.py --url <网页地址> --answers <answers.json> --report <report.json> --state <tree.json> --timeout 1800
 python tests/sim_user_browser.py --work <离线自测输出目录>

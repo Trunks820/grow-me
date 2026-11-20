@@ -160,6 +160,23 @@ export function composeDocument(status, parts, { preview = false, tree = null, f
   return { html, ready_chapters: [...chapterParts.keys()], views: [...views.keys()] };
 }
 
+export function readHandoffReport({ error, status, signal, stdout, stderr }) {
+  const exit = status === null ? (signal ? `信号 ${signal}` : '无退出码') : `退出码 ${status}`;
+  let reason;
+  if (error) reason = `无法启动全文校验：${error.message}`;
+  else if (status === 9009)
+    reason = `Python 命令不可用，可能指向 Windows 应用商店占位符（${exit}）`;
+  else if (![0, 1].includes(status)) reason = `全文校验异常退出（${exit}）`;
+  else if (!stdout?.trim()) reason = `全文校验没有输出（${exit}）`;
+  if (reason) {
+    const firstLine = stderr?.trim().split(/\r?\n/, 1)[0];
+    throw Error(`保存定稿需要 Python 3.10+。${reason}${firstLine ? `：${firstLine}` : ''}`);
+  }
+  const report = JSON.parse(stdout);
+  if (status !== 0 || !report.valid) throw Error(report.errors.join('；'));
+  return report;
+}
+
 function validateHandoff(file, tree, jobId) {
   validateDocument(file, tree, jobId);
   const questions = [...frozenQuestions(tree)].map(([id, question]) => [questionId(id), question]);
@@ -180,10 +197,7 @@ function validateHandoff(file, tree, jobId) {
       windowsHide: true
     }
   );
-  if (validation.error) throw Error('无法运行全文校验：' + validation.error.message);
-  if (![0, 1].includes(validation.status) || !validation.stdout) throw Error('全文校验程序未完成');
-  const report = JSON.parse(validation.stdout);
-  if (validation.status !== 0 || !report.valid) throw Error(report.errors.join('；'));
+  const report = readHandoffReport(validation);
   return {
     project: tree.topic,
     upstream_source: `grow-me session ${tree.session_id} / revision ${tree.revision}`,

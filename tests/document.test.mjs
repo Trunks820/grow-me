@@ -3,6 +3,7 @@ import{spawn,execFile}from'node:child_process';import{once}from'node:events';imp
 import{mkdtempSync,writeFileSync,readFileSync,mkdirSync,rmSync,realpathSync,existsSync,readdirSync}from'node:fs';
 import{tmpdir}from'node:os';import{join,dirname,basename}from'node:path';import{fileURLToPath}from'node:url';
 import{createServer}from'node:net';import{fingerprint}from'../scripts/document.mjs';import{chapters}from'../assets/topics.mjs';
+import { readHandoffReport } from '../scripts/compose-document.mjs';
 const server=fileURLToPath(new URL('../scripts/server.mjs',import.meta.url));
 const run=promisify(execFile),composer=fileURLToPath(new URL('../scripts/compose-document.mjs',import.meta.url));
 const answer=(id,deps=[])=>({id,question:id+' 的真实问题',rationale:'受控测试：核对文档来源和复核边界。',input:'text',options:[],answer:{option_ids:[],text:'原答案'},depends_on:deps,status:'answered',round:1});
@@ -46,7 +47,9 @@ test('freeze once; failed generation retries same data; stale jobs rejected; val
  const oldJob=requested.job_id;await control({action:'claim',expected_revision:1,job_id:oldJob});
  await control({action:'failed',expected_revision:1,job_id:oldJob,error:'受控测试失败'});
  const retry=await(await control({action:'retry',expected_revision:1})).json();assert.notEqual(retry.job_id,oldJob);
- assert.equal((await control({action:'ready',expected_revision:1,job_id:oldJob})).status,409);
+ const stale = await control({ action: 'ready', expected_revision: 1, job_id: oldJob });
+ assert.equal(stale.status, 409);
+ assert.match((await stale.json()).error, /生成请求已过期.*GET \/document\/status/);
  await control({action:'claim',expected_revision:1,job_id:retry.job_id});mkdirSync(dirname(s.document_file),{recursive:true});
  writeFileSync(s.document_file,documentFixture({...frozen,revision:2},retry.job_id));assert.equal((await control({action:'ready',expected_revision:1,job_id:retry.job_id})).status,422);
  assert.equal((await fetch(s.url+'/document')).status,409);
@@ -61,6 +64,31 @@ test('freeze once; failed generation retries same data; stale jobs rejected; val
  const { ai } = await (await fetch(restored.url + '/progress')).json();
  assert.equal(ai.work_active, false);
  assert.equal(ai.work_until, null);
+});
+
+test('document controls distinguish a missing job ID, a mismatch and a phase conflict', async t => {
+  const s = await start(t);
+  const control = data => post(s.url, '/document/control', { expected_revision: 1, ...data });
+  assert.equal((await control({ action: 'offer', expected_revision: 0 })).status, 200);
+  const saved = await control({ action: 'save', expected_revision: 0 });
+  assert.equal(saved.status, 200);
+  const { job_id } = await saved.json();
+
+  const expectConflict = async (body, pattern) => {
+    const response = await control(body);
+    assert.equal(response.status, 409);
+    const { error } = await response.json();
+    assert.match(error, pattern);
+    assert.doesNotMatch(error, /已过期/);
+  };
+  for (const action of ['claim', 'progress', 'chapter', 'ready', 'failed']) {
+    await expectConflict({ action }, /缺少 job_id.*GET \/document\/status/);
+    await expectConflict({ action, job_id: 'unknown' }, /job_id 与当前生成任务不符/);
+    if (action !== 'claim')
+      await expectConflict({ action, job_id }, new RegExp(`当前阶段是 requested，不能 ${action}`));
+  }
+  assert.equal((await control({ action: 'claim', job_id })).status, 200);
+  await expectConflict({ action: 'claim', job_id }, /当前阶段是 generating，不能 claim/);
 });
 
 test('preview records increasing first publication times, preserves them on repeat, and does not time offline assembly',async t=>{
@@ -189,4 +217,28 @@ test('AC7 invalid question references and acceptance status prevent final public
   assert.deepEqual(readFileSync(s.file), finalHtml);
   assert.deepEqual(readFileSync(s.manifest), manifest);
   assert.deepEqual(readdirSync(dirname(s.file)).sort(), [basename(s.file), basename(s.manifest)].sort());
+});
+
+test('final validation explains Python startup, launcher and output failures', () => {
+  for (const [result, reason] of [
+    [{ error: Error('spawnSync python ENOENT'), status: null }, /ENOENT/],
+    [{ status: 9009, stdout: '' }, /Windows 应用商店占位符.*退出码 9009/],
+    [
+      { status: 2, stderr: 'validator could not read the file\r\nextra detail' },
+      /退出码 2.*validator could not read the file/
+    ],
+    [{ status: null, signal: 'SIGTERM' }, /信号 SIGTERM/],
+    [{ status: 0, stdout: ' \r\n' }, /没有输出.*退出码 0/],
+    [{ status: 1, stdout: '' }, /没有输出.*退出码 1/]
+  ]) {
+    assert.throws(
+      () => readHandoffReport(result),
+      error => {
+        assert.match(error.message, /保存定稿需要 Python 3\.10\+/);
+        assert.match(error.message, reason);
+        assert.doesNotMatch(error.message, /extra detail/);
+        return true;
+      }
+    );
+  }
 });

@@ -153,6 +153,31 @@ test('missing follow-up rationale is rejected by the HTTP publish path without c
   assert.equal(response.status,400);assert.deepEqual(readFileSync(s.file),before);
 });
 
+test('round publication identifies each invalid field on the new question', async t => {
+  const source = node('delivery', { status: 'answered', answer: { option_ids: ['a'], text: '' } });
+  const s = await service(t, tree([source]));
+  const before = readFileSync(s.file);
+  const follow = node('follow', { round: 2, depends_on: ['delivery'] });
+  for (const [overrides, error] of [
+    [{ round: 1 }, /new question follow: round must be 2/],
+    [{ status: 'answered' }, /new question follow: status must be "pending"/],
+    [{ answer: undefined }, /new question follow: missing answer field\. Write "answer": null/],
+    [{ answer: {} }, /new question follow: answer must be null/],
+    [{ recommendation: {} }, /new question follow: recommendation\.source_ids must be an array/]
+  ]) {
+    const response = await s.post('/round', {
+      expected_revision: 0,
+      round: 2,
+      nodes: [{ ...follow, ...overrides }]
+    });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, error);
+    assert.deepEqual(readFileSync(s.file), before);
+  }
+  const accepted = await s.post('/round', { expected_revision: 0, round: 2, nodes: [follow] });
+  assert.equal(accepted.status, 200);
+});
+
 test('optional chapter_id validates dependency roots and survives HTTP publication without altering answers',async t=>{
  const roots=['a','b'].map(id=>node(id,{input:'text',options:[],status:'answered',answer:{option_ids:[],text:id+' 原答案'},chapter_id:id})),s=await service(t,tree(roots)),before=readFileSync(s.file);
  for(const chapter_id of [null,'',' ','missing','follow','b']){

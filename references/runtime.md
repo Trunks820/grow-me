@@ -14,7 +14,9 @@
 
 **A. 宿主能在后台跑命令、结束时唤回 AI**（如 Claude Code）：发布一轮或 offer 后，用宿主后台运行 `check.mjs --url <origin> --session <UUID> --wait`，然后结束本条回复。命令定期报到，一段等待到期会自动续等，不输出、不唤回 AI。收到用户事件时输出与短查同格式 JSON，退出码为 0；服务关闭、会话结束、身份不符退出码为 2，`status` 分别为 `service_closed`、`session_finished`、`identity`。
 
-**B. 宿主做不到**：留在本条回复内，用宿主短等待，每约 10 秒运行一次普通 `check.mjs`，直到收到用户事件。普通 curl GET 不登记 AI 活跃，也不推进游标。
+**B. 宿主做不到**：留在本条回复内，用宿主短等待，每约 10 秒运行一次普通 `check.mjs`，直到收到用户事件。
+
+发现用户提交必须走 `check.mjs`（含 `--wait`）。直接读 `tree.json` 或 `curl /state` 不登记 AI 活跃，也不推进游标。报到超时且没有活跃心跳或工作租约时，页面提示 AI 暂停。
 
 发现用户提交后读 `/context`，精确原文读 `/state`。有黄叶等用户逐题复核；全答后出追问或 offer。候选使用原修订，不能改号重交。
 
