@@ -40,15 +40,29 @@ assert list(validator.iter_errors(old)),'v1 must not accept chapter_id';count+=1
 for input_type in ['text', 'single_choice', 'multi_choice']:
     candidate = copy.deepcopy(sample)
     node = candidate['nodes'][0]
-    node.update(input=input_type, status='answered', answer={'option_ids': [], 'text': '', 'deferred': True})
+    node.update(input=input_type, status='answered')
     if input_type == 'text':
         node['options'] = []
-    validator.validate(candidate)
-    count += 1
-    for value in [False, 'true', None]:
-        node['answer']['deferred'] = value
-        assert list(validator.iter_errors(candidate)), (input_type, value)
+    for flag in ['deferred', 'unclear']:
+        node['answer'] = {'option_ids': [], 'text': '', flag: True}
+        validator.validate(candidate)
         count += 1
+        for value in [False, 'true', None]:
+            node['answer'][flag] = value
+            assert list(validator.iter_errors(candidate)), (input_type, flag, value)
+            count += 1
+    node['answer'].update(unclear=True, deferred=True)
+    assert list(validator.iter_errors(candidate)), input_type
+    count += 1
+
+rephrased = copy.deepcopy(sample)
+rephrased['nodes'][-1]['rephrases'] = rephrased['nodes'][0]['id']
+validator.validate(rephrased)
+count += 1
+for value in [None, '', ' \n ', 42, []]:
+    rephrased['nodes'][-1]['rephrases'] = value
+    assert list(validator.iter_errors(rephrased)), repr(value)
+    count += 1
 
 for input_type in ['text', 'single_choice', 'multi_choice']:
     candidate = copy.deepcopy(sample)

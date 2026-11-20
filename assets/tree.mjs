@@ -1,4 +1,5 @@
-import { primaryGraph, chapters, answerText } from './topics.mjs';
+import { primaryGraph, chapters, displayAnswer } from './topics.mjs';
+import { isDeferred, isUnclear } from './answers.mjs';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const J = i => {
   const x = Math.sin(i * 127.1 + 311.7) * 43758.5453;
@@ -620,7 +621,14 @@ function growingLayout(from, to, progress) {
 }
 const NS = 'http://www.w3.org/2000/svg',
   colors = ['#7fa392', '#c9a36a', '#8ea1b8', '#a7a886', '#c29a8c', '#86a4a4'],
-  names = { pending: '待回答', answered: '已答', needs_review: '待复核' };
+  names = { pending: '待回答', answered: '已答', needs_review: '待复核', deferred: '待定', unclear: '没看懂' },
+  symbols = {
+    pending: 'tree-bud',
+    answered: 'tree-flower',
+    needs_review: 'tree-yellow-leaf',
+    deferred: 'tree-deferred',
+    unclear: 'tree-unclear'
+  };
 function svg(tag, attrs = {}, text) {
   const n = document.createElementNS(NS, tag);
   for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
@@ -639,7 +647,12 @@ const defs = `<defs>
   );
   return petals.join('') + `<circle cx="${x}" cy="${y}" r="${(petal * 0.55).toFixed(2)}" fill="#c08a4a" opacity="${opacity}"/>`;
 }).join('')}</g>
-<g id="tree-yellow-leaf"><ellipse rx="9" ry="3.6" fill="#c9a25e" opacity=".75"/></g></defs>`;
+<g id="tree-yellow-leaf"><ellipse rx="9" ry="3.6" fill="#c9a25e" opacity=".75"/></g>
+<g id="tree-deferred"><circle r="5.7" fill="#e5e8e4" stroke="#566d70" stroke-width="1"/>
+<path d="M-1.5 -2.1v4.2m3 -4.2v4.2" fill="none" stroke="#566d70" stroke-width="1.2" stroke-linecap="round"/></g>
+<g id="tree-unclear"><circle r="6" fill="#f7e3d2" stroke="#78452b" stroke-width="1"/>
+<path d="M-2 -1.75c0 -2.15 4 -2.3 4 -.25C2 -.5 0 -.4 0 .8" fill="none" stroke="#78452b" stroke-width="1.45" stroke-linecap="round"/>
+<circle cy="3" r=".8" fill="#78452b"/></g></defs>`;
 export function createDecisionTree(container, { onNode = () => {}, onFruit = () => {} } = {}) {
   const canvas = container.querySelector('#tree-canvas');
   canvas.innerHTML = defs;
@@ -731,7 +744,7 @@ export function createDecisionTree(container, { onNode = () => {}, onFruit = () 
     for (const [cls, text] of [
       ['k', `第 ${n.round} 轮 · ${root.question}${n.status === 'needs_review' ? ' · 需复核' : ''}`],
       ['', n.question],
-      ['a', answerText(n)]
+      ['a', displayAnswer(n, options.drafts?.get(n.id) ?? n.answer)]
     ]) {
       const p = document.createElement('div');
       p.className = cls;
@@ -1077,7 +1090,11 @@ export function createDecisionTree(container, { onNode = () => {}, onFruit = () 
           view.addEventListener('blur', hideTip);
         }
         const local = opts.drafts?.has(n.id),
-          status = n.status === 'needs_review' ? 'needs_review' : local ? 'answered' : n.status,
+          answer = opts.drafts?.get(n.id) ?? n.answer,
+          status = n.status === 'needs_review' ? 'needs_review'
+            : isUnclear(answer) ? 'unclear'
+              : isDeferred(answer) ? 'deferred'
+                : local ? 'answered' : n.status,
           prior = view.dataset.status;
         view.dataset.status = status;
         view.dataset.round = String(n.round);
@@ -1088,15 +1105,11 @@ export function createDecisionTree(container, { onNode = () => {}, onFruit = () 
           `第 ${n.round} 轮，${n.question}，${names[status]}${local ? '，本轮未提交' : ''}`
         );
         const symbol = view.querySelector('use');
-        symbol.setAttribute(
-          'href',
-          '#' +
-            { pending: 'tree-bud', answered: 'tree-flower', needs_review: 'tree-yellow-leaf' }[
-              status
-            ]
-        );
+        symbol.setAttribute('href', '#' + symbols[status]);
         symbol.setAttribute('transform', status === 'needs_review' ? `rotate(${p.angle})` : '');
-        if (prior && prior !== status && !reduced.matches)
+        if (status === 'unclear' || status === 'deferred')
+          symbol.getAnimations().forEach(animation => animation.cancel());
+        else if (prior && prior !== status && !reduced.matches)
           symbol.animate(
             [
               { opacity: 0.1, transform: 'scale(.15)' },

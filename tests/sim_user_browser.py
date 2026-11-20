@@ -8,10 +8,12 @@ import time
 from pathlib import Path
 
 from browser_acceptance import BASE, Service, document_fixture, node, request, seed
+from sim_user import SimUser, page_target
 
 
 NOTE = '  邮件附上报名入口\n保留 <原文> 和空格  '
 DEFERRED = '等场地回复\n再定日期'
+UNCLEAR = '我想看个例子。'
 
 
 def wait_receipt(child, kind):
@@ -189,13 +191,15 @@ def run_auto_and_find(work):
     followup['recommendation'] = {
         'option_ids': ['all'], 'reason': '两种通知渠道都要核对。', 'source_ids': ['channels'],
     }
-    tree = seed([channels, node('date', '何时上线？'), node('details', '补充要求？'),
+    followup.update(question='报名入口做完后，怎么检查它能用？', rephrases='details')
+    tree = seed([channels, node('date', '何时上线？'), node('details', '报名入口需要补充哪些验收要求？'),
                  priority, node('venue', '场地在哪里？')])
     preset_file = work / 'answers.json'
     preset_file.write_text(json.dumps({'rounds': [
         {'reload_after': 1, 'answers': [
             {'options': [99]}, {'text': '先覆盖报名。'},
             {'keyword': '通知渠道', 'options': [1], 'text': NOTE},
+            {'keyword': '补充哪些验收要求', 'unclear': True, 'text': UNCLEAR},
             {'keyword': '场地', 'deferred': True, 'options': [99], 'text': DEFERRED},
         ]},
         {'enough_after': 1, 'answers': [{'text': '验收报名。'}, {'options': [99]}, {'text': '多余预设'}]},
@@ -236,7 +240,7 @@ def run_auto_and_find(work):
         assert [n['answer'] for n in service.state()['nodes']] == [
             {'option_ids': ['inbox', 'push'], 'text': NOTE},
             {'option_ids': [], 'text': '按你推荐的来，先做最小可用的版本。'},
-            {'option_ids': [], 'text': '先覆盖报名。'},
+            {'option_ids': [], 'text': UNCLEAR, 'unclear': True},
             {'option_ids': ['basic'], 'text': '先覆盖报名。'},
             {'option_ids': [], 'text': DEFERRED, 'deferred': True},
         ]
@@ -261,6 +265,24 @@ def run_auto_and_find(work):
         assert [entry['kind'] for entry in report['rounds']] == ['submit', 'request_plan']
         assert report['checks']['draft_survives_reload']['status'] == '通过'
         assert report['checks']['submission_discovery']['status'] == '已测'
+        assert report['checks']['unclear_rephrased'] == {
+            'status': '通过', 'observations': [{'round': 2, 'linked': True, 'rewritten': True}],
+        }
+        tree = service.state()
+        old = next(n for n in tree['nodes'] if n['id'] == 'details')
+        rephrased = next(n for n in tree['nodes'] if n['id'] == 'check')
+        rephrased['question'] = old['question']
+        sim = SimUser(page_target(service.url), [], None)
+        sim.check_rephrases(tree)
+        del rephrased['rephrases']
+        sim.check_rephrases(tree)
+        assert sim.score()['checks']['unclear_rephrased'] == {
+            'status': '失败',
+            'observations': [
+                {'round': 2, 'linked': True, 'rewritten': False},
+                {'round': 2, 'linked': False, 'rewritten': False},
+            ],
+        }
         print(json.dumps({'status': 'passed', 'auto': True, 'find': True}))
     finally:
         if user.poll() is None:

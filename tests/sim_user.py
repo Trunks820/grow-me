@@ -20,6 +20,7 @@ CHECKS = {
     'recommendation_preselected': '推荐是否预选',
     'answers_unchanged': '提交答案是否保持原样',
     'draft_survives_reload': '刷新保留草稿',
+    'unclear_rephrased': '没看懂的题是否在下一轮换个说法',
     'chapters_published_sequentially': '章节逐章发布',
     'submission_discovery': 'AI 首次发现提交的延迟',
     'false_pause_during_questions': '出题期间暂停误报',
@@ -54,15 +55,19 @@ def read_preset(path):
         answers = plan.get('answers', [])
         require(isinstance(answers, list), f'{prefix}需要 answers 数组。')
         for answer in answers:
-            require(isinstance(answer, dict) and answer.keys() <= {'keyword', 'options', 'text', 'deferred'},
+            require(isinstance(answer, dict) and answer.keys() <= {'keyword', 'options', 'text', 'deferred', 'unclear'},
                     f'{prefix}的答案字段无效。')
             options = answer.get('options', [])
             require(isinstance(options, list) and all(
                 (type(item) is int and item > 0) or (isinstance(item, str) and item.strip())
                 for item in options), f'{prefix}的选项须为标签或从 1 起的序号。')
             require(isinstance(answer.get('text', ''), str) and type(answer.get('deferred', False)) is bool
+                    and type(answer.get('unclear', False)) is bool
                     and ('keyword' not in answer or isinstance(answer['keyword'], str)
                          and answer['keyword'].strip()), f'{prefix}的答案类型无效。')
+            if answer.get('unclear'):
+                require(not answer.get('deferred') and not options,
+                        f'{prefix}标为没看懂的题只需填写补充文字。')
     return rounds
 
 
@@ -89,6 +94,8 @@ def match_answers(nodes, presets, number, auto=False):
 
 def auto_preset(node, preset, recommended_ids):
     text = preset.get('text', '')
+    if preset.get('unclear'):
+        return {'unclear': True, 'text': text}
     if preset.get('deferred'):
         return {'deferred': True, 'text': text}
     if node['input'] == 'text':
@@ -101,6 +108,9 @@ def auto_preset(node, preset, recommended_ids):
 
 
 def expected_answer(node, preset, description):
+    text = preset.get('text', '').replace('\r\n', '\n').replace('\r', '\n')
+    if preset.get('unclear'):
+        return {'option_ids': [], 'text': text, 'unclear': True}
     selected = set()
     for entry in preset.get('options', []):
         options = node['options']
@@ -111,7 +121,6 @@ def expected_answer(node, preset, description):
         require(len(matches) == 1 and matches[0]['id'] not in selected,
                 f'{description}的选项无匹配、标签重复或重复选择。')
         selected.add(matches[0]['id'])
-    text = preset.get('text', '').replace('\r\n', '\n').replace('\r', '\n')
     answer = {'option_ids': [o['id'] for o in node['options'] if o['id'] in selected], 'text': text}
     if preset.get('deferred'):
         answer['deferred'] = True
@@ -189,6 +198,7 @@ def answer_matches(actual, expected):
         actual.get('text') == expected['text']
         and actual.get('option_ids') == expected['option_ids']
         and actual.get('deferred', False) == expected.get('deferred', False)
+        and actual.get('unclear', False) == expected.get('unclear', False)
     )
 
 
@@ -238,6 +248,7 @@ class SimUser:
         self.answer_checks = {}
         self.recommendations = []
         self.reloads = []
+        self.rephrases = []
         self.chapter_steps = []
         self.save_revision = None
         self.identity_changed = False
@@ -318,23 +329,28 @@ class SimUser:
         return {option['id'] for option in recommended}
 
     async def fill_answer(self, node, dialog, answer, number, position):
-        fields = dialog.locator('.choice-group input')
-        await dialog.get_by_role('textbox').fill(answer['text'])
-        single = node['input'] == 'single_choice'
-        for index, option in enumerate(node['options']):
-            wanted = option['id'] in answer['option_ids']
-            if single and wanted:
-                await fields.nth(index).click()
-                if answer.get('deferred'):
-                    # Keep a tentative option by deferring the locally confirmed draft.
-                    await self.marker(node['id']).click()
-                    await self.button('改').click()
+        if answer.get('unclear'):
+            await self.button('没看懂，换个说法').click()
+            await dialog.get_by_role('textbox', name='哪里没看懂？（可不填）', exact=True).fill(answer['text'])
+            await self.button('请 AI 换个说法').click()
+        else:
+            fields = dialog.locator('.choice-group input')
+            await dialog.locator('.question-form').get_by_role('textbox').fill(answer['text'])
+            single = node['input'] == 'single_choice'
+            for index, option in enumerate(node['options']):
+                wanted = option['id'] in answer['option_ids']
+                if single and wanted:
+                    await fields.nth(index).click()
+                    if answer.get('deferred'):
+                        # Keep a tentative option by deferring the locally confirmed draft.
+                        await self.marker(node['id']).click()
+                        await self.button('改').click()
+                elif not single:
+                    await fields.nth(index).set_checked(wanted)
+            if answer.get('deferred'):
+                await self.button('先待定，以后再说').click()
             elif not single:
-                await fields.nth(index).set_checked(wanted)
-        if answer.get('deferred'):
-            await self.button('先待定，以后再说').click()
-        elif not single:
-            await self.button('好了').click()
+                await self.button('好了').click()
         require(await self.marker(node['id']).get_attribute('data-local') == 'true',
                 f'第 {number} 轮第 {position} 题没有形成草稿。')
 
@@ -413,6 +429,21 @@ class SimUser:
                 await self.reload(number, tree['revision'], drafts)
         await self.submit(tree, nodes, drafts, enough, restored=plan.get('reload_after') == count)
 
+    def check_rephrases(self, tree):
+        number = tree['current_round']
+        questions = [node for node in tree['nodes'] if node['round'] == number]
+        earlier = [node for node in tree['nodes'] if node['round'] < number]
+        replaced = {node.get('rephrases') for node in earlier if node['status'] == 'answered'}
+        for old in earlier:
+            if old['id'] in replaced or not (old.get('answer') or {}).get('unclear'):
+                continue
+            matches = [node for node in questions if node.get('rephrases') == old['id']]
+            self.rephrases.append({
+                'round': number,
+                'linked': bool(matches),
+                'rewritten': any(node['question'].strip() != old['question'].strip() for node in matches),
+            })
+
     async def wait_in_browser(self):
         page = self.page
         save = self.button('保存并生成任务文档')
@@ -451,6 +482,7 @@ class SimUser:
                     nodes = [n for n in tree['nodes'] if n['round'] == tree['current_round']
                              and n['status'] == 'pending']
                     if nodes and tree['current_round'] > self.last_round:
+                        self.check_rephrases(tree)
                         if self.submissions:
                             self.submissions[-1]['next_round_visible_at'] = epoch_ms()
                         await self.answer_round(tree, nodes)
@@ -581,6 +613,7 @@ class SimUser:
         preselected = sum(item['preselected'] for item in self.recommendations)
         lost = any(item['restored'] is False for item in self.reloads)
         restored = self.reloads and all(item['restored'] is True for item in self.reloads)
+        rephrased = all(item['linked'] and item['rewritten'] for item in self.rephrases)
         self.report['checks'] = {
             'recommendation_preselected': {
                 'status': FAILED if preselected else PASSED if self.recommendations else UNTESTED,
@@ -592,6 +625,10 @@ class SimUser:
             },
             'draft_survives_reload': {
                 'status': FAILED if lost else PASSED if restored else UNTESTED, 'reloads': self.reloads,
+            },
+            'unclear_rephrased': {
+                'status': FAILED if not rephrased else PASSED if self.rephrases else UNTESTED,
+                'observations': self.rephrases,
             },
             'chapters_published_sequentially': self.chapter_report(),
             'submission_discovery': self.discovery_report(),

@@ -1,7 +1,7 @@
 import { createDecisionTree } from './tree.mjs';
-import { chapters, answerText } from './topics.mjs';
+import { chapters, displayAnswer } from './topics.mjs';
 import { publicError, assistantConnection } from './presentation.mjs';
-import { isDeferred, selectionValid } from './answers.mjs';
+import { isDeferred, isUnclear, isUnresolved, replacedQuestionIds, selectionValid } from './answers.mjs';
 
 const card = document.querySelector('#card'),
   dialog = document.querySelector('#node-dialog'),
@@ -105,15 +105,6 @@ document.querySelector('#tree-bud').innerHTML =
 <path d="M0 5 C-5 3 -6 -1 -5 -4 C-2 -4 0 0 0 5Z" fill="#c9b78d" stroke="#8e7e5e" stroke-width=".7"/>
 <path d="M0 5 C5 3 6 -1 5 -4 C2 -4 0 0 0 5Z" fill="#e4d3ae" stroke="#8e7e5e" stroke-width=".7"/>
 <path d="M-3 4 Q0 7 3 4" fill="none" stroke="#898261" stroke-width=".8"/></g>`;
-document.querySelector('#tree-canvas defs').insertAdjacentHTML(
-  'beforeend',
-  `<g id="tree-deferred"><circle r="5.7" fill="#e5e8e4" stroke="#566d70" stroke-width="1"/>
-<path d="M-1.5 -2.1v4.2m3 -4.2v4.2" fill="none" stroke="#566d70" stroke-width="1.2" stroke-linecap="round"/></g>`
-);
-function displayAnswer(node, answer = node.answer) {
-  const text = answerText(node, answer);
-  return isDeferred(answer) ? ['待定', text].filter(Boolean).join('\n') : text;
-}
 const ready = n =>
   n.depends_on.every(id => state.nodes.find(n => n.id === id)?.status === 'answered');
 const valid = (n, a) => ready(n) && selectionValid(n, a);
@@ -160,7 +151,12 @@ function restoreDrafts() {
     const answer = saved.answers?.[node.id];
     if (valid(node, answer)) {
       const { option_ids, text } = answer;
-      drafts.set(node.id, { option_ids, text, ...(isDeferred(answer) ? { deferred: true } : {}) });
+      drafts.set(node.id, {
+        option_ids,
+        text,
+        ...(isDeferred(answer) ? { deferred: true } : {}),
+        ...(isUnclear(answer) ? { unclear: true } : {})
+      });
     }
   }
   draftsSaved = drafts.size > 0;
@@ -220,6 +216,7 @@ function cancelAdvance() {
   askNext = false;
 }
 function answerReply(node, answer) {
+  if (isUnclear(answer)) return '好，我让 AI 换个说法再问你';
   if (isDeferred(answer)) return deferredReplies[deferredReplyIndex++ % deferredReplies.length];
   const option = node.options.find(option => option.id === answer.option_ids[0]);
   return node.reply ?? option?.reply ?? bloomReplies[bloomReplyIndex++ % bloomReplies.length];
@@ -269,7 +266,7 @@ function updatePresence(previousDisplay) {
   if (isSleeping()) {
     clearTimeout(wakeTimer);
     const answered = state.nodes.filter(node => node.status === 'answered'),
-      flowers = answered.filter(node => !isDeferred(node.answer)),
+      flowers = answered.filter(node => !isUnresolved(node.answer)),
       anchor = flowers.find(node => node.id === lastAnsweredId) ?? flowers.at(-1) ?? answered.at(-1);
     presence = { anchor: anchor?.id };
     presencePanel.dataset.mode = assistantDisplay;
@@ -369,10 +366,13 @@ function docAction(action) {
 }
 function updateMeta() {
   const meta = document.querySelector('#meta'),
-    total = state.nodes.length,
-    submitted = state.nodes.filter(n => n.status === 'answered'),
+    replaced = replacedQuestionIds(state.nodes),
+    nodes = state.nodes.filter(n => !replaced.has(n.id)),
+    total = nodes.length,
+    submitted = nodes.filter(n => n.status === 'answered'),
     done = submitted.length,
     deferred = submitted.filter(n => isDeferred(n.answer)).length,
+    unclear = submitted.filter(n => isUnclear(n.answer)).length,
     review = reviews().length,
     complete = state.status === 'complete';
   // Topic first (what this tree is about), then where we are, then a hairline of progress.
@@ -387,8 +387,9 @@ function updateMeta() {
     )
   );
   if (!complete) progress.append(el('span', ' · 总轮数随回答确定', 'meta-note'));
-  progress.append(el('span', ` · 已确认 ${done - deferred} / ${total}`));
+  progress.append(el('span', ` · 已确认 ${done - deferred - unclear} / ${total}`));
   if (deferred) progress.append(el('span', ` · 待定 ${deferred}`));
+  if (unclear) progress.append(el('span', ` · 没看懂 ${unclear}`, 'meta-unclear'));
   if (drafts.size) progress.append(el('span', ` · 本轮未提交 ${drafts.size}`, 'meta-draft'));
   if (review) progress.append(el('span', ` · 待复核 ${review}`, 'meta-review'));
   const bar = el('span', undefined, 'meta-bar');
@@ -403,14 +404,8 @@ function updateMeta() {
 function updateTree() {
   const finished =
     documentState.phase === 'offered' && documentState.offered_revision === state.revision;
-  const nodes = state.nodes.map(n => {
-    const answer = drafts.get(n.id) ?? n.answer;
-    return isDeferred(answer)
-      ? { ...n, answer: { ...answer, option_ids: [], text: displayAnswer(n, answer) } }
-      : n;
-  });
   view.update(
-    { ...state, nodes },
+    state,
     {
       drafts,
       currentId: noteId,
@@ -427,23 +422,12 @@ function updateTree() {
       )
     }
   );
-  for (const n of nodes) {
-    if (n.status === 'needs_review' || !isDeferred(n.answer)) continue;
-    const marker = nodeTarget(n.id),
-      symbol = marker.querySelector('.tree-symbol');
-    marker.dataset.status = 'deferred';
-    marker.setAttribute(
-      'aria-label',
-      `第 ${n.round} 轮，${n.question}，待定${drafts.has(n.id) ? '，本轮未提交' : ''}`
-    );
-    symbol.setAttribute('href', '#tree-deferred');
-    for (const animation of symbol.getAnimations()) animation.cancel();
-  }
   updateMeta();
   updateNavigation();
 }
 function inputs(n, host) {
-  const value = working.get(n.id) ?? drafts.get(n.id) ?? n.answer ?? { option_ids: [], text: '' };
+  const saved = working.get(n.id) ?? drafts.get(n.id) ?? n.answer,
+    value = saved && !isUnclear(saved) ? saved : { option_ids: [], text: '' };
   const form = el('form', undefined, 'question-form'),
     single = n.input === 'single_choice',
     defer = button('先待定，以后再说', () => saveAnswer({ ...read(), deferred: true }));
@@ -548,19 +532,42 @@ function inputs(n, host) {
     toolbar.append(confirm);
     form.append(toolbar);
   }
-  const reword = el('button', '没看懂，换个说法');
-  reword.type = 'button';
+  const rewordForm = el('form', undefined, 'reword-form'),
+    where = el('textarea', undefined, 'field note-field'),
+    label = el('label', '哪里没看懂？（可不填）'),
+    ask = el('button', '请 AI 换个说法', 'primary'),
+    reword = button('没看懂，换个说法', () => {
+      rewordForm.hidden = !rewordForm.hidden;
+      reword.setAttribute('aria-expanded', String(!rewordForm.hidden));
+      update();
+      positionNote();
+      if (!rewordForm.hidden) where.focus();
+    });
   reword.id = 'reword-question';
-  reword.hidden = true;
-  form.append(reword);
+  rewordForm.id = 'reword-form';
+  rewordForm.hidden = !(saved?.rewordOpen || isUnclear(saved));
+  reword.setAttribute('aria-expanded', String(!rewordForm.hidden));
+  reword.setAttribute('aria-controls', rewordForm.id);
+  reword.disabled = ask.disabled = where.disabled = busy || !ready(n);
+  where.id = 'reword-note';
+  where.rows = 1;
+  where.value = saved?.rewordText ?? (isUnclear(saved) ? saved.text : '');
+  label.htmlFor = where.id;
+  ask.type = 'submit';
+  rewordForm.append(label, where, ask);
+  rewordForm.addEventListener('submit', event => {
+    event.preventDefault();
+    saveAnswer({ option_ids: [], text: where.value, unclear: true });
+  });
   const update = () => {
     if (rendering || !form.isConnected) return;
     const answer = read();
-    working.set(n.id, answer);
+    working.set(n.id, { ...answer, rewordText: where.value, rewordOpen: !rewordForm.hidden });
     if (confirm) confirm.disabled = busy || !valid(n, answer);
   };
   form.addEventListener('input', update);
   form.addEventListener('change', update);
+  rewordForm.addEventListener('input', update);
   if (confirm) confirm.disabled = busy || !valid(n, read());
   if (!ready(n)) {
     form.querySelectorAll('input,textarea').forEach(x => (x.disabled = true));
@@ -580,10 +587,10 @@ function inputs(n, host) {
       handleAnswer(n, answer);
       message('');
       render();
-      if (reducedMotion.matches && roundCanSubmit()) finishAnswerReply();
+      if (reducedMotion.matches && !isUnclear(answer) && roundCanSubmit()) finishAnswerReply();
     }
   }
-  host.append(form);
+  host.append(form, reword, rewordForm);
 }
 async function saveReviewAnswer(node, answer) {
   const ok = await act(async () => {
@@ -592,16 +599,20 @@ async function saveReviewAnswer(node, answer) {
   });
   if (ok && !stopped) {
     handleAnswer(node, answer);
-    if (reducedMotion.matches && roundCanSubmit()) finishAnswerReply();
+    if (reducedMotion.matches && !isUnclear(answer) && roundCanSubmit()) finishAnswerReply();
   }
+}
+function allAnsweredText(nodes) {
+  const unresolved = nodes.some(n => isUnresolved(drafts.get(n.id) ?? n.answer));
+  return `${nodes.length} 题${unresolved ? '都答完了' : '都定了'}`;
 }
 function startRoundDelivery(id) {
   if (busy || stopped || !roundCanSubmit()) return false;
   const bud = visibleBud(id),
-    count = state.nodes.filter(n => n.round === state.current_round).length;
+    round = state.nodes.filter(n => n.round === state.current_round);
   closeNote();
   delivery = { revision: state.revision, remaining: deliveryDelay, deadline: null, timer: null };
-  deliveryCopy.textContent = `这一轮 ${count} 题都定了，我送去给 AI 啦～`;
+  deliveryCopy.textContent = `这一轮 ${allAnsweredText(round)}，我送去给 AI 啦～`;
   deliveryPanel.hidden = false;
   if (!reducedMotion.matches && !document.hidden) {
     const end = deliveryArt.getBoundingClientRect(),
@@ -683,7 +694,7 @@ function renderSummary(host) {
       row.append(
         el('div', n.question),
         el('div', displayAnswer(n, answer), 'answer'),
-        button(isDeferred(answer) ? '回看待定题' : '回看这朵花', () =>
+        button(isUnclear(answer) ? '回看这题' : isDeferred(answer) ? '回看待定题' : '回看这朵花', () =>
           openNode(n.id, nodeTarget(n.id))
         )
       );
@@ -875,7 +886,7 @@ function renderRoundProgress(pending, review) {
   const round = state.nodes.filter(n => n.round === state.current_round),
     remaining = pending.filter(n => !drafts.has(n.id)).length,
     canSubmit = roundCanSubmit(pending),
-    remainingText = canSubmit ? `${round.length} 题都定了` : `还剩 ${remaining} 题`,
+    remainingText = canSubmit ? allAnsweredText(round) : `还剩 ${remaining} 题`,
     progress = el('div', undefined, 'round-progress'),
     dots = el('span', undefined, 'round-dots');
   dots.setAttribute('aria-hidden', 'true');
@@ -1165,7 +1176,10 @@ function renderNote() {
     body.append(el('p', '上游或本题有改动，这个回答需要再确认。', 'review-note'));
   if (noteMode === 'edit') inputs(n, body);
   else {
-    const answer = drafts.get(n.id) ?? n.answer;
+    const answer = drafts.get(n.id) ?? n.answer,
+      label = replacedQuestionIds(state.nodes).has(n.id) ? '已换个说法'
+        : isUnclear(answer) ? '没看懂'
+          : isDeferred(answer) ? '待定' : '已确认';
     body.append(el('p', displayAnswer(n, answer) || '尚未回答。', 'answer'));
     body.append(
       el(
@@ -1174,7 +1188,7 @@ function renderNote() {
           ? '本轮草稿 · 尚未提交'
           : n.status === 'needs_review'
             ? '旧回答 · 待复核'
-            : `第 ${n.round} 轮 · ${isDeferred(answer) ? '待定' : '已确认'}`,
+            : `第 ${n.round} 轮 · ${label}`,
         'draft-hint'
       )
     );
@@ -1187,7 +1201,10 @@ function renderNote() {
     n.status === 'needs_review' &&
     n.answer !== null
   ) {
-    const keep = button(isDeferred(n.answer) ? '仍待定' : '仍然有效', () => saveReviewAnswer(n, n.answer));
+    const keep = button(
+      isUnclear(n.answer) ? '还是没看懂' : isDeferred(n.answer) ? '仍待定' : '仍然有效',
+      () => saveReviewAnswer(n, n.answer)
+    );
     keep.disabled = busy || !ready(n);
     actions.append(keep);
   }

@@ -8,12 +8,13 @@ import {mkdtempSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {validateTree,publishRound} from '../scripts/model.mjs';
+import {validateAnswer,validateTree,publishRound} from '../scripts/model.mjs';
 import {checkOnce} from '../scripts/check.mjs';
 import {fingerprint} from '../scripts/document.mjs';
 import {renderChapter} from '../scripts/render-chapter.mjs';
 import {composeDocument} from '../scripts/compose-document.mjs';
 import {chapters} from '../assets/topics.mjs';
+import {recommendationBasis} from '../assets/answers.mjs';
 import {recommendationDigest} from '../scripts/recommendations.mjs';
 
 const run=promisify(execFile),server=fileURLToPath(new URL('../scripts/server.mjs',import.meta.url)),checker=fileURLToPath(new URL('../scripts/check.mjs',import.meta.url));
@@ -66,6 +67,28 @@ test('v2 validates optional mascot replies without changing the answer source di
   assert.throws(() => validateTree(seed), /single_choice uses option replies/);
 });
 
+test('unclear answers allow optional notes, exclude deferral and preserve existing digest encoding', () => {
+  const answer = { option_ids: [], text: '', unclear: true };
+  for (const input of ['text', 'single_choice', 'multi_choice']) {
+    const question = node('delivery', { input });
+    validateAnswer(question, answer);
+    validateAnswer(question, { ...answer, text: '  哪一类通知？\n想看个例子  ' });
+    assert.throws(() => validateAnswer(question, { ...answer, unclear: false }));
+    assert.throws(() => validateAnswer(question, { ...answer, unclear: 'true' }), /unclear must be a boolean/);
+    assert.throws(() => validateAnswer(question, { ...answer, deferred: true }), /cannot both be true/);
+  }
+  assert.throws(() => validateAnswer(node(), answer, false), /invalid answer fields/);
+
+  const ordinary = { option_ids: ['a'], text: '补充' };
+  const seed = tree([node('ordinary', { answer: { ...ordinary, unclear: false } }),
+    node('deferred', { answer: { ...ordinary, deferred: true } }), node('unclear', { answer })]);
+  assert.equal(recommendationBasis(seed, ['ordinary', 'deferred', 'unclear']), JSON.stringify([
+    { id: 'ordinary', answer: ordinary },
+    { id: 'deferred', answer: { ...ordinary, deferred: true } },
+    { id: 'unclear', answer }
+  ]));
+});
+
 async function generateTask(s, revision) {
   const control = body => s.post('/document/control', body);
   assert.equal((await control({ action: 'offer', expected_revision: revision })).status, 200);
@@ -87,7 +110,7 @@ async function generateTask(s, revision) {
     { source, view: 'plan', html: '<article id="W1" data-kind="work" data-requirements="R1" data-criteria="AC1"><span data-field="status">planned</span>提供报名入口</article>' },
     { source, view: 'acceptance', html: '<article id="AC1" data-kind="criterion" data-requirements="R1"><span data-field="status">unverified</span>可以从统一入口报名</article>' }
   ];
-  writeFileSync(s.document, composeDocument(status, parts).html, 'utf8');
+  writeFileSync(s.document, composeDocument(status, parts, { tree: frozen }).html, 'utf8');
   assert.equal((await control({ action: 'ready', ...job })).status, 200);
   const output = await fetch(s.url + '/document');
   assert.equal(output.status, 200);
@@ -134,6 +157,71 @@ test('AC3 a deferred round submits and renders unresolved questions in all three
     assert.match(list, /class="deferred-questions"><h3>待确认<\/h3>/);
     for (const n of seed.nodes.slice(1)) assert.ok(list.includes(`>${n.question}</a>`), n.question);
   }
+});
+
+test('round accepts a link to an unclear question and replaces it only after the rephrase is submitted', async t => {
+  const seed = legacyV2();
+  const unclear = { option_ids: [], text: '要我确认什么？', unclear: true };
+  const s = await service(t, seed);
+  assert.equal((await s.post('/submit', {
+    round: 2, expected_revision: seed.revision,
+    answers: [{ id: 'confirmation', answer: unclear }]
+  })).status, 200);
+  const submitted = await (await fetch(s.url + '/wait?round=2')).json();
+  assert.equal(submitted.status, 'answered');
+  assert.deepEqual(submitted.answers[0].answer, unclear);
+
+  const follow = node('confirmation-again', {
+    question: '报名成功后，你希望页面上写什么？',
+    input: 'text', options: [], depends_on: ['confirmation'], round: 3, rephrases: 'confirmation'
+  });
+  const timing = node('timing', {
+    question: '哪天开放报名？', input: 'text', options: [], depends_on: ['signup'], round: 3
+  });
+  const publish = candidate => s.post('/round', {
+    round: 3, expected_revision: submitted.revision, nodes: [candidate, timing]
+  });
+  const before = readFileSync(s.file);
+  for (const rephrases of ['missing', 'signup', 'timing', '', null, 2]) {
+    const rejected = await publish({ ...follow, rephrases });
+    assert.equal(rejected.status, 400);
+    assert.match((await rejected.json()).error, /rephrases/);
+    assert.deepEqual(readFileSync(s.file), before);
+  }
+  assert.equal((await publish(follow)).status, 200);
+  const pending = await s.state();
+  assert.equal(pending.nodes.find(n => n.id === follow.id).rephrases, 'confirmation');
+  assert.ok(chapters({ ...pending, status: 'complete' })[0].nodes.some(n => n.id === 'confirmation'));
+  const sameRound = structuredClone(pending);
+  sameRound.nodes.find(n => n.id === follow.id).rephrases = 'timing';
+  assert.throws(() => validateTree(sameRound), /earlier round/);
+
+  const answer = { option_ids: [], text: '报名成功，请留意页面通知。' };
+  const note = { ...unclear, text: '  开放是指 <给谁看>？\n我想看个例子  ' };
+  assert.equal((await s.post('/request-plan', {
+    round: 3, expected_revision: pending.revision,
+    answers: [{ id: follow.id, answer }, { id: timing.id, answer: note }]
+  })).status, 200);
+  const { frozen, chapter, html } = await generateTask(s, pending.revision + 1);
+  assert.deepEqual(frozen.nodes.find(n => n.id === 'confirmation').answer, unclear);
+  assert.deepEqual(frozen.nodes.find(n => n.id === timing.id).answer, note);
+  assert.doesNotMatch(chapter.html, /data-source-node="confirmation"/);
+  const [confirmed, unresolved] = chapter.html.split('<section class="deferred-answers">');
+  assert.match(confirmed, /data-source-node="confirmation-again"/);
+  assert.doesNotMatch(confirmed, /data-source-node="timing"/);
+  assert.match(unresolved, /<h3>待确认<\/h3>/);
+  assert.match(unresolved, /  开放是指 &lt;给谁看&gt;？\n我想看个例子  /);
+  const [, ...views] = html.split(/<section id="(?:design|plan|acceptance)-view"/);
+  assert.equal(views.length, 3);
+  for (const view of views) {
+    const list = view.match(/<section class="deferred-questions">[\s\S]*?<\/section>/)?.[0];
+    assert.ok(list?.includes(`>${timing.question}</a>`));
+  }
+
+  const deferredOld = structuredClone(frozen);
+  deferredOld.nodes.find(n => n.id === 'confirmation').answer = { option_ids: [], text: '', deferred: true };
+  validateTree(deferredOld);
+  assert.ok(chapters(deferredOld)[0].nodes.some(n => n.id === 'confirmation' && n.answer.deferred));
 });
 
 test('AC6 a half-answered v0.2 v2 tree resumes, saves and generates a validated document', async t => {

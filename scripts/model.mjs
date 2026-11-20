@@ -1,4 +1,4 @@
-import { selectionValid } from '../assets/answers.mjs';
+import { isUnclear, selectionValid } from '../assets/answers.mjs';
 import { bindRecommendations } from './recommendations.mjs';
 
 export class InputError extends Error {
@@ -27,12 +27,20 @@ export function assertWritable(tree) {
 }
 export function validateAnswer(node, answer, modern = true) {
   requireValue(
-    keys(answer, modern ? ['option_ids', 'text', 'deferred'] : ['option_ids', 'text']),
+    keys(answer, modern ? ['option_ids', 'text', 'deferred', 'unclear'] : ['option_ids', 'text']),
     'invalid answer fields'
   );
   requireValue(
     answer.deferred === undefined || typeof answer.deferred === 'boolean',
     'deferred must be a boolean'
+  );
+  requireValue(
+    answer.unclear === undefined || typeof answer.unclear === 'boolean',
+    'unclear must be a boolean'
+  );
+  requireValue(
+    !(isUnclear(answer) && answer.deferred === true),
+    'unclear and deferred cannot both be true'
   );
   requireValue(
     selectionValid(node, answer),
@@ -88,7 +96,7 @@ export function validateTree(tree) {
         'depends_on',
         'status',
         'round',
-        ...(modern ? ['rationale', 'recommendation', 'chapter_id', 'reply'] : [])
+        ...(modern ? ['rationale', 'recommendation', 'chapter_id', 'reply', 'rephrases'] : [])
       ]),
       'unknown node field'
     );
@@ -114,6 +122,11 @@ export function validateTree(tree) {
       Number.isInteger(n.round) && n.round > 0 && n.round <= tree.current_round,
       'invalid node round'
     );
+    if (n.rephrases !== undefined)
+      requireValue(
+        nonempty(n.rephrases) && nodes.get(n.rephrases)?.round < n.round,
+        'rephrases must name a question from an earlier round'
+      );
     requireValue(
       Array.isArray(n.options) &&
         n.options.every(
@@ -320,6 +333,13 @@ export function publishRound(tree, body) {
       `${label}: missing answer field. Write "answer": null`
     );
     requireValue(n.answer === null, `${label}: answer must be null`);
+    if (n.rephrases !== undefined) {
+      const previous = tree.nodes.find(node => node.id === n.rephrases);
+      requireValue(
+        isUnclear(previous?.answer),
+        `${label}: rephrases must name a question marked unclear`
+      );
+    }
     ready(tree, n);
   }
   bindRecommendations(next, candidates);

@@ -271,6 +271,9 @@ summary:focus-visible {
 .meta-review {
   color: #8d6931;
 }
+.meta-unclear {
+  white-space: nowrap;
+}
 .meta-bar {
   display: block;
   width: 148px;
@@ -832,6 +835,27 @@ main:has(#card[data-scene='questions']) {
 .choice-group + .defer-answer:hover {
   border-color: var(--line-strong);
   background: var(--wash);
+}
+#reword-question {
+  margin-top: 6px;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.reword-form {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.reword-form label {
+  color: var(--text-2);
+  font-size: 13px;
+}
+.reword-form .note-field {
+  margin-top: 4px;
+}
+.reword-form .primary {
+  margin-top: 8px;
 }
 .recommendation-info {
   margin-top: 6px;

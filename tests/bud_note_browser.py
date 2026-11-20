@@ -134,7 +134,7 @@ def spoken_bud_layout(browser, out, report):
             expect(page.locator('.tree-node[data-status=pending]')).to_have_count(4)
             expect(page.locator('.scene-count')).to_have_text('第 1 轮 · 还剩 4 题')
             expect(page.locator('#node-question')).to_be_focused()
-            expect(page.locator('#reword-question')).to_be_hidden()
+            expect(page.locator('#reword-question')).to_be_visible()
             hit = page.locator('.tree-node[data-node-id=purpose] .tree-hit')
             origin = hit.bounding_box()
             answer_layout(page, 'purpose')

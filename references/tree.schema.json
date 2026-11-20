@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "grow-me v2 (v1 read-only compatibility)",
-  "description": "Runtime additionally verifies IDs, dependencies, exclusive selections and recommendation source binding.",
+  "description": "Runtime additionally verifies IDs, dependencies, rephrased questions, exclusive selections and recommendation source binding.",
   "oneOf": [
     {
       "$ref": "tree-v1.schema.json"
@@ -115,16 +115,27 @@
         "deferred": {
           "type": "boolean",
           "description": "True submits the question as unresolved. Option IDs and text may both be empty."
+        },
+        "unclear": {
+          "type": "boolean",
+          "description": "True asks for the question to be rephrased. Option IDs and text may both be empty."
+        }
+      },
+      "not": {
+        "required": ["deferred", "unclear"],
+        "properties": {
+          "deferred": { "const": true },
+          "unclear": { "const": true }
         }
       }
     },
     "confirmedAnswer": {
       "type": "object",
       "not": {
-        "required": ["deferred"],
-        "properties": {
-          "deferred": { "const": true }
-        }
+        "anyOf": [
+          { "required": ["deferred"], "properties": { "deferred": { "const": true } } },
+          { "required": ["unclear"], "properties": { "unclear": { "const": true } } }
+        ]
       }
     },
     "recommendation": {
@@ -265,6 +276,12 @@
           "minLength": 1,
           "pattern": "\\S",
           "description": "Optional root question ID used for document membership; runtime validates it is a root reachable through depends_on."
+        },
+        "rephrases": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "Optional ID of the earlier question this question rephrases."
         },
         "depends_on": {
           "type": "array",

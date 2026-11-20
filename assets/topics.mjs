@@ -1,3 +1,5 @@
+import { isDeferred, isUnclear, replacedQuestionIds } from './answers.mjs';
+
 // Read-only projections shared by the renderer and document bridge.
 export function primaryGraph(tree) {
   const entries = new Map(tree.nodes.map((node, index) => [node.id, { node, index }])),
@@ -30,19 +32,36 @@ export function chapters(tree) {
   const fallback = tree.nodes.some(node => explicit(node) === undefined)
     ? new Map(primaryGraph(tree).map(e => [e.node.id, e.rootId]))
     : null;
+  const frozen = tree.status === 'complete',
+    replaced = frozen ? replacedQuestionIds(tree.nodes) : new Set(),
+    members = tree.nodes.filter(node => !replaced.has(node.id)).map(node => {
+      if (!frozen || !isUnclear(node.answer)) return node;
+      // The chapter writer renders deferred answers under 待确认.
+      const { option_ids, text } = node.answer;
+      return { ...node, answer: { option_ids, text, deferred: true } };
+    });
   return tree.nodes
     .filter(node => node.depends_on.length === 0)
     .map(root => ({
       id: root.id,
       anchor: chapterAnchor(root.id),
       title: root.question,
-      nodes: tree.nodes.filter(node => (explicit(node) ?? fallback.get(node.id)) === root.id)
-    }));
+      nodes: members.filter(node => (explicit(node) ?? fallback.get(node.id)) === root.id)
+    }))
+    .filter(chapter => chapter.nodes.length);
 }
 export function answerText(node, answer = node.answer) {
   return !answer
     ? '尚未回答'
-    : [...node.options.filter(o => answer.option_ids.includes(o.id)).map(o => o.label), answer.text]
+    : [
+        isUnclear(answer) ? '没看懂' : '',
+        ...node.options.filter(o => answer.option_ids.includes(o.id)).map(o => o.label),
+        answer.text
+      ]
         .filter(Boolean)
         .join('\n');
+}
+export function displayAnswer(node, answer = node.answer) {
+  const text = answerText(node, answer);
+  return isDeferred(answer) ? ['待定', text].filter(Boolean).join('\n') : text;
 }
