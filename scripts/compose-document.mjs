@@ -12,11 +12,8 @@ const escape = value =>
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('"', '&quot;');
-const same = (part, status) =>
-  part.source?.session_id === status.source.session_id &&
-  part.source.revision === status.source.revision &&
-  part.source.digest === status.source.digest &&
-  part.source.job_id === status.job_id;
+const partError = (file, detail) =>
+  Error(file ? `分片 ${JSON.stringify(file)}：${detail}` : detail);
 const frozenQuestions = tree =>
   new Map(
     (tree?.nodes ?? [])
@@ -61,25 +58,32 @@ function deferredLists(status, chapterParts, tree) {
   };
 }
 
-export function composeDocument(status, parts, { preview = false, tree = null } = {}) {
+export function composeDocument(status, parts, { preview = false, tree = null, files = [] } = {}) {
   if (!status.job_id || !['requested', 'generating'].includes(status.phase))
     throw Error('需要当前冻结访谈的生成任务');
   const views = new Map(),
     chapterParts = new Map();
-  for (const part of parts) {
-    if (!same(part, status)) throw Error('分片来源或 job 已过期');
+  for (const [index, part] of parts.entries()) {
+    const file = files[index];
+    if (!part?.source || typeof part.source !== 'object' || Array.isArray(part.source))
+      throw partError(file, 'source 必须是分片来源对象');
+    for (const key of ['session_id', 'revision', 'digest', 'job_id']) {
+      if (!Object.hasOwn(part.source, key)) throw partError(file, `缺少 source.${key}`);
+      if (part.source[key] !== (key === 'job_id' ? status.job_id : status.source[key]))
+        throw partError(file, `source.${key} 与当前生成任务不符，分片已过期`);
+    }
     if (
       typeof part.html !== 'string' ||
       !part.html.trim() ||
       /^\s*(?:event:|data:|\{)/.test(part.html)
     )
-      throw Error('分片必须是已写好的 HTML 正文');
+      throw partError(file, 'html 必须是已写好的 HTML 正文');
     if (part.view === 'chapter') {
       if (
         !status.source.chapters.some(c => c.id === part.chapter_id) ||
         chapterParts.has(part.chapter_id)
       )
-        throw Error('章节不存在或重复');
+        throw partError(file, 'chapter_id 对应的章节不存在或重复');
       if (
         part.deferred_questions !== undefined &&
         (!Array.isArray(part.deferred_questions) ||
@@ -87,11 +91,11 @@ export function composeDocument(status, parts, { preview = false, tree = null } 
             question => typeof question !== 'string' || !question.trim()
           ))
       )
-        throw Error('待确认清单需要问题文本');
+        throw partError(file, 'deferred_questions 需要问题文本');
       chapterParts.set(part.chapter_id, part);
     } else {
       if (!['design', 'plan', 'acceptance'].includes(part.view) || views.has(part.view))
-        throw Error('视图不存在或重复');
+        throw partError(file, 'view 对应的视图不存在或重复');
       views.set(part.view, part);
     }
   }
@@ -220,14 +224,18 @@ async function main() {
   };
   const online = args.includes('--url');
   let current = online && preview ? await checkCurrent() : null;
-  const parts = existing
-      ? []
-      : readdirSync(value('--parts'))
-          .filter(n => n.endsWith('.json'))
-          .map(n => JSON.parse(readFileSync(resolve(value('--parts'), n), 'utf8'))),
-    result = existing
-      ? { views: [], ready_chapters: [] }
-      : composeDocument(status, parts, { preview, tree });
+  const partDir = value('--parts');
+  const files = existing ? [] : readdirSync(partDir).filter(name => name.endsWith('.json'));
+  const parts = files.map(name => {
+    try {
+      return JSON.parse(readFileSync(resolve(partDir, name), 'utf8'));
+    } catch (error) {
+      throw partError(name, error instanceof SyntaxError ? 'JSON 格式无效' : '无法读取文件');
+    }
+  });
+  const result = existing
+    ? { views: [], ready_chapters: [] }
+    : composeDocument(status, parts, { preview, tree, files });
   const file = status.source.document_file + (preview ? '.preview.html' : ''),
     temp = file + '.' + process.pid + '.tmp',
     manifestFile = resolve(dirname(file), 'task.manifest.json'),

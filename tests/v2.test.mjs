@@ -224,7 +224,22 @@ test('only an identity-checked AI query renews liveness; GET polling and rejecte
 test('service loss recovers from the same tree through a detached short command; no new interview or answers',async t=>{
   const s=await service(t);await s.post('/submit',{round:1,expected_revision:0,answers:[{id:'delivery',answer:{option_ids:['none'],text:'保留原来的确认'}}]});
   const before=readFileSync(s.file),old=await s.state();s.child.kill();await once(s.child,'exit');
-  const{stdout}=await run(process.execPath,[checker,'--url',s.url,'--session',old.session_id,'--restart','--state',s.file,'--document',s.document],{timeout:10000,windowsHide:true});
+  const { stdout } = await run(
+    process.execPath,
+    [
+      checker,
+      '--url',
+      s.url,
+      '--session',
+      old.session_id,
+      '--restart',
+      '--state',
+      s.file,
+      '--document',
+      s.document
+    ],
+    { timeout: process.platform === 'win32' ? 30000 : 10000, windowsHide: true }
+  );
   const restored=JSON.parse(stdout);s.track(restored.service.pid);
   assert.equal(restored.restarted,true);assert.equal(restored.session_id,old.session_id);assert.equal(restored.revision,old.revision);assert.notEqual(restored.instance_id,s.instance_id);assert.deepEqual(readFileSync(s.file),before);
   assert.deepEqual(await(await fetch(restored.url+'/state')).json(),old);assert.equal(restored.timing.submission_at,null,'restart does not invent submission timestamps');

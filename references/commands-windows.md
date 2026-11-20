@@ -14,6 +14,15 @@ python "<skill>/scripts/read_task.py" "<workspace>/task.html"
 
 `request.json` 带已核对的 `expected_session_id` 和候选读取时的 `expected_revision`。用 `curl.exe`，不使用 PowerShell 的 curl 别名。
 
+`start.mjs` 退出后，立即在下一条命令中用回执里的 URL 和原 session 短查。若返回 `service_closed`，按宿主清理了启动进程处理。用宿主后台任务直接运行下面的命令。Antigravity 用 `run_command`、`WaitMsBeforeAsync = 1000`，从 `/tasks` 读取输出。Claude Code 用 PowerShell 工具的 `run_in_background = true`。
+
+```powershell
+Set-Location -LiteralPath "<workspace>"
+node "<skill>/scripts/server.mjs" --state "<workspace>/tree.json" --document "<workspace>/task.html" --port 0
+```
+
+保持后台任务运行，用新回执里的 URL 和原 session 再短查。成功后才把该地址给用户。
+
 **A. 宿主后台命令结束能唤回 AI**：发布一轮或 offer 后，用宿主后台运行 `node "<skill>/scripts/check.mjs" --url "http://127.0.0.1:<port>" --session "<UUID>" --wait`，然后结束本条回复。空闲到期自动续等，收到用户事件才正常返回。
 
 **B. 做不到**：在本条回复内，每约 10 秒重复上面的普通 `check.mjs`，直到收到用户事件。

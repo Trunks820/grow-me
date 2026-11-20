@@ -4,12 +4,24 @@ import {spawn,execFile} from 'node:child_process';
 import {once} from 'node:events';
 import {promisify} from 'node:util';
 import {createServer} from 'node:http';
-import {mkdtempSync,writeFileSync,readFileSync,rmSync,symlinkSync,existsSync,mkdirSync} from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {validateTree,publishRound} from '../scripts/model.mjs';
 import {checkOnce} from '../scripts/check.mjs';
+import { startService } from '../scripts/start.mjs';
 import {assistantConnection} from '../assets/presentation.mjs';
 import {fingerprint} from '../scripts/document.mjs';
 import {chapters} from '../assets/topics.mjs';
@@ -91,6 +103,17 @@ test('server rejects an explicitly requested restricted port without a startup r
   });
 });
 
+test('detached service startup reports an occupied port without changing the tree', async t => {
+  const running = await service(t);
+  const bytes = readFileSync(running.file);
+  await assert.rejects(
+    startService({ stateFile: running.file, sessionId: running.session_id, port: running.port }),
+    { code: 'EADDRINUSE' }
+  );
+  assert.equal((await running.state()).session_id, running.session_id);
+  assert.deepEqual(readFileSync(running.file), bytes);
+});
+
 import {findAiOwnerPid,startHeartbeat,stopHeartbeat} from '../scripts/heartbeat.mjs';
 import {runtimePost} from '../scripts/runtime-client.mjs';
 import {
@@ -133,6 +156,158 @@ async function until(predicate, timeoutMs = 5000) {
   } while (Date.now() < deadline);
   assert.fail('Timed out waiting for the server state');
 }
+
+function pidRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code !== 'ESRCH') throw error;
+    return false;
+  }
+}
+
+test(
+  'Windows service and heartbeat survive a kill-on-close host Job',
+  { timeout: 65000 },
+  async t => {
+    if (process.platform !== 'win32') {
+      t.diagnostic('Windows Job Objects are available only on Windows.');
+      t.skip();
+      return;
+    }
+
+    const root = mkdtempSync(join(tmpdir(), 'grow-w11 路径 & '));
+    const stateFile = join(root, 'tree.json');
+    const fakeAgy = join(root, 'agy.exe');
+    const receipt = name => {
+      const file = join(root, name);
+      return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null;
+    };
+    let owner, ownerExit, jobPid, jobResult;
+    t.after(async () => {
+      if (owner?.connected) owner.disconnect();
+      if (ownerExit) await ownerExit;
+      owner?.stderr.destroy();
+      const pids = new Set([
+        jobPid,
+        receipt('control-pid'),
+        receipt('service.json')?.pid,
+        receipt('heartbeat.json')?.pid
+      ]);
+      for (const log of readdirSync(root).filter(name => /^\.grow-me-server-.*\.log$/.test(name))) {
+        // A startup receipt can have reached the log before the Job records the CLI's stdout.
+        for (const line of readFileSync(join(root, log), 'utf8').split(/\r?\n/)) {
+          try {
+            const entry = JSON.parse(line);
+            if (entry.state_file === stateFile) pids.add(entry.pid);
+          } catch {
+            /* The log can also contain startup errors. */
+          }
+        }
+      }
+      for (const pid of pids) {
+        if (!Number.isSafeInteger(pid) || pid <= 0) continue;
+        if (pidRunning(pid)) process.kill(pid);
+        await until(() => !pidRunning(pid));
+      }
+      const target = realpathSync(root);
+      assert.equal(dirname(target).toLowerCase(), realpathSync(tmpdir()).toLowerCase());
+      assert.match(basename(target), /^grow-w11 /);
+      rmSync(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+    });
+
+    const seed = tree();
+    writeFileSync(stateFile, JSON.stringify(seed));
+    copyFileSync(process.execPath, fakeAgy);
+    const jobScript = readFileSync(
+      new URL('./fixtures/windows-kill-job.ps1', import.meta.url),
+      'utf8'
+    );
+    const hostScript = `
+    const { spawn } = require('node:child_process');
+    const job = spawn('powershell.exe', process.argv.slice(1), {
+      stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true
+    });
+    job.on('spawn', () => process.send({ pid: job.pid }));
+    job.on('error', error => process.send({ error: error.message }));
+    job.on('close', code => { if (process.connected) process.send({ code }); });
+    process.on('disconnect', () => job.kill());
+  `;
+    owner = spawn(
+      fakeAgy,
+      [
+        '-e',
+        hostScript,
+        '--',
+        '-NoProfile',
+        '-NonInteractive',
+        '-EncodedCommand',
+        Buffer.from(jobScript, 'utf16le').toString('base64')
+      ],
+      {
+        stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+        windowsHide: true,
+        cwd: root,
+        env: {
+          ...process.env,
+          GROW_ME_JOB_NODE: process.execPath,
+          GROW_ME_JOB_ROOT: root,
+          GROW_ME_JOB_SESSION: seed.session_id,
+          GROW_ME_JOB_START: fileURLToPath(new URL('../scripts/start.mjs', import.meta.url)),
+          GROW_ME_JOB_CHECK: checker
+        }
+      }
+    );
+    let errorOutput = '';
+    owner.stderr.setEncoding('utf8').on('data', chunk => (errorOutput += chunk));
+    owner.on('message', message => {
+      if (message.pid) jobPid = message.pid;
+      else jobResult ??= message;
+    });
+    owner.on('error', error => (jobResult ??= { error: error.message }));
+    ownerExit = new Promise(resolve => {
+      owner.once('exit', resolve);
+      owner.once('error', resolve);
+    });
+    await until(() => jobResult, 45000);
+    const controlPid = receipt('control-pid');
+    if (controlPid) await until(() => !pidRunning(controlPid));
+    const started = receipt('service.json');
+    const heartbeat = receipt('heartbeat.json');
+    assert.equal(jobResult.code, 0, errorOutput || heartbeat?.error || jobResult.error);
+    assert.ok(controlPid, 'The detached control process must have run inside the Job');
+    assert.equal(started.launch, 'wmi');
+    assert.equal(heartbeat.launch, 'wmi');
+    assert.equal(heartbeat.owner_pid, owner.pid);
+    assert.ok(pidRunning(started.pid));
+    assert.ok(pidRunning(heartbeat.pid));
+    const logged = JSON.parse(readFileSync(started.log_file, 'utf8'));
+    assert.equal(logged.pid, started.pid);
+    assert.equal(logged.session_id, seed.session_id);
+
+    const { stdout } = await run(
+      process.execPath,
+      [checker, '--url', started.url, '--session', seed.session_id],
+      { timeout: 5000, windowsHide: true }
+    );
+    const checked = JSON.parse(stdout);
+    assert.equal(checked.status, 'waiting_for_user');
+    assert.equal(checked.session_id, seed.session_id);
+    assert.equal(checked.instance_id, started.instance_id);
+    const get = async path =>
+      (await fetch(started.url + path, { signal: AbortSignal.timeout(3000) })).json();
+    assert.deepEqual(await get('/state'), seed);
+    const recovery = await get('/recovery');
+    const activeHeartbeat = recovery.heartbeats.find(entry => entry.id === heartbeat.heartbeat_id);
+    assert.equal(activeHeartbeat?.owner_pid, owner.pid);
+    const lastPulse = recovery.ai.last_heartbeat_at;
+    await until(
+      async () => (await get('/progress')).ai.last_heartbeat_at > lastPulse,
+      heartbeat.interval_ms + 5000
+    );
+  }
+);
 
 test('requesting a plan submits the remaining round and wakes the wait command', {timeout: 15000}, async t => {
   const confirmed = {option_ids: ['a'], text: '用户已提交'};
@@ -321,6 +496,16 @@ test('wait CLI distinguishes a closed service, a finished session and the wrong 
   const offline = await waiting.result;
   assert.equal(offline.code, 2);
   assert.equal(JSON.parse(offline.stdout).status, 'service_closed');
+  await assert.rejects(
+    run(process.execPath, [checker, '--url', running.url, '--session', running.session_id]),
+    error => {
+      assert.equal(error.code, 2);
+      const receipt = JSON.parse(error.stdout);
+      assert.equal(receipt.status, 'service_closed');
+      assert.equal(receipt.kind, 'offline');
+      return true;
+    }
+  );
 
   const resumed = await running.start();
   running.url = resumed.url;
@@ -474,18 +659,60 @@ test('validated document actions and chapter publication renew work without chec
   assert.deepEqual(readFileSync(running.file), bytes);
 });
 
-test('detached heartbeat renews activity every 10s without reading or consuming submissions; stop records end',async t=>{
- const s=await service(t);await checkOnce(opts(s));const cursor=readFileSync(s.file+'.cursor.json');
- const started=Date.now(),hb=JSON.parse((await run(process.execPath,[checker,'--url',s.url,'--session','v2-regression','--heartbeat','--owner-pid',String(process.pid)])).stdout);s.track(hb.pid);
- assert.equal(hb.status,'heartbeat_started');assert.equal(hb.interval_ms,10000);assert.ok(Date.now()-started<3000);
- const first=(await(await fetch(s.url+'/progress')).json()).ai.last_activity_at;
- await submit(s);const bytes=readFileSync(s.file);
- await delay(10500);const ai=(await(await fetch(s.url+'/progress')).json()).ai;
- assert.equal(ai.last_check_at,first);assert.equal(ai.last_activity_at,first);assert.equal(ai.source,'check');assert.ok(ai.seconds_since_last_check>=10);assert.ok(ai.seconds_since_last_heartbeat<3);assert.equal(hb.owner_pid,process.pid);assert.equal(hb.lease_ms,180000);
- assert.deepEqual(readFileSync(s.file+'.cursor.json'),cursor);assert.deepEqual(readFileSync(s.file),bytes);assert.equal(logs(s).filter(e=>e.event==='submission_discovered').length,0);
- const found=await checkOnce(opts(s));assert.deepEqual(found.events.map(e=>e.kind),['submit']);assert.ok(found.timing.discovery_delay_ms>=10000);
- await stopHeartbeat(opts(s),hb.heartbeat_id);assert.equal((await runtimePost(opts(s),'/ai/heartbeat',{heartbeat_id:hb.heartbeat_id})).active,false);
- const events=logs(s);assert.equal(events.filter(e=>e.event==='heartbeat_start').length,1);assert.equal(events.filter(e=>e.event==='heartbeat_end').length,1);
+test('detached heartbeat renews activity every 10s without reading or consuming submissions; stop records end', async t => {
+  const s = await service(t);
+  await checkOnce(opts(s));
+  const cursor = readFileSync(s.file + '.cursor.json');
+  const hb = JSON.parse(
+    (
+      await run(
+        process.execPath,
+        [
+          checker,
+          '--url',
+          s.url,
+          '--session',
+          'v2-regression',
+          '--heartbeat',
+          '--owner-pid',
+          String(process.pid)
+        ],
+        { timeout: process.platform === 'win32' ? 20000 : 3000 }
+      )
+    ).stdout
+  );
+  s.track(hb.pid);
+  assert.equal(hb.status, 'heartbeat_started');
+  assert.equal(hb.interval_ms, 10000);
+  const first = (await (await fetch(s.url + '/progress')).json()).ai.last_activity_at;
+  await submit(s);
+  const bytes = readFileSync(s.file);
+  await delay(10500);
+  const ai = (await (await fetch(s.url + '/progress')).json()).ai;
+  assert.equal(ai.last_check_at, first);
+  assert.equal(ai.last_activity_at, first);
+  assert.equal(ai.source, 'check');
+  assert.ok(ai.seconds_since_last_check >= 10);
+  assert.ok(ai.seconds_since_last_heartbeat < 3);
+  assert.equal(hb.owner_pid, process.pid);
+  assert.equal(hb.lease_ms, 180000);
+  assert.deepEqual(readFileSync(s.file + '.cursor.json'), cursor);
+  assert.deepEqual(readFileSync(s.file), bytes);
+  assert.equal(logs(s).filter(e => e.event === 'submission_discovered').length, 0);
+  const found = await checkOnce(opts(s));
+  assert.deepEqual(
+    found.events.map(e => e.kind),
+    ['submit']
+  );
+  assert.ok(found.timing.discovery_delay_ms >= 10000);
+  await stopHeartbeat(opts(s), hb.heartbeat_id);
+  assert.equal(
+    (await runtimePost(opts(s), '/ai/heartbeat', { heartbeat_id: hb.heartbeat_id })).active,
+    false
+  );
+  const events = logs(s);
+  assert.equal(events.filter(e => e.event === 'heartbeat_start').length, 1);
+  assert.equal(events.filter(e => e.event === 'heartbeat_end').length, 1);
 });
 
 test('heartbeat validates session/revision/instance and exits when service instance disappears', async t => {

@@ -1,10 +1,12 @@
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { CheckError, runtimePost } from './runtime-client.mjs';
 import { HEARTBEAT_INTERVAL_MS, HEARTBEAT_LEASE_MS } from './progress.mjs';
 import { isMain } from './entry.mjs';
+import { startWithWmi } from './start.mjs';
 
 // A detached helper must not conceal an abandoned host forever.
 export { HEARTBEAT_LEASE_MS } from './progress.mjs';
@@ -74,6 +76,7 @@ export async function startHeartbeat(
   options,
   { ownerPid = options.ownerPid, loadProcessTable = readProcessTable } = {}
 ) {
+  // Resolve the owner here, while the caller still has the AI tool in its ancestry.
   if (ownerPid === undefined) {
     try {
       ownerPid = findAiOwnerPid(await loadProcessTable());
@@ -105,25 +108,29 @@ export async function startHeartbeat(
     '--owner-pid',
     String(ownerPid)
   ];
-  const child = spawn(process.execPath, args, {
-    detached: true,
-    windowsHide: true,
-    stdio: 'ignore'
-  });
+  let pid, launch;
   try {
-    await new Promise((resolve, reject) => {
-      child.once('spawn', resolve);
-      child.once('error', reject);
-    });
+    pid = await startWithWmi(args);
+    launch = pid === null ? 'spawn' : 'wmi';
+    if (pid === null) {
+      const child = spawn(process.execPath, args, {
+        detached: true,
+        windowsHide: true,
+        stdio: 'ignore'
+      });
+      await once(child, 'spawn');
+      child.unref();
+      pid = child.pid;
+    }
   } catch (error) {
-    await stopHeartbeat(options, id).catch(() => {});
+    await stopHeartbeat({ ...options, instanceId: first.instance_id }, id).catch(() => {});
     throw error;
   }
-  child.unref();
   return {
     status: 'heartbeat_started',
     heartbeat_id: id,
-    pid: child.pid,
+    pid,
+    launch,
     instance_id: first.instance_id,
     interval_ms: HEARTBEAT_INTERVAL_MS,
     lease_ms: HEARTBEAT_LEASE_MS,

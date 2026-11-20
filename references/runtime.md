@@ -1,12 +1,12 @@
 # 启动、短查询与恢复
 
-所有脚本路径相对 SKILL.md，运行时请换成绝对路径。准备真实 v2 首轮后，用 `start.mjs --state <原文件> --session <UUID> --document <HTML路径>`。它先校验原文件，启动独立后台 Node 服务，打印启动回执后退出；不会创建或覆盖 tree.json。保留 URL、PID、原 state_file、document_file、session_id；这些是进程定位信息，不是另一份答案存储。Windows 后台窗口隐藏。
+所有脚本路径相对 SKILL.md，运行时请换成绝对路径。准备真实 v2 首轮后，用 `start.mjs --state <原文件> --session <UUID> --document <HTML路径>`。它用现有 `tree.json` 校验会话，启动独立后台 Node 服务并打印回执。保留 URL、PID、state_file、document_file、session_id、launch 和 log_file。Windows 优先用隐藏窗口的 WMI 启动，失败时回退 spawn，服务输出保存在 `.grow-me-server-*.log`。启动命令退出后立即短查，成功才给用户地址。Windows 若返回 `service_closed`，按 [Windows 命令](commands-windows.md) 切到宿主后台任务并短查。
 
 默认 `--port 0` 由系统分配空闲端口；如果浏览器会拦截这个端口，服务会换一个，只打印最终可用的地址。手动指定了浏览器会拦截的端口时，服务不会启动，请换一个端口。
 
 ## 短查询与等待
 
-`check.mjs --url <origin> --session <UUID>` 是一次性命令：先 GET /state 验证身份，再读文档、进度和恢复元数据；核对 session / revision / instance 后 POST /ai/check。全部网络请求共用最多 3 秒期限。输出状态和新用户事件的元数据，不打印答案。
+`check.mjs --url <origin> --session <UUID>` 是一次性命令：先 GET /state 验证身份，再读文档、进度和恢复元数据；核对 session / revision / instance 后 POST /ai/check。全部网络请求共用最多 3 秒期限。输出状态和新用户事件的元数据，不打印答案。服务不可达时退出码为 2，`status` 为 `service_closed`，`kind` 为 `offline`。
 
 短查和等待共用 `<tree.json>.cursor.json`（session_id / revision / sequence / instance），无需手写 `--after-*`。`sequence` 是用户事件序号，随提交、复核、重开、确认先出方案、保存或重试推进。`changed` 表示有新用户事件，`instance_changed` 表示实例变化。显式 `--after-revision` / `--after-sequence` / `--after-instance` 仍按同一规则筛选或比较。回看不重复计发现延迟。
 
@@ -26,7 +26,7 @@
 
 短查或等待返回 `changed: true`、发布下一轮、文档控制（如 offer、claim、progress、章节预览、ready）成功或启动心跳时，服务自动续 3 分钟工作租约。出题期间靠查到的提交维持在线。写作期间每完成一章就联机发布。空等、未发现事件的短查和失败请求都不续工作租约。
 
-预计连续超过 3 分钟没有续租动作时，运行 `check.mjs --url <origin> --session <UUID> --heartbeat`。回执包含 `heartbeat_id` 和 `owner_pid`。默认沿父进程链找最近的 Claude Code、Codex、Cursor 或 Antigravity，找不到就传 `--owner-pid <AI 工具 PID>`。工作结束用 `--heartbeat-stop <heartbeat_id>` 停止，再短查处理期间的用户事件。`work.mjs` 已为查代码管理心跳。
+预计连续超过 3 分钟没有续租动作时，运行 `check.mjs --url <origin> --session <UUID> --heartbeat`。启动前沿父进程链找最近的 Claude Code、Codex、Cursor 或 Antigravity，把 PID 传给后台心跳。找不到就传 `--owner-pid <AI 工具 PID>`。Windows 心跳同样优先用 WMI，失败回退 spawn。回执包含 `heartbeat_id`、`owner_pid` 和 `launch`。工作结束用 `--heartbeat-stop <heartbeat_id>` 停止，再短查处理期间的用户事件。`work.mjs` 已为查代码管理心跳。
 
 后续心跳每 10 秒报到，只刷新心跳时钟，不消费事件。心跳自身的租期为 3 分钟，续期时用回执中的 `--owner-pid` 短查或等待。owner 退出记录 `owner_exited`，租期届满记录 `lease_expired`，连续超过 30 秒未收到心跳则标记失联。
 

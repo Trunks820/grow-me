@@ -21,7 +21,7 @@ async function writer(t){
  const requested=await(await control({action:'save',expected_revision:0})).json();
  const status=await(await control({action:'claim',expected_revision:1,job_id:requested.job_id})).json();
  const context=join(s.root,'status.json'),parts=join(s.root,'parts');mkdirSync(parts);writeFileSync(context,JSON.stringify(status));
- return{...s,status,control,put(id){writeFileSync(join(parts,id+'.json'),JSON.stringify({source:{...status.source,job_id:status.job_id},view:'chapter',chapter_id:id,html:'<p>已完成的 '+id+' 章正文</p>'}));},
+ return{...s,status,parts,control,put(id){writeFileSync(join(parts,id+'.json'),JSON.stringify({source:{...status.source,job_id:status.job_id},view:'chapter',chapter_id:id,html:'<p>已完成的 '+id+' 章正文</p>'}));},
   async preview(online=true){const args=[composer,'--context',context,'--tree',s.state_file,'--parts',parts,'--preview'];if(online)args.push('--url',s.url);const result=await run(process.execPath,args,{timeout:15000,windowsHide:true});return{...result,data:JSON.parse(result.stdout)};},
   timings(){return readFileSync(status.chapter_timing_file,'utf8').trim().split('\n').map(line=>JSON.parse(line));}};
 }
@@ -80,6 +80,21 @@ test('one preview publishing multiple new chapters warns clearly without blockin
  assert.deepEqual(result.data.newly_published_chapters,['a','b']);assert.equal(result.data.warnings.length,1);assert.match(result.stderr,/警告.*一次新发布了 2 章/);assert.match(result.stderr,/不得攒多章一起发布/);assert.ok(result.stderr.includes(result.data.warnings[0]));
  assert.equal(s.timings().length,2);for(const id of ['a','b'])assert.equal((await fetch(s.url+'/document?chapter='+id)).status,200);
  const repeat=await s.preview();assert.deepEqual(repeat.data.warnings,[]);assert.equal(repeat.stderr,'');assert.equal(s.timings().length,2);
+});
+
+test('a JSON sidecar in --parts identifies the file and missing source before publishing', async t => {
+  const s = await writer(t);
+  s.put('a');
+  const sidecar = join(s.parts, 'a.metadata.json');
+  writeFileSync(sidecar, JSON.stringify({ encoding: 'utf8' }));
+  await assert.rejects(s.preview(), {
+    code: 1,
+    stderr: /a\.metadata\.json.*source 必须是分片来源对象/
+  });
+  assert.equal(existsSync(s.document_file + '.preview.html'), false);
+  rmSync(sidecar);
+  const assembled = await s.preview();
+  assert.deepEqual(assembled.data.newly_published_chapters, ['a']);
 });
 
 function handoffFixture(t) {

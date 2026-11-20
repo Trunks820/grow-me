@@ -1,6 +1,14 @@
 import http from 'node:http';
 import { once } from 'node:events';
-import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import {
+  appendFileSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  writeFileSync
+} from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
@@ -53,13 +61,28 @@ async function main() {
     const i = process.argv.indexOf(key);
     return i < 0 ? fallback : process.argv[i + 1];
   };
+  const logFile = arg('--log-file');
+  if (!logFile) return serve(arg, console);
+
+  // Claim the startup log before binding. A spawn fallback may already own it.
+  closeSync(openSync(logFile, 'wx'));
+  const writeLog = line => appendFileSync(logFile, line + '\n', 'utf8');
+  try {
+    await serve(arg, { log: writeLog, error: writeLog });
+  } catch (error) {
+    writeLog(error.stack ?? error.message);
+    process.exitCode = 1;
+  }
+}
+
+async function serve(arg, output) {
   if (!arg('--state')) {
-    console.error('Usage: node server.mjs --state <tree.json> [--port 0] [--wait-ms 25000]');
+    output.error('Usage: node server.mjs --state <tree.json> [--port 0] [--wait-ms 25000]');
     process.exit(1);
   }
   const port = Number(arg('--port', 0));
   if (isBrowserRestrictedPort(port)) {
-    console.error(`浏览器会拒绝打开这个端口（${port}），请换一个。`);
+    output.error(`浏览器会拒绝打开这个端口（${port}），请换一个。`);
     process.exitCode = 1;
     return;
   }
@@ -546,7 +569,7 @@ async function main() {
   };
   const close = promisify(server.close.bind(server));
   const reportError = error => {
-    console.error(error.message);
+    output.error(error.message);
     process.exitCode = 1;
   };
   let boundPort;
@@ -557,7 +580,7 @@ async function main() {
     return;
   }
   server.on('error', reportError);
-  console.log(
+  output.log(
     JSON.stringify({
       url: `http://127.0.0.1:${boundPort}`,
       port: boundPort,

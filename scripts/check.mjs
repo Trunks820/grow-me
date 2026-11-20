@@ -244,7 +244,7 @@ if (isMain(import.meta.url)) {
         '--wait reports activity and waits for a user event, reusing the short-check cursor and JSON format.',
         'Idle deadlines renew the wait without output.',
         'Checks and waits that return user events renew the three-minute work lease.',
-        '--heartbeat detects the AI tool ancestor unless --owner-pid is supplied.',
+        '--heartbeat resolves the AI tool ancestor before launch unless --owner-pid is supplied.',
         'Checks and waits with a matching --owner-pid renew the three-minute heartbeat lease.',
         'To restore an offline service, add --restart --state <original-tree.json> --document <original-task.html> to a short check.'
       ].join('\n')
@@ -311,9 +311,11 @@ if (isMain(import.meta.url)) {
       console.log(
         JSON.stringify({
           status:
-            waiting && ['service_closed', 'session_finished', 'identity'].includes(error.kind)
-              ? error.kind
-              : 'attention',
+            error.kind === 'offline'
+              ? 'service_closed'
+              : waiting && ['service_closed', 'session_finished', 'identity'].includes(error.kind)
+                ? error.kind
+                : 'attention',
           kind: error.kind ?? 'recovery',
           error: error.message
         })
