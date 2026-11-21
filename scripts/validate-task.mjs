@@ -133,7 +133,7 @@ function manifestPacks(work, questions, index, errors) {
       open_questions: questionIds.map(ref => questions.get(ref)),
       external_effects: item._text.effects
         .map(parts => normalizeTaskSpace(parts.join('')))
-        .filter(effect => effect !== '无'),
+        .filter(effect => effect && effect !== '无'),
       scope_files: [],
       tags: []
     };
@@ -237,7 +237,7 @@ export function validateTask(html, { handoff = false, expectedQuestions = [] } =
 
 function main() {
   const options = taskCliArgs(process.argv.slice(2), {
-    program: 'validate_task.py',
+    program: 'validate-task.mjs',
     usage: '[-h] [--handoff] page',
     option: '--handoff',
     help: `Check the shared semantic task format; this does not judge business

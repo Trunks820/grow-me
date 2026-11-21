@@ -350,7 +350,7 @@ const looksLikeOption = value =>
 
 function main() {
   const options = taskCliArgs(process.argv.slice(2), {
-    program: 'read_task.py',
+    program: 'read-task.mjs',
     usage: '[-h] [--section SECTION] page',
     option: '--section',
     takesValue: true,

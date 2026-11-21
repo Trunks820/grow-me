@@ -169,6 +169,7 @@ function handoffFixture(t) {
       <div data-field="effects"><h3>撤不回的动作</h3><ul>
         <li>写线上数据库：执行&nbsp; <code>add_xxx</code><span hidden>隐藏文字</span></li>
         <li><strong>对外</strong>发通知<template>模板文字</template></li>
+        <li></li><li>&nbsp;</li>
       </ul></div>
       <p>报名后发送<strong>一条</strong>通知。</p><span data-field="status">planned</span>
     </div><article data-kind="phase" id="W1" data-requirements="R1" data-criteria="AC1">
@@ -221,6 +222,19 @@ test('AC7 final assembly exports ordered packs and question assignments with an 
   await s.assemble('--existing');
   assert.deepEqual(readFileSync(s.file), finalHtml);
   assert.deepEqual(JSON.parse(readFileSync(s.manifest, 'utf8')), manifest);
+});
+
+test('task commands name their own scripts in help and errors', () => {
+  for (const name of ['validate-task.mjs', 'read-task.mjs']) {
+    const script = fileURLToPath(new URL(`../scripts/${name}`, import.meta.url));
+    const help = spawnSync(process.execPath, [script, '--help'], { encoding: 'utf8', windowsHide: true });
+    assert.equal(help.status, 0);
+    assert.ok(help.stdout.startsWith(`usage: ${name} `), help.stdout);
+    const missing = spawnSync(process.execPath, [script], { encoding: 'utf8', windowsHide: true });
+    assert.notEqual(missing.status, 0);
+    assert.ok(missing.stderr.includes(`${name}: error:`), missing.stderr);
+    assert.doesNotMatch(help.stdout + missing.stderr, /\.py\b/);
+  }
 });
 
 test('AC7 invalid question references and acceptance status prevent final publication', async t => {
