@@ -135,6 +135,11 @@ PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright python -m
 
 方案校验器（`scripts/validate-task.mjs`、`read-task.mjs`）最早移植自 ai-dev-workflow，现在两边独立维护，定期对照同步格式规则。接口见 [数据与 HTTP 合约](references/contract.md)，写方案的流程见 [progressive writer](references/progressive-writer.md)。
 
+## 致谢
+
+- 逐轮树状澄清的思路受到 [mattpocock/skills](https://github.com/mattpocock/skills) 中 `grill-me` 的启发。
+- 感谢 [LINUX DO](https://linux.do) 社区对开源项目的支持与技术交流氛围，欢迎前往社区交流试用反馈与改进建议。
+
 ## License
 
 [MIT](LICENSE) · Copyright 2026 Trunks820
