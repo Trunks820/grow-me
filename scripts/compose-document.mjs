@@ -1,10 +1,11 @@
 import { isMain } from './entry.mjs';
 import { readFileSync, writeFileSync, readdirSync, renameSync, mkdirSync, rmSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
-import { isDeferred } from '../assets/answers.mjs';
+import { decisionText, isDeferred, isUnresolved } from '../assets/answers.mjs';
 import { chapterAnchor } from '../assets/topics.mjs';
 import { validateDocument } from './document.mjs';
-import { readTaskHtml } from './read-task.mjs';
+import { normalizeTaskSpace, readTaskHtml } from './read-task.mjs';
+import { decisionId } from './render-chapter.mjs';
 import { taskDefinitions, validateTask } from './validate-task.mjs';
 
 const escape = value =>
@@ -22,6 +23,21 @@ const frozenQuestions = tree =>
   );
 const questionId = id =>
   /^[a-z\d_-]+$/i.test(id) ? 'deferred-' + id : 'deferred~' + chapterAnchor(id);
+// Confirmed answers as the chapter transcript shows them, keyed by their decision ID.
+const frozenDecisions = tree =>
+  new Map(
+    (tree?.nodes ?? [])
+      .filter(node => node.answer && !isUnresolved(node.answer))
+      .map(node => {
+        const labels = node.answer.option_ids.map(id =>
+          normalizeTaskSpace(node.options.find(option => option.id === id).label)
+        );
+        return [
+          decisionId(node.id),
+          { question: normalizeTaskSpace(node.question), decision: decisionText(labels, node.answer.text) }
+        ];
+      })
+  );
 const questionOrigins = { user: '你提的', suggestion: 'AI 的建议', deferred: '待定的题' };
 
 function pendingQuestions(status, chapterParts, tree, design) {
@@ -196,7 +212,11 @@ function validateHandoff(file, tree, jobId) {
     questionId(id),
     question
   ]);
-  const report = validateTask(readTaskHtml(file), { handoff: true, expectedQuestions });
+  const report = validateTask(readTaskHtml(file), {
+    handoff: true,
+    expectedQuestions,
+    expectedDecisions: frozenDecisions(tree)
+  });
   if (!report.valid) throw Error(report.errors.join('；'));
   return {
     project: tree.topic,

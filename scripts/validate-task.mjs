@@ -1,6 +1,7 @@
 // Ported from validate_task.py at grow-me 58dd271, originally from ai-dev-workflow.
 // The two projects maintain their implementations independently.
 import { readFileSync } from 'node:fs';
+import { decisionText } from '../assets/answers.mjs';
 import { isMain } from './entry.mjs';
 import {
   TEXT_BLOCKS,
@@ -24,8 +25,10 @@ const relations = [
   ['criteria', new Set(['criterion'])],
   ['constraints', new Set(['constraint'])],
   ['depends', workKinds],
-  ['questions', new Set(['question'])]
+  ['questions', new Set(['question'])],
+  ['decisions', new Set(['decision'])]
 ];
+const decisionFields = new Set(['question', 'choice', 'answer']);
 
 const text = (entry, field) => normalizeTaskSpace(entry._text[field].join(''));
 const refs = (entry, key) => splitTaskSpace(entry['data-' + key] || '');
@@ -48,6 +51,7 @@ function readRecord(html) {
     if (!visible || !owner) return;
     if (field === 'effects') effectText?.push(value);
     else if (field === 'origin') return;
+    else if (field === 'choice') owner._text.choice.at(-1).push(value);
     else if (field === 'name') {
       owner._text.title.push(value);
       owner._text.body.push(value);
@@ -61,7 +65,9 @@ function readRecord(html) {
       if (attrs.id) ids.set(attrs.id, (ids.get(attrs.id) ?? 0) + 1);
       if (Object.hasOwn(attrs, 'data-task-record')) revisions.push(attrs['data-revision'] || '');
       if (visible && field !== 'effects' && Object.hasOwn(attrs, 'data-kind')) {
-        attrs._text = { body: [], title: [], goal: [], status: [], effects: [] };
+        attrs._text = {
+          body: [], title: [], goal: [], status: [], effects: [], question: [], choice: [], answer: []
+        };
         entries.push(attrs);
         owner = attrs;
         field = 'body';
@@ -80,6 +86,9 @@ function readRecord(html) {
           if (visible) owner._statusAttribute ??= taskStatusAttribute(attrs);
         } else if (kind(owner) === 'question' && attrs['data-field'] === 'origin') {
           field = 'origin';
+        } else if (kind(owner) === 'decision' && decisionFields.has(attrs['data-field'])) {
+          field = attrs['data-field'];
+          if (field === 'choice') owner._text.choice.push([]);
         } else if (workKinds.has(kind(owner))) {
           if (attrs['data-field'] === 'goal') field = 'goal';
           else if (field === 'body' && headings.has(tag) && !text(owner, 'title')) field = 'title';
@@ -89,13 +98,14 @@ function readRecord(html) {
       }
       if (tag === 'a' && attrs.href?.startsWith('#')) anchors.push(unquote(attrs.href.slice(1)));
       const frame = { tag, owner, field, visible, effectText };
-      if (blocks.has(tag)) addText(frame, ' ');
+      // The verbatim answer keeps its exact text, so it gets no block spacing.
+      if (blocks.has(tag) && field !== 'answer') addText(frame, ' ');
       if (!VOID_TAGS.has(tag)) stack.push(frame);
     },
     end(tag) {
       const index = stack.findLastIndex(frame => frame.tag === tag);
       if (index < 0) return;
-      if (blocks.has(tag)) addText(stack[index], ' ');
+      if (blocks.has(tag) && stack[index].field !== 'answer') addText(stack[index], ' ');
       stack.length = index;
     },
     data(value) {
@@ -113,8 +123,14 @@ export function taskDefinitions(html) {
   }));
 }
 
-function manifestPacks(work, questions, index, errors) {
+function readDecision(entry) {
+  const labels = entry._text.choice.map(parts => normalizeTaskSpace(parts.join('')));
+  return { question: text(entry, 'question'), decision: decisionText(labels, entry._text.answer.join('')) };
+}
+
+function manifestPacks(work, questions, decisions, index, errors) {
   const assigned = new Set();
+  const decided = new Set();
   const packs = work.map(item => {
     const body = text(item, 'body');
     const title = text(item, 'title') || body || text(item, 'goal');
@@ -122,6 +138,8 @@ function manifestPacks(work, questions, index, errors) {
     if (!goal) errors.push(`${item.id}: missing readable work title or goal`);
     const questionIds = [...new Set(refs(item, 'questions'))];
     for (const id of questionIds) assigned.add(id);
+    const decisionIds = [...new Set(refs(item, 'decisions'))];
+    for (const id of decisionIds) decided.add(id);
     return {
       id: item.id,
       title,
@@ -131,6 +149,7 @@ function manifestPacks(work, questions, index, errors) {
         ref => `${ref} · ${text(index.get(ref), 'body')}`
       ),
       open_questions: questionIds.map(ref => questions.get(ref)),
+      decisions: decisionIds.map(ref => ({ ...decisions.get(ref), at: null })),
       external_effects: item._text.effects
         .map(parts => normalizeTaskSpace(parts.join('')))
         .filter(effect => effect && effect !== '无'),
@@ -141,15 +160,24 @@ function manifestPacks(work, questions, index, errors) {
   const unassigned = [...questions]
     .filter(([id]) => !assigned.has(id))
     .map(([, question]) => question);
+  const undecided = [...decisions]
+    .filter(([id]) => !decided.has(id))
+    .map(([, decision]) => ({ ...decision, at: null }));
+  const firstRoot = packs.find(pack => !pack.depends_on.length);
   if (unassigned.length) {
-    const firstRoot = packs.find(pack => !pack.depends_on.length);
     if (firstRoot) firstRoot.open_questions.push(...unassigned);
     else errors.push('Unassigned questions need a work item without dependencies');
   }
+  firstRoot?.decisions.push(...undecided);
+  // Plans without confirmed answers keep the shared ai-dev-workflow pack shape.
+  for (const pack of packs) if (!pack.decisions.length) delete pack.decisions;
   return packs;
 }
 
-export function validateTask(html, { handoff = false, expectedQuestions = [] } = {}) {
+export function validateTask(
+  html,
+  { handoff = false, expectedQuestions = [], expectedDecisions = null } = {}
+) {
   const { entries, ids, anchors, revisions } = readRecord(html);
   const errors = [];
   for (const [name, count] of ids) {
@@ -160,11 +188,14 @@ export function validateTask(html, { handoff = false, expectedQuestions = [] } =
 
   const index = new Map(entries.map(entry => [entryId(entry), entry]));
   const questions = new Map();
+  const decisions = new Map();
   for (const entry of entries) {
     const name = entry.id || '(missing id)';
     if (!entry.id) errors.push('Definition missing ID: ' + kind(entry));
-    if (Object.hasOwn(entry, 'data-questions') && !workKinds.has(kind(entry)))
-      errors.push(`${name}: data-questions requires a work item or phase`);
+    for (const attribute of ['data-questions', 'data-decisions']) {
+      if (Object.hasOwn(entry, attribute) && !workKinds.has(kind(entry)))
+        errors.push(`${name}: ${attribute} requires a work item or phase`);
+    }
     for (const [relation, kinds] of relations) {
       for (const ref of refs(entry, relation)) {
         if (!index.has(ref)) errors.push(`${name}: missing reference ${ref}`);
@@ -182,6 +213,18 @@ export function validateTask(html, { handoff = false, expectedQuestions = [] } =
       const question = text(entry, 'body');
       if (!question) errors.push(`${name}: missing readable question text`);
       questions.set(name, question);
+    }
+    if (kind(entry) === 'decision') {
+      const decision = readDecision(entry);
+      if (!decision.question || !decision.decision)
+        errors.push(`${name}: missing question or answer text`);
+      const expected = expectedDecisions?.get(name);
+      if (
+        expectedDecisions &&
+        (expected?.question !== decision.question || expected.decision !== decision.decision)
+      )
+        errors.push(`${name}: decision does not match a confirmed frozen answer`);
+      decisions.set(name, decision);
     }
   }
   for (const anchor of anchors) {
@@ -222,7 +265,8 @@ export function validateTask(html, { handoff = false, expectedQuestions = [] } =
     if (questions.get(id) !== normalizeTaskSpace(question))
       errors.push(`${id}: missing or changed frozen question`);
   }
-  const packs = handoff && !errors.length ? manifestPacks(work, questions, index, errors) : null;
+  const packs =
+    handoff && !errors.length ? manifestPacks(work, questions, decisions, index, errors) : null;
   return {
     valid: !errors.length,
     errors: [...new Set(errors)],

@@ -34,7 +34,8 @@ Use `data-field="status"` with a canonical `data-status` and a Chinese label.
 
 ```html
 <article id="W2" class="work-item" data-kind="work" data-number="2"
-         data-requirements="R1" data-criteria="AC1" data-depends="W1" data-questions="Q1">
+         data-requirements="R1" data-criteria="AC1" data-depends="W1" data-questions="Q1"
+         data-decisions="decided-channel">
   <div class="work-heading">
     <h3>报名后发站内回执</h3>
     <span data-field="status" data-status="planned">还没开始</span>
@@ -73,6 +74,8 @@ In 开发清单, add one `data-field="effects"` block inside each work item or p
 Keep business operations and outcomes readable. Fold commands, schema details and run logs into adjacent native `<details>` sections. All canonical text must remain in semantic HTML and readable offline without scripts; the bundled shell handles tabs, anchors and read-only task packages.
 
 Use space-separated IDs in `data-questions="deferred-timing Q1"` on every work item that needs those answers. Use the generated pending-entry IDs for deferred interview questions. Unlinked pending items go to the first work item without dependencies.
+
+List the confirmed interview answers each work item relies on in `data-decisions="decided-channel decided-timing"`. `render-chapter.mjs` gives every confirmed answer in the chapter transcript an ID: `decided-<node-id>` when the node ID contains only ASCII letters, digits, `_` and `-`, otherwise the generated ID shown in the preview. Deferred and unclear answers get none. The manifest copies each linked answer's question, selected options and verbatim note into that pack's `decisions`, and final assembly rejects an answer that no longer matches the frozen tree. Unlinked confirmed answers go to the first work item without dependencies.
 
 ## Assemble and publish progressively
 

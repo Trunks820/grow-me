@@ -35,7 +35,7 @@ description: 用本机网页逐轮澄清需求，将用户提交回传当前对�
 5. 保存后用 `check.mjs` 回执的 `document.job_id` 或 `/document/status` 的 `job_id` 执行 claim，不再新开代码调查。用 `render-chapter.mjs` 渲染冻结答案原话，AI 只写说明。**每写完一章，立刻运行 `compose-document.mjs --preview --url <local-url>` 发布成功，再写下一章。** 参数和校验见分章交付。
    - 用大白话写方案。概览写真正的进度和下一步。每章先给一句结论，再写「你会看到」和「为什么」。正文不写编号、不写英文状态词、不写会话号或 revision。链接显示名字，编号和英文状态值放在属性里。访谈原话由脚本写进章末折叠。
    - 按冻结的有效回答写方案。还在等换问答案的题放进「还没定的」，章末保留用户的补充原话。新题如果也标了「没看懂」或「待定」，把新题列入「还没定的」。
-   - 给相关开发项加 `data-questions`。开发项的撤不回动作写进 `data-field="effects"` 块，导出为 `external_effects`。用 `compose-document.mjs` 定稿，全文校验通过后自动在方案旁写 `task.manifest.json`。交接只取方案与冻结访谈，不查代码、不估改动规模。
+   - 给相关开发项加 `data-questions`；开发项依据的已确认回答用 `data-decisions` 标出，题号是章末原话里的 `decided-<题 id>`。开发项的撤不回动作写进 `data-field="effects"` 块，导出为 `external_effects`。用 `compose-document.mjs` 定稿，全文校验通过后自动在方案旁写 `task.manifest.json`。交接只取方案与冻结访谈，不查代码、不估改动规模。
 6. 恢复后先运行 `check.mjs`，核对身份、实例和 revision；curl GET 不算轮询。服务不在时按 [恢复规则](references/runtime.md#恢复原会话) 从原文件重启后立即短查。复制提醒只含会话编号、轮次、地址。
 
 开发或交付前读 [验证与计时](references/verification.md)；等待、心跳和暂停以 [runtime](references/runtime.md) 为准。保留真实失败与未测项；CLI 安装成功、受控浏览器通过都不等于另一个助手真跑通过。

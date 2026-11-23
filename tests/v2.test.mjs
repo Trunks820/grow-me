@@ -147,8 +147,8 @@ test('AC3 a deferred round submits and lists unresolved questions before the des
   const [prose, transcript] = chapter.html.split('<details class="interview">');
   assert.doesNotMatch(prose, /data-source-node/);
   assert.match(transcript, /^<summary>访谈原话（4 问）<\/summary>/);
-  assert.match(transcript, /data-source-node="signup"><p><strong>问<\/strong>/);
-  assert.match(transcript, /你暂选<\/strong><\/p><ul><li>邮件通知<\/li>/);
+  assert.match(transcript, /data-source-node="signup" id="decided-signup" data-kind="decision"><p><strong>问<\/strong>/);
+  assert.match(transcript, /你暂选<\/strong><\/p><ul><li data-field="choice">邮件通知<\/li>/);
   assert.match(transcript, /  还要核对 &lt;发送时间&gt;\n保留原话  /);
   const list = html.match(/<section id="decisions"[\s\S]*?<\/section>/)?.[0];
   assert.match(list, /<h2>还没定的（3 件）<\/h2>/);
@@ -207,7 +207,7 @@ test('round accepts a link to an unclear question and replaces it only after the
   assert.deepEqual(frozen.nodes.find(n => n.id === timing.id).answer, note);
   assert.doesNotMatch(chapter.html, /data-source-node="confirmation"/);
   const transcript = chapter.html.split('<details class="interview">')[1];
-  assert.match(transcript, /data-source-node="confirmation-again"><p>/);
+  assert.match(transcript, /data-source-node="confirmation-again" id="decided-confirmation-again" data-kind="decision"><p>/);
   assert.match(transcript, /data-source-node="timing" data-pending-answer="true"/);
   assert.match(transcript, /  开放是指 &lt;给谁看&gt;？\n我想看个例子  /);
   const list = html.match(/<section id="decisions"[\s\S]*?<\/section>/)?.[0];

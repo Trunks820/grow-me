@@ -2,8 +2,8 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fingerprint } from './document.mjs';
 import { validateTree } from './model.mjs';
-import { isDeferred } from '../assets/answers.mjs';
-import { chapters } from '../assets/topics.mjs';
+import { isDeferred, isUnresolved } from '../assets/answers.mjs';
+import { chapterAnchor, chapters } from '../assets/topics.mjs';
 import { isMain } from './entry.mjs';
 
 const escape = value =>
@@ -13,6 +13,9 @@ const escape = value =>
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+// Work items cite confirmed answers by this ID in data-decisions.
+export const decisionId = id =>
+  /^[a-z\d_-]+$/i.test(id) ? 'decided-' + id : 'decided~' + chapterAnchor(id);
 export function renderChapter(status, tree, chapterId, explanation, { title } = {}) {
   validateTree(tree);
   if (
@@ -49,15 +52,18 @@ export function renderChapter(status, tree, chapterId, explanation, { title } = 
     const pending = isDeferred(node.answer),
       selected = node.answer.option_ids.map(id => node.options.find(option => option.id === id)),
       options = selected.length
-        ? `<p><strong>${pending ? '你暂选' : '你选'}</strong></p><ul>${selected.map(option => `<li>${escape(option.label)}</li>`).join('')}</ul>`
+        ? `<p><strong>${pending ? '你暂选' : '你选'}</strong></p><ul>${selected.map(option => `<li data-field="choice">${escape(option.label)}</li>`).join('')}</ul>`
         : '',
       note = node.answer.text
-        ? `<p><strong>你的原话</strong></p><div class="frozen-answer">${escape(node.answer.text).replaceAll('\r', '&#13;')}</div>`
+        ? `<p><strong>你的原话</strong></p><div class="frozen-answer" data-field="answer">${escape(node.answer.text).replaceAll('\r', '&#13;')}</div>`
         : '',
       state = pending ? ' data-pending-answer="true"' : '',
+      decision = isUnresolved(node.answer)
+        ? ''
+        : ` id="${escape(decisionId(node.id))}" data-kind="decision"`,
       label = pending ? ' <span class="question-origin">待定</span>' : '';
     if (pending) deferredQuestions.push(node.question);
-    return `<section data-source-node="${escape(node.id)}"${state}><p><strong>问</strong> ${escape(node.question)}${label}</p>${options}${note}</section>`;
+    return `<section data-source-node="${escape(node.id)}"${state}${decision}><p><strong>问</strong> <span data-field="question">${escape(node.question)}</span>${label}</p>${options}${note}</section>`;
   });
   return {
     source: {

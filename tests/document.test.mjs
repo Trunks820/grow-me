@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import{createServer}from'node:net';import{fingerprint}from'../scripts/document.mjs';import{chapters}from'../assets/topics.mjs';
 import { readTaskText } from '../scripts/read-task.mjs';
 import { validateTask } from '../scripts/validate-task.mjs';
+import { decisionId, renderChapter } from '../scripts/render-chapter.mjs';
 const server=fileURLToPath(new URL('../scripts/server.mjs',import.meta.url));
 const run=promisify(execFile),composer=fileURLToPath(new URL('../scripts/compose-document.mjs',import.meta.url));
 const answer=(id,deps=[])=>({id,question:id+' 的真实问题',rationale:'受控测试：核对文档来源和复核边界。',input:'text',options:[],answer:{option_ids:[],text:'原答案'},depends_on:deps,status:'answered',round:1});
@@ -133,7 +134,7 @@ test('a JSON sidecar in --parts identifies the file and missing source before pu
   assert.deepEqual(assembled.data.newly_published_chapters, ['a']);
 });
 
-function handoffFixture(t) {
+function handoffFixture(t, customize = () => {}) {
   const root = mkdtempSync(join(tmpdir(), 'grill-handoff-test-'));
   t.after(() => {
     const target = realpathSync(root);
@@ -146,6 +147,7 @@ function handoffFixture(t) {
   frozen.nodes[2].id = '待定 % 时间';
   frozen.nodes[2].question = '几点开始通知？';
   for (const node of frozen.nodes.slice(1)) node.answer = { option_ids: [], text: '', deferred: true };
+  customize(frozen);
   const file = join(root, 'plan', 'custom-plan.html');
   const source = { session_id: frozen.session_id, revision: frozen.revision, digest: fingerprint(frozen), job_id: 'handoff-job' };
   const chapterList = chapters(frozen).map(({ id, anchor, title, nodes }) => ({ id, anchor, title, node_ids: nodes.map(node => node.id) }));
@@ -186,7 +188,7 @@ function handoffFixture(t) {
     <article data-kind="criterion" id="AC2" data-requirements="R1"><p>确认 A &amp; B。</p><div data-field="effects"><ul><li>只发送一次。</li></ul></div><span data-field="status">unverified</span></article>`;
   put('acceptance', 'acceptance', acceptance);
   return {
-    file, manifest: join(dirname(file), 'task.manifest.json'), frozen, plan, acceptance, put,
+    file, manifest: join(dirname(file), 'task.manifest.json'), frozen, status, plan, acceptance, put,
     assemble(...flags) {
       const input = flags.includes('--existing') ? [] : ['--parts', parts];
       return run(process.execPath, [composer, '--context', context, '--tree', state, ...input, ...flags], {
@@ -221,6 +223,63 @@ test('AC7 final assembly exports ordered packs and question assignments with an 
   const finalHtml = readFileSync(s.file);
   await s.assemble('--existing');
   assert.deepEqual(readFileSync(s.file), finalHtml);
+  assert.deepEqual(JSON.parse(readFileSync(s.manifest, 'utf8')), manifest);
+});
+
+test('confirmed answers reach linked packs verbatim and unlinked answers reach the first root pack', async t => {
+  const note = '  先发邮件\n<再>说 & "短信"\r ';
+  const s = handoffFixture(t, frozen => {
+    frozen.nodes[0].answer = { option_ids: [], text: note };
+    frozen.nodes[1].answer = { option_ids: [], text: '没懂', unclear: true };
+    Object.assign(frozen.nodes[2], {
+      input: 'multi_choice',
+      options: [{ id: 'mail', label: '邮件  通知' }, { id: 'sms', label: '短信' }],
+      answer: { option_ids: ['mail', 'sms'], text: '都要' }
+    });
+  });
+  const chapterParts = new Map();
+  for (const { id } of s.status.source.chapters) {
+    const { chapter_id, title, deferred_questions, html } = renderChapter(s.status, s.frozen, id, '<p>章节说明</p>');
+    const put = text => s.put(`chapter-${id}`, 'chapter', text, { chapter_id, title, ...(deferred_questions && { deferred_questions }) });
+    chapterParts.set(id, { html, put });
+    put(html);
+  }
+  const joint = decisionId('待定 % 时间');
+  const plan = refs => `<article data-kind="work" id="W1" data-requirements="R1" data-criteria="AC1"><h3>记录报名</h3><span data-field="status">planned</span></article>
+    <article data-kind="work" id="W2" data-depends="W1" data-criteria="AC2" data-decisions="${refs}"><h3>发送通知</h3><span data-field="status">planned</span></article>`;
+  s.put('plan', 'plan', plan(`${joint} ${joint}`));
+  await s.assemble();
+  const manifest = JSON.parse(readFileSync(s.manifest, 'utf8'));
+  assert.deepEqual(manifest.packs.map(({ id, open_questions, decisions }) => ({ id, open_questions, decisions })), [
+    {
+      id: 'W1',
+      open_questions: ['邮件 & 短信用哪种？', '谁维护通知模板？', '谁确认交付日期？'],
+      decisions: [{ question: 'a 的真实问题', decision: '你的原话：' + note, at: null }]
+    },
+    {
+      id: 'W2',
+      open_questions: [],
+      decisions: [{ question: '几点开始通知？', decision: '你选：邮件 通知；短信\n你的原话：都要', at: null }]
+    }
+  ]);
+  const page = readFileSync(s.file, 'utf8');
+  assert.equal((page.match(/data-kind="decision"/g) || []).length, 2);
+  assert.deepEqual(validateTask(page, { handoff: true }).packs, manifest.packs);
+
+  for (const [refs, error] of [
+    [decisionId('b'), /W2: missing reference decided-b/],
+    ['R1', /W2: wrong reference type R1/]
+  ]) {
+    s.put('plan', 'plan', plan(refs));
+    await assert.rejects(s.assemble(), { stderr: error });
+  }
+  s.put('plan', 'plan', plan(joint));
+  s.put('acceptance', 'acceptance', s.acceptance.replace('id="AC1"', `id="AC1" data-decisions="${joint}"`));
+  await assert.rejects(s.assemble(), { stderr: /AC1: data-decisions requires a work item or phase/ });
+  s.put('acceptance', 'acceptance', s.acceptance);
+  const jointChapter = chapterParts.get('b');
+  jointChapter.put(jointChapter.html.replace('>都要<', '>都不要<'));
+  await assert.rejects(s.assemble(), { stderr: /decision does not match a confirmed frozen answer/ });
   assert.deepEqual(JSON.parse(readFileSync(s.manifest, 'utf8')), manifest);
 });
 

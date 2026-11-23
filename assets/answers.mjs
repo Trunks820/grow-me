@@ -2,6 +2,12 @@ export const isDeferred = answer => answer?.deferred === true;
 export const isUnclear = answer => answer?.unclear === true;
 export const isUnresolved = answer => isDeferred(answer) || isUnclear(answer);
 
+// One confirmed answer as handed to grow-loop: selected labels, then the verbatim note.
+export const decisionText = (labels, text) =>
+  [labels.length && '你选：' + labels.join('；'), text && '你的原话：' + text]
+    .filter(Boolean)
+    .join('\n');
+
 export function replacedQuestionIds(nodes) {
   const targets = new Set(nodes.filter(n => n.rephrases && n.status === 'answered').map(n => n.rephrases));
   return new Set(nodes.filter(n => targets.has(n.id) && isUnclear(n.answer)).map(n => n.id));
