@@ -503,7 +503,8 @@ test('wait CLI stays silent across idle deadlines, reports activity and returns 
 });
 
 test('wait CLI distinguishes a closed service, a finished session and the wrong identity', {timeout:15000}, async context => {
-  const running = await service(context);
+  // Short waits make the CLI re-register every two seconds; the clock separates its check from its wait.
+  const running = await service(context, tree(), { clock: true, waitMs: 2000 });
   const wrong = await waitCommand(context, running, 'different-session').result;
   assert.equal(wrong.code, 2);
   assert.equal(JSON.parse(wrong.stdout).status, 'identity');
@@ -537,6 +538,11 @@ test('wait CLI distinguishes a closed service, a finished session and the wrong 
   const lastCheck = (await getAi(running)).last_check_at;
   const stillWaiting = waitCommand(context, running);
   await until(async () => (await getAi(running)).last_check_at > lastCheck);
+  // After the clock moves, only a registered /ai/wait can advance the check time. Closing earlier
+  // lets the wait request reach a stopping service and report service_closed instead.
+  const seen = (await getAi(running)).last_check_at;
+  running.setClockOffset(1000);
+  await until(async () => (await getAi(running)).last_check_at > seen);
   await control(running, 'close');
   const finished = await stillWaiting.result;
   assert.equal(finished.code, 2);
