@@ -247,6 +247,84 @@ def long_content_layout(browser, out, report):
         service.close()
 
 
+def preview_specimen(work):
+    # Mirrors scripts/preview.mjs. The tree shape follows session_id: with this one, at
+    # 1440x900 the old placement squeezed the privacy bubble to 175 of its 258 px.
+    questions = [
+        node('purpose', '这次报名页，最核心先解决哪件事？', options=[{'id':'signup','label':'让报名有一个统一入口'},{'id':'notice','label':'及时通知活动变更与状态'}]),
+        node('audience', '第一批先开放给谁用？', options=[{'id':'club','label':'固定读书会老成员'},{'id':'open','label':'任何有兴趣的新读者'}]),
+        node('channels', '活动有变动时，首版支持哪些通知渠道？', options=[{'id':'mail','label':'邮件通知'},{'id':'inbox','label':'站内私信'},{'id':'sms','label':'短信提醒'},{'id':'none','label':'都不需要','exclusive':True}]),
+        node('privacy', '报名时，哪些信息真的需要留下？')]
+    for n, why in zip(questions, ['界定应用范围与核心诉求。', '明确首批用户的准入门槛。', '确定消息触达的技术集成范围。', '明确必要字段与隐私边界。']):
+        n['rationale'] = why
+    questions[1].update(status='answered', answer={'option_ids':[], 'text':'', 'deferred':True})
+    questions[2]['input'] = 'multi_choice'
+    tree = seed(questions)
+    tree.update(session_id='synthetic-bubble-fit-7', topic='读书会报名 · 气泡完整显示（示例）')
+    return Service(work, tree)
+
+
+def whole_bubble(page):
+    dialog = page.locator('#node-dialog')
+    sizes = dialog.evaluate('e => ({content: e.scrollHeight, shown: e.clientHeight, placement: e.dataset.placement})')
+    assert sizes['content'] <= sizes['shown'] + 1, sizes
+    box = dialog.bounding_box()
+    assert box['y'] >= 0 and box['y'] + box['height'] <= page.viewport_size['height'] + 1, box
+
+
+def bubble_fits_and_resumes(browser, out, report):
+    service = preview_specimen(out / 'preview-runtime')
+    try:
+        for width, height in [(1280, 720), (1440, 900), (1920, 1080)]:
+            page = browser.new_page(viewport={'width': width, 'height': height})
+            page.on('pageerror', lambda e: report['errors'].append(str(e)))
+            try:
+                page.goto(service.url)
+                expect(page.locator('#tree-canvas')).to_have_attribute('data-growing', 'false', timeout=20000)
+                for id in ['purpose', 'audience', 'channels', 'privacy']:
+                    open_flower(page, id)
+                    whole_bubble(page)
+                    page.screenshot(path=str(out / f'fit-{width}x{height}-{id}.png'))
+                    page.keyboard.press('Escape')
+                    expect(page.locator('#node-dialog')).to_be_hidden()
+                no_overflow(page)
+            finally:
+                page.close()
+
+        page = browser.new_page(viewport={'width': 1440, 'height': 900})
+        page.on('pageerror', lambda e: report['errors'].append(str(e)))
+        try:
+            page.goto(service.url)
+            expect(page.locator('#tree-canvas')).to_have_attribute('data-growing', 'false', timeout=20000)
+            asking(page, 'purpose')
+            page.get_by_label('让报名有一个统一入口', exact=True).click()
+            asking(page, 'channels')
+            page.get_by_label('邮件通知', exact=True).check()
+            # Reading an answered flower, then ×, picks the unfinished question back up.
+            open_flower(page, 'purpose')
+            expect(page.locator('#node-body .answer')).to_have_text('让报名有一个统一入口')
+            page.get_by_role('button', name='关闭', exact=True).click()
+            asking(page, 'channels')
+            whole_bubble(page)
+            expect(page.get_by_label('邮件通知', exact=True)).to_be_checked()
+            # Escape is still a plain close that returns focus to the flower.
+            open_flower(page, 'purpose')
+            page.keyboard.press('Escape')
+            expect(page.locator('#node-dialog')).to_be_hidden()
+            expect(page.locator('.tree-node[data-node-id=purpose]')).to_be_focused()
+            # × on the question being answered closes it and stays closed.
+            open_flower(page, 'channels')
+            page.get_by_role('button', name='关闭', exact=True).click()
+            expect(page.locator('#node-dialog')).to_be_hidden()
+            page.wait_for_timeout(800)
+            expect(page.locator('#node-dialog')).to_be_hidden()
+        finally:
+            page.close()
+        report['checks'].append('Desktop bubbles never squeeze a question behind a scrollbar at 1280x720, 1440x900 or 1920x1080. Closing a read-only flower with × resumes the unfinished question with its unconfirmed choice; Escape and × on the open question still just close.')
+    finally:
+        service.close()
+
+
 def run(out):
     out.mkdir(parents=True, exist_ok=True)
     service = specimen(out/'runtime')
@@ -325,6 +403,7 @@ def run(out):
             report['checks'].append('Five consecutive answers; readonly readback; explicit draft edit; another two answers; note switching retains unconfirmed input; original bloom animation and branch geometry retained.')
             spoken_bud_layout(browser,out,report)
             long_content_layout(browser,out,report)
+            bubble_fits_and_resumes(browser,out,report)
             expect(page.locator('.summary-list li')).to_have_count(5)
             page.get_by_role('button',name='交给 AI',exact=True).click()
             expect(page.locator('#node-dialog')).not_to_be_visible()

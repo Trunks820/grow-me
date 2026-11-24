@@ -1321,33 +1321,39 @@ function bubblePlace(bud, frame, mochi, size) {
         )
       : [],
     candidates = [];
-  function add(x, y, width, height, penalty, maxHeight) {
+  function add(x, y, width, height, penalty, full) {
     const overlaps = b =>
       b && x < b.right + 4 && x + width > b.left - 4 && y < b.bottom + 4 && y + height > b.top - 4;
+    // A squeezed bubble hides the choices behind a scrollbar; covering another bud is the lesser evil.
+    const clipped = height < full - 1;
     const score =
       penalty +
+      (clipped ? 1500 + (full - height) : 0) +
       1000 * (buds.filter(overlaps).length + Number(overlaps(controls))) +
       (overlaps(trunk) ? 35 : 0) +
       branches.filter(p => p.x > x && p.x < x + width && p.y > y && p.y < y + height).length +
       Math.abs(y + height / 2 - center) / 32;
-    candidates.push({ x, y, width, maxHeight, score });
+    candidates.push({ x, y, width, maxHeight: height, score, clipped });
   }
+  // offsetHeight is already capped by the CSS max-height; measure what the content really needs.
+  const needed = () => dialog.scrollHeight + dialog.offsetHeight - dialog.clientHeight;
 
   for (const edge of edges) {
     const room = edge.side === -1 ? edge.x - left : right - edge.x,
       width = Math.min(ideal, Math.floor(room));
     if (width < Math.min(212, ideal)) continue;
     dialog.style.setProperty('--bubble-width', width + 'px');
-    const height = Math.min(dialog.offsetHeight, bottom - top),
+    const full = needed(),
+      height = Math.min(full, bottom - top),
       x = edge.side === -1 ? edge.x - width : edge.x,
       penalty = (ideal - width) / 9 + (edge.side === outward ? 0 : 2),
       obstacles = [...buds, controls].filter(b => b.right > x && b.left < x + width),
       positions = [center - height / 2, ...obstacles.flatMap(b => [b.top - height - 5, b.bottom + 5])];
-    for (const y of positions) add(x, clamp(y, top, bottom - height), width, height, penalty, height);
+    for (const y of positions) add(x, clamp(y, top, bottom - height), width, height, penalty, full);
   }
 
   dialog.style.removeProperty('--bubble-width');
-  const height = dialog.offsetHeight,
+  const full = needed(),
     width = ideal,
     x = clamp(mochi.x + (size - width) / 2, left, right - width),
     above = Math.min(bud.top, mochi.y) - gap,
@@ -1355,10 +1361,13 @@ function bubblePlace(bud, frame, mochi, size) {
   // Use the space above or below when a side would cover another bud.
   for (const [y, room] of [[null, above - top], [below, bottom - below]]) {
     if (room < 36) continue;
-    const fit = Math.min(room, height);
-    add(x, y ?? above - fit, width, fit, 32 + (height - fit) / 5, fit);
+    const fit = Math.min(room, full);
+    add(x, y ?? above - fit, width, fit, 32, full);
   }
-  return candidates.sort((a, b) => a.score - b.score)[0];
+  const best = candidates.sort((a, b) => a.score - b.score)[0],
+    panel = Math.min(560, Math.max(96, (window.visualViewport?.height ?? innerHeight) - 158));
+  // The fixed panel is the last resort: only when it shows more than the best bubble can.
+  return best && (!best.clipped || best.maxHeight >= Math.min(full, panel)) ? best : null;
 }
 
 function positionNote() {
@@ -1496,7 +1505,21 @@ function openFruit(fruit) {
     'noopener'
   );
 }
-document.querySelector('#close-node').addEventListener('click', closeNote);
+// × on a flower you were only reading: carry on with the question you left instead of
+// leaving a bare tree. Escape still just closes and hands focus back to the flower.
+function dismissNote() {
+  if (noteMode === 'read' && noteId !== null && !busy && !stopped) {
+    const next = navigationTarget(),
+      target = next && next.id !== noteId ? nodeTarget(next.id) : null;
+    if (target?.dataset.visible === 'true') {
+      if (!visibleBud(next.id)) document.querySelector('[data-tree-zoom=fit]').click();
+      openNode(next.id, target, next.id === advanceId && working.has(next.id) ? 'edit' : undefined);
+      return;
+    }
+  }
+  closeNote();
+}
+document.querySelector('#close-node').addEventListener('click', dismissNote);
 deliveryUndo.addEventListener('click', () => openSummary());
 document.addEventListener('visibilitychange', syncDeliveryClock);
 dialog.addEventListener('cancel', event => {
