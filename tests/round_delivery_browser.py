@@ -85,12 +85,6 @@ def auto_submit(browser, work):
         no_overflow(page)
         page.screenshot(path=str(work / 'desktop-delivery.png'))
         set_hidden(page, True)
-        expect(clock).to_have_text('还剩 3 秒，倒数已暂停')
-        page.clock.fast_forward(30_000)
-        expect(clock).to_have_text('还剩 3 秒，倒数已暂停')
-        assert not submissions and service.file.read_bytes() == before
-
-        set_hidden(page, False)
         page.clock.run_for(2999)
         expect(clock).to_have_text('1 秒后自动交')
         assert not submissions and service.file.read_bytes() == before
@@ -98,6 +92,7 @@ def auto_submit(browser, work):
             page.clock.run_for(1)
         assert submitted.value.ok
         expect(delivery).to_be_hidden()
+        set_hidden(page, False)
         expect(page.locator('#meta')).to_have_attribute('data-revision', '1')
         assert len(submissions) == 1
         assert service.state()['nodes'][-1]['answer']['text'] == '  保留原话\n请记下这行。  '

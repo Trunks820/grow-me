@@ -643,20 +643,15 @@ function syncDeliveryClock() {
   if (!delivery) return;
   clearTimeout(delivery.timer);
   const now = performance.now();
-  if (document.hidden) {
-    if (delivery.deadline !== null) delivery.remaining = Math.max(0, delivery.deadline - now);
-    delivery.deadline = null;
-  } else {
-    delivery.deadline ??= now + delivery.remaining;
-    delivery.remaining = Math.max(0, delivery.deadline - now);
-    if (!delivery.remaining) {
-      submitRound();
-      return;
-    }
-    delivery.timer = setTimeout(syncDeliveryClock, Math.min(100, delivery.remaining));
+  delivery.deadline ??= now + delivery.remaining;
+  delivery.remaining = Math.max(0, delivery.deadline - now);
+  if (!delivery.remaining) {
+    submitRound();
+    return;
   }
+  delivery.timer = setTimeout(syncDeliveryClock, Math.min(100, delivery.remaining));
   const seconds = Math.ceil(delivery.remaining / 1000);
-  const text = document.hidden ? `还剩 ${seconds} 秒，倒数已暂停` : `${seconds} 秒后自动交`;
+  const text = `${seconds} 秒后自动交`;
   if (deliveryClock.textContent !== text) deliveryClock.textContent = text;
   deliveryRing.textContent = seconds;
   deliveryRing.style.setProperty('--remaining', `${delivery.remaining / deliveryDelay}turn`);
