@@ -54,7 +54,8 @@ let noteId = null,
   bloomReplyIndex = 0,
   deferredReplyIndex = 0,
   advanceId = null,
-  lastAnsweredId = null;
+  lastAnsweredId = null,
+  resumeDelivery = null;
 let guidance = {};
 let aiActivity = null,
   aiInstance = null,
@@ -224,6 +225,7 @@ function answerReply(node, answer) {
 }
 function handleAnswer(node, answer) {
   cancelAdvance();
+  resumeDelivery = null;
   lastAnsweredId = node.id;
   if (advanceId === node.id) advanceId = null;
   noteMode = 'reply';
@@ -607,8 +609,13 @@ function allAnsweredText(nodes) {
   const unresolved = nodes.some(n => isUnresolved(drafts.get(n.id) ?? n.answer));
   return `${nodes.length} 题${unresolved ? '都答完了' : '都定了'}`;
 }
+// The basket is on its way, or Mochi's reply to the round's last answer is about to send it.
+function deliveryUnderway() {
+  return Boolean(delivery) || (noteMode === 'reply' && replyTimer !== null && roundCanSubmit());
+}
 function startRoundDelivery(id) {
   if (busy || stopped || !roundCanSubmit()) return false;
+  resumeDelivery = null;
   const bud = visibleBud(id),
     round = state.nodes.filter(n => n.round === state.current_round);
   closeNote();
@@ -657,7 +664,10 @@ function syncDeliveryClock() {
   deliveryRing.style.setProperty('--remaining', `${delivery.remaining / deliveryDelay}turn`);
 }
 async function submitRound() {
-  const focusWaiting = document.activeElement === deliveryUndo || dialog.contains(document.activeElement);
+  const focusWaiting =
+    document.activeElement === deliveryUndo ||
+    document.activeElement?.id === 'round-submit' ||
+    dialog.contains(document.activeElement);
   const deliveryRevision = delivery?.revision;
   cancelRoundDelivery();
   const pending = openQuestions();
@@ -722,6 +732,7 @@ function planConfirmation(unanswered, confirm, cancel) {
 function openPlanConfirmation(event) {
   if (busy || stopped || noteMode === 'plan') return;
   cancelRoundDelivery();
+  resumeDelivery = null;
   const pending = openQuestions();
   const answers = pending
     .filter(n => drafts.has(n.id))
@@ -889,10 +900,10 @@ function renderRoundProgress(pending, review) {
     dot.dataset.done = String(drafts.has(n.id) || n.status === 'answered');
     dots.append(dot);
   }
-  const count = el(
-    'span',
-    `第 ${state.current_round} 轮 · ${remainingText}${review.length ? ` · ${review.length} 题待复核` : ''}`,
-    'scene-count'
+  const count = el('span', undefined, 'scene-count');
+  count.append(
+    el('span', `第 ${state.current_round} 轮 · `, 'round-label'),
+    `${remainingText}${review.length ? ` · ${review.length} 题待复核` : ''}`
   );
   count.id = 'round-count';
   if (drafts.size) {
@@ -908,6 +919,14 @@ function renderRoundProgress(pending, review) {
     progress.append(summary);
   } else progress.append(count, dots);
   card.append(progress);
+  // A finished round always has a visible way to submit, even after its countdown was cancelled.
+  if (canSubmit) {
+    const submit = button('交给 AI', submitRound, true);
+    submit.id = 'round-submit';
+    submit.setAttribute('aria-label', '这一轮交给 AI');
+    submit.disabled = busy;
+    card.append(submit);
+  }
 }
 function render() {
   if (!state) return;
@@ -1030,7 +1049,14 @@ function nodeTarget(id) {
   return [...document.querySelectorAll('.tree-node')].find(n => n.dataset.nodeId === id);
 }
 function closeNote() {
-  const trigger = returnFocus;
+  const trigger = returnFocus,
+    closedId = noteId,
+    // Closing Mochi's reply skips it. Closing a flower viewed during a delivery brings the basket back,
+    // unless the page changed meanwhile; startRoundDelivery still requires a complete round.
+    resume =
+      (noteMode === 'reply' && replyTimer !== null && noteRevision === state?.revision) ||
+      (noteMode === 'read' && resumeDelivery !== null && resumeDelivery === state?.revision);
+  resumeDelivery = null;
   if (dialog.open) dialog.close();
   noteId = null;
   noteMode = 'read';
@@ -1043,6 +1069,7 @@ function closeNote() {
   updateNavigation();
   const target = trigger?.isConnected ? trigger : document.getElementById(trigger?.id ?? '');
   target?.focus({ preventScroll: true });
+  if (resume) startRoundDelivery(closedId);
 }
 function showNote() {
   const wasOpen = dialog.open,
@@ -1098,6 +1125,7 @@ function openNode(id, trigger, mode) {
   if (busy || stopped) return;
   const n = state?.nodes.find(n => n.id === id);
   if (!n) return;
+  const interrupted = deliveryUnderway();
   cancelRoundDelivery();
   cancelAdvance();
   noteId = id;
@@ -1110,11 +1138,16 @@ function openNode(id, trigger, mode) {
     !drafts.has(id)
       ? 'edit'
       : 'read');
+  // Viewing pauses an automatic delivery and closing resumes it. Editing ends it; confirming the edit starts over.
+  if (noteMode !== 'read') resumeDelivery = null;
+  else if (interrupted) resumeDelivery = state.revision;
   if ((noteMode === 'edit' || n.status === 'needs_review') && ready(n)) advanceId = id;
   renderNote();
   showNote();
 }
 async function modifyAnswer(id) {
+  // Asking to change an answer ends a paused delivery, even if reopening it fails.
+  resumeDelivery = null;
   if (drafts.has(id)) return editDraft(id);
   const n = state.nodes.find(n => n.id === id);
   if (!n) return;
@@ -1231,6 +1264,7 @@ function openSummary(event) {
   if (busy || stopped) return;
   cancelRoundDelivery();
   cancelAdvance();
+  resumeDelivery = null;
   noteId = null;
   noteMode = 'summary';
   returnFocus = event?.currentTarget ?? card.querySelector('#round-summary');
@@ -1547,6 +1581,11 @@ window.addEventListener('beforeunload', event => {
 document.addEventListener('keydown', event => {
   if (!state || busy || stopped || event.defaultPrevented || event.isComposing) return;
   if (event.key === 'Escape') {
+    // A held key must not skip Mochi's reply and then cancel the countdown it started.
+    if (event.repeat) {
+      event.preventDefault();
+      return;
+    }
     if (delivery) {
       event.preventDefault();
       openSummary();
@@ -1795,6 +1834,7 @@ async function copyReminder() {
     heading.tabIndex = -1;
     cancelAdvance();
     cancelRoundDelivery();
+    resumeDelivery = null;
     noteId = null;
     noteMode = 'reminder';
     returnFocus = reminderButton;

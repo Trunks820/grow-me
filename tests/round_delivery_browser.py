@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 
 from playwright.sync_api import expect, sync_playwright
 
-from browser_acceptance import Service, no_overflow, node, open_question, seed
+from browser_acceptance import Service, no_overflow, node, open_question, request, seed
 
 
 def record_submissions(page):
@@ -159,6 +159,148 @@ def cancellation(browser, work):
         service.close()
 
 
+def viewing_seed():
+    prior = dict(node('prior', '之前没看懂的题'), status='answered',
+                 answer={'option_ids': [], 'text': '', 'unclear': True})
+    again = dict(node('end', '换个说法再问', deps=['prior'], round=2), rephrases='prior')
+    return seed([prior, node('other', answered=True), node('scope', round=2), again], round=2)
+
+
+def finish_round(page):
+    open_question(page, 'scope')
+    fill(page, '先答这一题。')
+    open_question(page, 'end')
+    fill(page, '换个说法我懂了。')
+
+
+def resume_after_viewing(browser, work):
+    cases = ['reply-close', 'reply-esc', 'reply-view', 'countdown-view', 'unfinished',
+             'edit', 'edit-failed', 'revision', 'summary', 'mobile']
+    for case in cases:
+        service = Service(work / case, viewing_seed())
+        mobile = case == 'mobile'
+        page = browser.new_page(viewport={'width': 320, 'height': 600} if mobile else {'width': 1440, 'height': 900})
+        try:
+            page.clock.install()
+            page.goto(service.url)
+            pause_clock(page)
+            submissions = record_submissions(page)
+            before = service.file.read_bytes()
+            delivery = page.locator('#round-delivery')
+            bar_submit = page.get_by_role('button', name='这一轮交给 AI', exact=True)
+
+            if case == 'unfinished':
+                # Browsing flowers before the round is complete never submits.
+                open_question(page, 'scope')
+                fill(page, '只答了一题。')
+                page.clock.run_for(1600)
+                open_question(page, 'prior')
+                page.locator('#close-node').click()
+                page.clock.run_for(7000)
+                expect(delivery).to_be_hidden()
+                expect(bar_submit).to_have_count(0)
+                assert not submissions and service.file.read_bytes() == before
+                continue
+
+            finish_round(page)
+            if case in ('reply-close', 'reply-esc'):
+                # Closing Mochi's reply skips it and the basket leaves at once.
+                page.clock.run_for(300)
+                if case == 'reply-esc':
+                    page.keyboard.press('Escape')
+                else:
+                    page.locator('#close-node').click()
+                expect(delivery).to_be_visible()
+            elif case in ('reply-view', 'countdown-view', 'mobile'):
+                # Viewing a flower pauses the delivery; closing it brings the basket back.
+                page.clock.run_for(300 if case == 'reply-view' else 1600)
+                if case != 'reply-view':
+                    expect(delivery).to_be_visible()
+                open_question(page, 'prior')
+                expect(delivery).to_be_hidden()
+                expect(bar_submit).to_be_visible()
+                if mobile:
+                    no_overflow(page)
+                    expect(page.locator('#round-count .round-label')).to_be_hidden()
+                    summary_box = page.locator('#round-summary').bounding_box()
+                    submit_box = bar_submit.bounding_box()
+                    plan_box = page.locator('#request-plan').bounding_box()
+                    assert summary_box['x'] + summary_box['width'] <= submit_box['x']
+                    assert submit_box['x'] + submit_box['width'] <= plan_box['x']
+                    assert plan_box['x'] + plan_box['width'] <= 320
+                    page.screenshot(path=str(work / 'mobile-viewing.png'))
+                page.clock.run_for(7000)
+                assert not submissions and service.file.read_bytes() == before
+                if case == 'countdown-view':
+                    page.keyboard.press('Escape')
+                else:
+                    page.locator('#close-node').click()
+                expect(delivery).to_be_visible()
+                expect(bar_submit).to_be_hidden()
+                if mobile:
+                    expect(page.locator('#round-count .round-label')).to_be_visible()
+            elif case in ('revision', 'summary'):
+                # A changed page, or an explicit look at the answer list, does not bring the basket back.
+                page.clock.run_for(1600)
+                open_question(page, 'prior')
+                if case == 'revision':
+                    answer = {'option_ids': [], 'text': 'other 原答案'}
+                    assert request(service.url, '/reopen', {'id': 'other', 'expected_revision': 0})[0] == 200
+                    assert request(service.url, '/decision', {'id': 'other', 'expected_revision': 1, 'answer': answer})[0] == 200
+                    page.clock.run_for(2000)
+                    expect(page.locator('#meta')).to_have_attribute('data-revision', '2')
+                    page.locator('#close-node').click()
+                else:
+                    page.locator('#round-summary').click()
+                    expect(page.locator('#node-dialog')).to_have_attribute('data-mode', 'summary')
+                    page.locator('#close-node').click()
+                page.clock.run_for(7000)
+                expect(delivery).to_be_hidden()
+                expect(bar_submit).to_be_visible()
+                assert not submissions
+                continue
+            elif case == 'edit-failed':
+                # Asking to change an old answer ends the delivery even when reopening it fails.
+                page.clock.run_for(1600)
+                page.route('**/reopen', lambda route: route.fulfill(status=503, body='{}'))
+                open_question(page, 'prior')
+                page.get_by_role('button', name='改', exact=True).click()
+                expect(page.locator('#node-dialog')).to_have_attribute('data-mode', 'read')
+                page.locator('#close-node').click()
+                page.clock.run_for(7000)
+                expect(delivery).to_be_hidden()
+                expect(bar_submit).to_be_visible()
+                assert not submissions
+                continue
+            elif case == 'edit':
+                # Opening an answer to change it ends the delivery; the bar button still submits.
+                page.clock.run_for(1600)
+                open_question(page, 'scope', edit=True)
+                page.locator('#close-node').click()
+                page.clock.run_for(7000)
+                expect(delivery).to_be_hidden()
+                assert not submissions and service.file.read_bytes() == before
+                expect(bar_submit).to_be_visible()
+                with page.expect_response('**/submit') as submitted:
+                    bar_submit.click()
+                assert submitted.value.ok and len(submissions) == 1
+                continue
+
+            # Every resumed or skipped delivery is a fresh 5-second countdown that submits exactly once.
+            expect(delivery.get_by_role('timer')).to_have_text('5 秒后自动交')
+            page.clock.run_for(4999)
+            assert not submissions and service.file.read_bytes() == before
+            with page.expect_response('**/submit') as submitted:
+                page.clock.run_for(1)
+            assert submitted.value.ok and len(submissions) == 1
+            assert [a['answer']['text'] for a in submissions[0]['answers']] == ['先答这一题。', '换个说法我懂了。']
+            page.clock.run_for(6000)
+            assert len(submissions) == 1
+        finally:
+            page.close()
+            service.close()
+
+
 def yellow_leaf(browser, work):
     old = dict(node('prior', answered=True), status='needs_review')
     service = Service(work, seed([old, node('scope', round=2)], round=2))
@@ -191,9 +333,10 @@ def run(work):
         browser = playwright.chromium.launch()
         auto_submit(browser, work / 'auto')
         cancellation(browser, work / 'cancel')
+        resume_after_viewing(browser, work / 'viewing')
         yellow_leaf(browser, work / 'review')
         browser.close()
-    print('Round auto-submit, visible time, undo, editing, yellow leaves and reduced motion passed.')
+    print('Round auto-submit, visible time, undo, editing, viewing, yellow leaves and reduced motion passed.')
 
 
 if __name__ == '__main__':

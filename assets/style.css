@@ -1207,6 +1207,23 @@ main:has(#card[data-scene='questions']) {
   flex: none;
   white-space: nowrap;
 }
+#card #round-submit {
+  flex: none;
+  min-height: 32px;
+  margin: 0;
+  padding: 0 16px;
+}
+/* While the basket counts down, its own bubble is the way to submit. */
+main:has(#round-delivery:not([hidden])) #round-submit {
+  display: none;
+}
+/* The header already shows the round, so the narrowest bar drops it to fit the submit button. */
+@media (width < 360px) {
+  main:not(:has(#round-delivery:not([hidden]))) #card:has(#round-submit) .round-label,
+  main:not(:has(#round-delivery:not([hidden]))) #card:has(#round-submit) .round-dots {
+    display: none;
+  }
+}
 body.note-open #card:not([data-scene='questions']) {
   visibility: hidden;
 }
